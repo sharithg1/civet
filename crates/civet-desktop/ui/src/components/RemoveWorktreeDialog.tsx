@@ -6,7 +6,8 @@
 // Confirming closes the dialog at once and the removal runs in the background
 // (store `removing`): a modal left open while git works would block the whole
 // app. A refusal arrives as a toast and is remembered (`removeRefused`), so
-// reopening the dialog offers "Remove anyway".
+// reopening the dialog offers "Remove anyway". A locked worktree (`git
+// worktree lock`) can only be removed with force, so it starts there.
 import { panesOfWorktree, removeWorktree, useStore, wsKey } from '@/state/store'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { splitBranch, worktreeBranch } from '@/lib/worktree-view'
@@ -51,12 +52,16 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
       : { bad: false, text: 'No open sessions' },
     refused
       ? { bad: true, text: `Git refused: ${refused}` }
-      : { bad: false, text: 'Git refuses if there are uncommitted changes' }
+      : wt.info.locked
+        ? { bad: true, text: 'Locked with git worktree lock' }
+        : { bad: false, text: 'Git refuses if there are uncommitted changes' }
   ]
-  const force = refused !== null || busyAgents > 0
+  const locked = wt.info.locked
+  const force = refused !== null || busyAgents > 0 || locked
   function run() {
     close()
-    void removeWorktree(hostId, worktree, refused !== null)
+    // Why: git refuses a locked worktree unless forced (twice; civetd does that).
+    void removeWorktree(hostId, worktree, refused !== null || locked)
   }
   return (
     <>

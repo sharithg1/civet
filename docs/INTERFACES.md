@@ -1086,16 +1086,21 @@ impl SessionManager {
     /// ReposChanged. AlreadyExists if registered.
     pub async fn add_repo(&self, path: &str) -> Result<RepoInfo, SessionError>;
     pub async fn remove_repo(&self, repo: &RepoId) -> Result<(), SessionError>;
-    /// `git worktree list --porcelain`.
+    /// `git worktree list --porcelain`, minus bare and prunable (directory
+    /// deleted) entries.
     pub async fn list_worktrees(&self, repo: &RepoId) -> Result<Vec<WorktreeInfo>, SessionError>;
     /// `git worktree add [-b branch] <path> [base]`. Default path:
     /// `<parent of main worktree>/<repo name>-worktrees/<branch, '/' -> '-'>`.
     /// If `base` is None and `branch` exists: check it out; if it does not
-    /// exist: create it from HEAD. Emits WorktreesChanged.
+    /// exist: create it from HEAD. With `base`, an existing `branch` is
+    /// checked out only if it points at `base` and no worktree has it, else
+    /// AlreadyExists. Prunes stale registrations first. Emits WorktreesChanged.
     pub async fn create_worktree(
         &self, repo: &RepoId, branch: &str, base: Option<&str>, path: Option<&str>,
     ) -> Result<WorktreeInfo, SessionError>;
-    /// `git worktree remove [--force]`. Refuses the main worktree.
+    /// `git worktree remove [--force]` (`-f -f` for a locked worktree when
+    /// forced). Refuses the main worktree. A worktree whose directory is
+    /// already gone is pruned. Emits WorktreesChanged.
     pub async fn remove_worktree(&self, worktree: &WorktreeId, force: bool) -> Result<(), SessionError>;
 
     // ----- panes -----
@@ -1103,7 +1108,7 @@ impl SessionManager {
     /// and status detection. Emits PaneCreated.
     pub async fn spawn_pane(&self, req: SpawnPaneRequest) -> Result<PaneInfo, SessionError>;
     /// create_worktree(repo, branch, base or default branch, worktree_path)
-    /// with a NEW branch (AlreadyExists if it exists), then spawn_pane in it
+    /// with a new branch (an existing one only as create_worktree allows), then spawn_pane in it
     /// with `command`, `title.unwrap_or(branch)`, `agent`.
     pub async fn launch_agent(&self, req: LaunchAgentRequest)
         -> Result<(WorktreeInfo, PaneInfo), SessionError>;

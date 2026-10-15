@@ -204,7 +204,11 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
     b.onClipboard(onClipboard)
   ])
   const nudge = () => void b.notifyNetworkChange().catch(() => {})
-  const onVisibility = () => document.visibilityState === 'visible' && nudge()
+  const onVisibility = () => {
+    if (document.visibilityState !== 'visible') return
+    nudge()
+    resyncWorktrees()
+  }
   window.addEventListener('online', nudge)
   document.addEventListener('visibilitychange', onVisibility)
 
@@ -404,12 +408,116 @@ async function refreshRepos(hostId: string): Promise<void> {
   await Promise.all(repos.map((r) => refreshWorktrees(hostId, r.id)))
 }
 
-async function refreshWorktrees(hostId: string, repo: string): Promise<void> {
-  try {
-    const list = await backend().listWorktrees(hostId, repo)
-    set((s) => ({ worktrees: { ...s.worktrees, [wtKey(hostId, repo)]: list } }))
-  } catch (err) {
-    reportError(`Could not list worktrees of ${repo}`, err)
+// ── Worktree list sync ────────────────────────────────────────────────────
+// git (via civetd) is the source of truth; the store converges to it:
+// * one `list_worktrees` per repo at a time; requests that arrive meanwhile
+//   collapse into one trailing re-list (events come in bursts);
+// * every create/remove this client applies bumps the repo's epoch, and a
+//   list that was requested before the bump is dropped and re-listed. Why:
+//   a slow list taken before `git worktree add` finished would otherwise
+//   land after the new row and wipe it (and its selection) again.
+
+/** key: wtKey; bumped by every create/remove applied locally. */
+const wtEpoch = new Map<string, number>()
+const wtRefreshing = new Map<string, { again: boolean; done: Promise<void> }>()
+
+function bumpWorktreeEpoch(hostId: string, repo: string): void {
+  const k = wtKey(hostId, repo)
+  wtEpoch.set(k, (wtEpoch.get(k) ?? 0) + 1)
+}
+
+/** Re-list a repo's worktrees (coalesced, newest wins; see above). */
+export function refreshWorktrees(hostId: string, repo: string): Promise<void> {
+  const k = wtKey(hostId, repo)
+  const running = wtRefreshing.get(k)
+  if (running) {
+    running.again = true
+    return running.done
+  }
+  const entry = { again: true, done: Promise.resolve() }
+  wtRefreshing.set(k, entry)
+  entry.done = (async () => {
+    try {
+      while (entry.again) {
+        entry.again = false
+        const epoch = wtEpoch.get(k) ?? 0
+        const list = await backend().listWorktrees(hostId, repo)
+        if ((wtEpoch.get(k) ?? 0) !== epoch) entry.again = true
+        else applyWorktreeList(hostId, repo, list)
+      }
+    } catch (err) {
+      reportError(`Could not list worktrees of ${repo}`, err)
+    } finally {
+      wtRefreshing.delete(k)
+    }
+  })()
+  return entry.done
+}
+
+const sameWorktree = (a: WorktreeInfo, b: WorktreeInfo) =>
+  a.id === b.id && a.path === b.path && a.branch === b.branch && a.head === b.head && a.isMain === b.isMain && a.locked === b.locked
+
+/**
+ * Replace a repo's worktrees with git's list. Worktrees that are gone
+ * (removed from a terminal, directory deleted) lose their tabs, and if one
+ * was selected the selection moves to the repo's main worktree. Their panes
+ * keep running on the host; they reappear if the worktree does.
+ */
+export function applyWorktreeList(hostId: string, repo: string, list: WorktreeInfo[]): void {
+  const k = wtKey(hostId, repo)
+  const prev = get().worktrees[k] ?? []
+  if (prev.length === list.length && prev.every((w, i) => sameWorktree(w, list[i]!))) return
+  const ids = new Set(list.map((w) => w.id))
+  const gone = new Set(prev.filter((w) => !ids.has(w.id)).map((w) => wsKey(hostId, w.id)))
+  set((s) => {
+    const workspaces = { ...s.workspaces }
+    const unread = { ...s.unread }
+    for (const key of gone) {
+      delete workspaces[key]
+      delete unread[key]
+    }
+    return {
+      worktrees: { ...s.worktrees, [k]: list },
+      workspaces,
+      unread,
+      mru: s.mru.filter((key) => !gone.has(key))
+    }
+  })
+  const a = get().active
+  if (a && gone.has(wsKey(a.hostId, a.worktree))) {
+    const main = list.find((w) => w.isMain)
+    if (main) selectWorktree(hostId, main.id)
+    else set({ active: null })
+  }
+}
+
+/**
+ * A worktree this client just created (create/launch reply): show it at
+ * once, then re-list. Upserts by id: the WorktreesChanged event may already
+ * have added it.
+ */
+export function applyCreatedWorktree(hostId: string, wt: WorktreeInfo): void {
+  bumpWorktreeEpoch(hostId, wt.repo)
+  set((s) => {
+    const k = wtKey(hostId, wt.repo)
+    const list = s.worktrees[k] ?? []
+    return {
+      worktrees: { ...s.worktrees, [k]: list.some((w) => w.id === wt.id) ? list : [...list, wt] }
+    }
+  })
+  void refreshWorktrees(hostId, wt.repo)
+}
+
+/**
+ * Re-list every repo of every connected host. Why: on an older civetd only
+ * Civet's own changes produce WorktreesChanged; this catches work done in a
+ * terminal when the window comes back.
+ */
+export function resyncWorktrees(): void {
+  const s = get()
+  for (const [hostId, h] of Object.entries(s.hosts)) {
+    if (h.state !== 'connected') continue
+    for (const r of s.repos[hostId] ?? []) void refreshWorktrees(hostId, r.id)
   }
 }
 
@@ -881,16 +989,7 @@ export async function launchAgentInNewWorktree(p: {
     agent: p.agent === 'custom' ? p.command.program.split('/').pop() || null : p.agent
   })
   addPaneSnapshot(p.hostId, pane)
-  set((s) => {
-    const k = wtKey(p.hostId, worktree.repo)
-    const list = s.worktrees[k] ?? []
-    return {
-      worktrees: {
-        ...s.worktrees,
-        [k]: list.some((w) => w.id === worktree.id) ? list : [...list, worktree]
-      }
-    }
-  })
+  applyCreatedWorktree(p.hostId, worktree)
   selectWorktree(p.hostId, worktree.id)
   openPaneInTab(p.hostId, worktree.id, pane.id)
 }
@@ -982,13 +1081,7 @@ export async function createWorktreeWithSteps(p: {
   } else {
     worktree = await backend().createWorktree(p.hostId, p.repo, branch, p.base, null)
   }
-  set((s) => {
-    const k = wtKey(p.hostId, worktree.repo)
-    const list = s.worktrees[k] ?? []
-    return {
-      worktrees: { ...s.worktrees, [k]: list.some((w) => w.id === worktree.id) ? list : [...list, worktree] }
-    }
-  })
+  if (branch) applyCreatedWorktree(p.hostId, worktree)
 
   for (const [i, st] of steps.entries()) {
     // With a new worktree the first agent was started by launch_agent.
@@ -1032,7 +1125,9 @@ export async function createWorktreeWithSteps(p: {
  * tabs and panes are disabled) while the rest of the app stays usable. A
  * second call for the same worktree while one is in flight is ignored.
  * Failures are reported as a toast; git's refusal is kept so reopening the
- * dialog offers "Remove anyway".
+ * dialog offers "Remove anyway". A worktree the host no longer knows
+ * (removed from a terminal meanwhile) counts as removed. Either way the
+ * repo is re-listed so the sidebar matches git.
  */
 export async function removeWorktree(hostId: string, worktree: string, force: boolean): Promise<void> {
   const key = wsKey(hostId, worktree)
@@ -1040,6 +1135,19 @@ export async function removeWorktree(hostId: string, worktree: string, force: bo
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   const name = wt?.branch ?? worktree
   set((s) => ({ removing: { ...s.removing, [key]: true } }))
+  const closePanes = () => {
+    for (const pane of panesOfWorktree(get().panes[hostId], worktree)) {
+      backend()
+        .killPane(hostId, pane.id, 'hangup')
+        .catch(() => {})
+        .finally(() => removePaneEverywhere(hostId, pane.id))
+    }
+  }
+  // Why: a forced removal deletes files under running sessions; an agent
+  // still writing there makes git fail with "Directory not empty". Stop
+  // them first. A plain removal may be refused (dirty), so its sessions
+  // are only closed once git has succeeded.
+  if (force) closePanes()
   const settle = (refused: string | null) =>
     set((s) => {
       const removing = { ...s.removing }
@@ -1052,21 +1160,20 @@ export async function removeWorktree(hostId: string, worktree: string, force: bo
   try {
     await backend().removeWorktree(hostId, worktree, force)
   } catch (err) {
-    settle(CivetError.from(err).message)
-    reportError(`Could not remove ${name}`, err)
-    return
+    const e = CivetError.from(err)
+    if (e.code !== 'notFound') {
+      settle(e.message)
+      reportError(`Could not remove ${name}`, err)
+      if (wt) void refreshWorktrees(hostId, wt.repo)
+      return
+    }
   }
   settle(null)
+  if (wt) bumpWorktreeEpoch(hostId, wt.repo)
   if (usePrefs.getState().archivedWorktrees[key]) {
     setWorktreeArchived(hostId, worktree, false)
   }
-  const panes = panesOfWorktree(get().panes[hostId], worktree)
-  for (const pane of panes) {
-    backend()
-      .killPane(hostId, pane.id, 'hangup')
-      .catch(() => {})
-      .finally(() => removePaneEverywhere(hostId, pane.id))
-  }
+  closePanes()
   set((s) => {
     const workspaces = { ...s.workspaces }
     delete workspaces[key]
@@ -1085,6 +1192,7 @@ export async function removeWorktree(hostId: string, worktree: string, force: bo
     if (main) selectWorktree(hostId, main.id)
     else set({ active: null })
   }
+  if (wt) void refreshWorktrees(hostId, wt.repo)
   pushToast({ kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` }, 3200)
 }
 

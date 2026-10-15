@@ -161,12 +161,23 @@ describe('store', () => {
     /** A backend whose remove_worktree waits until the test settles it. */
     function pendingRemove() {
       let settle!: { resolve: () => void; reject: (e: unknown) => void }
+      // What git lists: /feat is gone once the removal succeeded.
+      let onDisk = [wt('/main', { isMain: true }), wt('/feat'), wt('/other')]
       const removeWorktree = vi.fn(
-        () => new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = {
+              resolve: () => {
+                onDisk = onDisk.filter((w) => w.id !== '/feat')
+                resolve()
+              },
+              reject
+            }
+          })
       )
       const killPane = vi.fn(async () => {})
       useStore.setState({
-        backend: fakeBackend({ removeWorktree, killPane }),
+        backend: fakeBackend({ removeWorktree, killPane, listWorktrees: async () => onDisk }),
         repos: { h: [repo] },
         worktrees: { [store.wtKey('h', 'r')]: [wt('/main', { isMain: true }), wt('/feat'), wt('/other')] },
         workspaces: {},
@@ -175,7 +186,9 @@ describe('store', () => {
         mru: []
       })
       store.selectWorktree('h', '/feat')
-      return { removeWorktree, killPane, settle: () => settle }
+      /** /feat disappears from git without this removal (e.g. a terminal). */
+      const vanish = () => (onDisk = onDisk.filter((w) => w.id !== '/feat'))
+      return { removeWorktree, killPane, settle: () => settle, vanish }
     }
     const worktreeIds = () => useStore.getState().worktrees[store.wtKey('h', 'r')]!.map((w) => w.id)
 
@@ -237,6 +250,121 @@ describe('store', () => {
       expect(spawnPane).not.toHaveBeenCalled()
       b.settle().resolve()
       await done
+    })
+
+    it('a worktree the host no longer knows counts as removed', async () => {
+      const b = pendingRemove()
+      const done = store.removeWorktree('h', '/feat', false)
+      b.vanish()
+      b.settle().reject({ code: 'notFound', message: 'worktree /feat not found' })
+      await done
+      const s = useStore.getState()
+      expect(s.removeRefused[key]).toBeUndefined()
+      expect(worktreeIds()).toEqual(['/main', '/other'])
+      expect(s.active).toEqual({ hostId: 'h', worktree: '/main' })
+      expect(s.toasts.some((t) => t.kind === 'error')).toBe(false)
+    })
+
+    it('a forced removal closes the sessions before git runs', async () => {
+      const b = pendingRemove()
+      useStore.setState({ panes: { h: { 7: pane(7, { worktree: '/feat' }), 8: pane(8, { worktree: '/other' }) } } })
+      const done = store.removeWorktree('h', '/feat', true)
+      expect(b.killPane).toHaveBeenCalledWith('h', 7, 'hangup')
+      expect(b.killPane).toHaveBeenCalledTimes(1)
+      b.settle().resolve()
+      await done
+    })
+  })
+
+  describe('worktree list sync', () => {
+    const repo: RepoInfo = { id: 'r', name: 'r', path: '/r', defaultBranch: 'main' }
+    const wt = (id: string, patch: Partial<WorktreeInfo> = {}): WorktreeInfo => ({
+      id,
+      repo: 'r',
+      path: id,
+      branch: id.slice(1),
+      head: null,
+      isMain: false,
+      locked: false,
+      ...patch
+    })
+    const main = wt('/main', { isMain: true })
+    const ids = () => useStore.getState().worktrees[store.wtKey('h', 'r')]!.map((w) => w.id)
+    /** list_worktrees calls the test answers one by one. */
+    function pendingLists(initial: WorktreeInfo[]) {
+      const calls: ((list: WorktreeInfo[]) => void)[] = []
+      const listWorktrees = vi.fn(() => new Promise<WorktreeInfo[]>((resolve) => calls.push(resolve)))
+      useStore.setState({
+        backend: fakeBackend({ listWorktrees }),
+        repos: { h: [repo] },
+        worktrees: { [store.wtKey('h', 'r')]: initial },
+        workspaces: {},
+        removing: {},
+        mru: [],
+        active: null
+      })
+      return { listWorktrees, calls }
+    }
+
+    it('collapses refreshes that arrive while one is running into one trailing list', async () => {
+      const b = pendingLists([main])
+      const first = store.refreshWorktrees('h', 'r')
+      void store.refreshWorktrees('h', 'r')
+      void store.refreshWorktrees('h', 'r')
+      expect(b.listWorktrees).toHaveBeenCalledTimes(1)
+      b.calls[0]!([main, wt('/a')])
+      await vi.waitFor(() => expect(b.listWorktrees).toHaveBeenCalledTimes(2))
+      b.calls[1]!([main, wt('/a'), wt('/b')])
+      await first
+      expect(b.listWorktrees).toHaveBeenCalledTimes(2)
+      expect(ids()).toEqual(['/main', '/a', '/b'])
+    })
+
+    it('drops a list taken before a create was applied and lists again', async () => {
+      const b = pendingLists([main])
+      const refresh = store.refreshWorktrees('h', 'r')
+      // The create reply arrives while that (older) list is in flight.
+      store.applyCreatedWorktree('h', wt('/new'))
+      store.selectWorktree('h', '/new')
+      expect(ids()).toEqual(['/main', '/new'])
+      b.calls[0]!([main])
+      await vi.waitFor(() => expect(b.listWorktrees).toHaveBeenCalledTimes(2))
+      expect(ids()).toEqual(['/main', '/new'])
+      b.calls[1]!([main, wt('/new')])
+      await refresh
+      expect(ids()).toEqual(['/main', '/new'])
+      expect(useStore.getState().active).toEqual({ hostId: 'h', worktree: '/new' })
+    })
+
+    it('a worktree removed outside Civet loses its tabs and the selection', async () => {
+      const b = pendingLists([main, wt('/feat')])
+      const fkey = store.wsKey('h', '/feat')
+      useStore.setState({ panes: { h: { 3: pane(3, { worktree: '/feat' }) } } })
+      store.selectWorktree('h', '/feat')
+      expect(useStore.getState().workspaces[fkey]!.tabs).toHaveLength(1)
+      store.onDaemonEvent('h', { worktreesChanged: { repo: 'r' } })
+      b.calls[0]!([main])
+      await vi.waitFor(() => expect(ids()).toEqual(['/main']))
+      const s = useStore.getState()
+      expect(s.workspaces[fkey]).toBeUndefined()
+      expect(s.mru).not.toContain(fkey)
+      expect(s.active).toEqual({ hostId: 'h', worktree: '/main' })
+      // The session keeps running on the host.
+      expect(s.panes.h![3]).toBeDefined()
+    })
+
+    it('a failed list keeps the last known worktrees', async () => {
+      useStore.setState({
+        backend: fakeBackend({
+          listWorktrees: async () => {
+            throw { code: 'git', message: 'not a git repository' }
+          }
+        }),
+        repos: { h: [repo] },
+        worktrees: { [store.wtKey('h', 'r')]: [main, wt('/feat')] }
+      })
+      await store.refreshWorktrees('h', 'r')
+      expect(ids()).toEqual(['/main', '/feat'])
     })
   })
 

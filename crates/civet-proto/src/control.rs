@@ -97,7 +97,8 @@ pub struct LaunchAgentRequest {
     /// Repository to branch from.
     pub repo: RepoId,
     /// New branch name (also the default worktree directory name, with `/`
-    /// replaced by `-`). Must not exist yet.
+    /// replaced by `-`). Must not exist yet, unless it still points at the
+    /// base and is not checked out anywhere (then it is reused).
     pub branch: String,
     /// Rev to branch from; None = the repo's default branch (else HEAD).
     pub base: Option<String>,
