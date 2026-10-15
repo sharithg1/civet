@@ -561,7 +561,13 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
   const unread = useStore((s) => s.unread[key])
   const removing = useStore((s) => !!s.removing[key])
   const paneMap = useStore((s) => s.panes[hostId])
-  const pr = useStore((s) => (wt.isMain || !wt.branch ? undefined : s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]))
+  // Any worktree, the main one included (a feature branch may be checked
+  // out there), except on the default branch.
+  const pr = useStore((s) => {
+    const defaultBranch = s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch
+    if (!wt.branch || wt.branch === defaultBranch) return undefined
+    return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
+  })
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const labelPref = usePrefs((s) => s.worktreeLabel)
   const tabsPref = usePrefs((s) => s.sidebarTabs)
