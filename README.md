@@ -150,6 +150,11 @@ there first (then `$CIVET_DIST_DIR`, `~/.civet/dist`) and runs the bundled
 Mac `civetd` for "This Mac". `tauri dev` stays fast: it bundles nothing and
 uses `~/.civet/dist` plus the workspace `target/debug/civetd`.
 `CIVET_SKIP_DAEMONS=1 pnpm tauri build` skips the daemon builds.
+`pnpm tauri build --target x86_64-apple-darwin` bundles the x86_64 Mac
+`civetd` (the script follows Tauri's `TAURI_ENV_TARGET_TRIPLE`).
+
+Releases (tag, GitHub Release with the app and the daemons, signing):
+see [docs/RELEASING.md](docs/RELEASING.md).
 
 **Daemon upgrades.** Every app version uploads its own `civetd-<version>`
 next to older ones (never overwriting a running binary). On connect the new

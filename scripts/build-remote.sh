@@ -21,11 +21,13 @@
 # Uses the `dist` cargo profile (release + opt-level "z", thin LTO, stripped).
 # Darwin targets build natively with cargo (no zig).
 #
-# CIVET_SKIP_DAEMONS=1 makes --bundle a no-op (UI-only release builds; the
-# app then finds daemons in $CIVET_DIST_DIR / ~/.civet/dist only).
+# CIVET_SKIP_DAEMONS=1 makes --bundle a no-op: UI-only builds (the app then
+# finds daemons in $CIVET_DIST_DIR / ~/.civet/dist only), or release CI,
+# which fills crates/civet-desktop/civet-dist itself before `tauri build`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=/dev/null
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
 out=target/civet-dist
@@ -37,7 +39,7 @@ while [ $# -gt 0 ]; do
         --out) out="$2"; shift 2 ;;
         --install) install=1; shift ;;
         --bundle) bundle=1; shift ;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
         *) targets+=("$1"); shift ;;
     esac
 done
@@ -50,7 +52,14 @@ if [ "$bundle" = 1 ]; then
     out=crates/civet-desktop/civet-dist
     if [ ${#targets[@]} -eq 0 ]; then
         targets=(x86_64-unknown-linux-musl aarch64-unknown-linux-musl)
-        case "$host" in *-apple-darwin) targets+=("$host") ;; esac
+        # The app's own triple: `tauri build --target T` exports
+        # TAURI_ENV_TARGET_TRIPLE to this (beforeBuildCommand) script, so a
+        # cross build bundles the daemon for the Mac it will run on.
+        app_triple=${TAURI_ENV_TARGET_TRIPLE:-$host}
+        case "$app_triple" in
+            universal-apple-darwin) targets+=(aarch64-apple-darwin x86_64-apple-darwin) ;;
+            *-apple-darwin) targets+=("$app_triple") ;;
+        esac
     fi
 fi
 [ ${#targets[@]} -eq 0 ] && targets=(x86_64-unknown-linux-musl aarch64-unknown-linux-musl)

@@ -1,0 +1,265 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (scripts/release.sh creates it) builds the daemons and
+# the macOS app and publishes a GitHub Release. Pull requests that touch the
+# release machinery, and manual runs, do the same builds without publishing
+# (the artifacts are kept on the workflow run). See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-remote.sh
+      - scripts/check-version.sh
+      - crates/civet-desktop/tauri.conf.json
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  LINUX_TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+  DARWIN_TARGETS: aarch64-apple-darwin x86_64-apple-darwin
+
+jobs:
+  version:
+    name: check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: tag, Cargo.toml and tauri.conf.json agree
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=$(scripts/check-version.sh "$GITHUB_REF_NAME")
+          else
+            version=$(scripts/check-version.sh)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Civet $version" >> "$GITHUB_STEP_SUMMARY"
+
+  # Every civetd the release ships, built once: published standalone and
+  # copied into each app bundle, so the bundled and the downloadable daemons
+  # are the same files.
+  daemons:
+    name: civetd (linux-musl + darwin)
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: daemons
+      - name: build
+        run: |
+          # shellcheck disable=SC2086 # split the target lists into arguments
+          scripts/build-remote.sh --out dist $LINUX_TARGETS $DARWIN_TARGETS
+      - name: check versions
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          for f in dist/civetd-*; do
+            # The marker the app checks before using a daemon (bootstrap::VERSION_MARKER).
+            v=$(perl -0777 -ne 'print $1 if /\0CIVETD_VERSION=([^\0]{1,64})\0/' "$f")
+            [ "$v" = "$VERSION" ] || { echo "::error::$f is civetd '$v', expected $VERSION"; exit 1; }
+          done
+          dist/civetd-aarch64-apple-darwin version
+          dist/civetd-aarch64-apple-darwin version | grep -q "civetd $VERSION "
+      - name: sign darwin daemons (if signing secrets are set)
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "No signing secrets: darwin daemons keep their linker ad-hoc signature."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/civet-signing.keychain-db"
+          kc_pass=$(openssl rand -hex 16)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kc_pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$kc_pass" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_pass" "$keychain" >/dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          for t in $DARWIN_TARGETS; do
+            codesign --force --options runtime --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" "dist/civetd-$t"
+            codesign --verify --verbose "dist/civetd-$t"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemons
+          path: dist/civetd-*
+          if-no-files-found: error
+
+  app:
+    name: Civet.app (${{ matrix.arch }})
+    needs: [version, daemons]
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: app-${{ matrix.target }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: crates/civet-desktop/ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: crates/civet-desktop/ui
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: daemons
+          path: ${{ runner.temp }}/daemons
+      - name: stage bundled daemons
+        # The app bundles civetd for both Linux remotes and its own Mac
+        # (tauri.conf.json bundle.resources); the app checks they are its version.
+        run: |
+          dist=crates/civet-desktop/civet-dist
+          rm -rf "$dist" && mkdir -p "$dist"
+          for t in $LINUX_TARGETS ${{ matrix.target }}; do
+            install -m 755 "$RUNNER_TEMP/daemons/civetd-$t" "$dist/civetd-$t"
+          done
+          ls -l "$dist"
+
+      - name: signing configuration
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Only set the variables Tauri reads when the secrets exist: an empty
+        # APPLE_CERTIFICATE would make it try (and fail) to import one.
+        run: |
+          put() { { echo "$1<<__CIVET_EOF__"; echo "$2"; echo "__CIVET_EOF__"; } >> "$GITHUB_ENV"; }
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::add-mask::$APPLE_SIGNING_IDENTITY"
+            put APPLE_CERTIFICATE "$APPLE_CERTIFICATE"
+            put APPLE_CERTIFICATE_PASSWORD "$APPLE_CERTIFICATE_PASSWORD"
+            put APPLE_SIGNING_IDENTITY "$APPLE_SIGNING_IDENTITY"
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              put APPLE_ID "$APPLE_ID"
+              put APPLE_PASSWORD "$APPLE_PASSWORD"
+              put APPLE_TEAM_ID "$APPLE_TEAM_ID"
+              echo "Signing with Developer ID and notarizing." | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Signing with Developer ID; not notarizing (APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID unset)." | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            # Ad-hoc signature: the bundle is sealed, but Gatekeeper still
+            # blocks the downloaded app until its quarantine flag is removed.
+            put APPLE_SIGNING_IDENTITY "-"
+            echo "Unsigned build (ad-hoc signature): see docs/RELEASING.md for the xattr workaround." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: tauri build
+        working-directory: crates/civet-desktop/ui
+        env:
+          # The daemons are already staged in civet-dist (see above).
+          CIVET_SKIP_DAEMONS: '1'
+        run: pnpm tauri build --ci --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: check and collect bundle
+        run: |
+          bundle="target/${{ matrix.target }}/release/bundle"
+          app="$bundle/macos/Civet.app"
+          ls -l "$app/Contents/Resources/civet-dist"
+          for t in $LINUX_TARGETS ${{ matrix.target }}; do
+            f="$app/Contents/Resources/civet-dist/civetd-$t"
+            v=$(perl -0777 -ne 'print $1 if /\0CIVETD_VERSION=([^\0]{1,64})\0/' "$f")
+            [ "$v" = "$VERSION" ] || { echo "::error::$f is civetd '$v', expected $VERSION"; exit 1; }
+          done
+          plist_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+          [ "$plist_version" = "$VERSION" ] || { echo "::error::Info.plist version $plist_version != $VERSION"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p out
+          dmgs=("$bundle"/dmg/*.dmg)
+          if [ ${#dmgs[@]} != 1 ] || [ ! -f "${dmgs[0]}" ]; then
+            echo "::error::expected one dmg, got: ${dmgs[*]}"; exit 1
+          fi
+          cp "${dmgs[0]}" "out/Civet_${VERSION}_macos-${{ matrix.arch }}.dmg"
+          ditto -c -k --keepParent "$app" "out/Civet_${VERSION}_macos-${{ matrix.arch }}.app.zip"
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [version, daemons, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: checksums
+        working-directory: assets
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run of the workflow: refresh the assets, keep the notes.
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" assets/* --verify-tag --generate-notes \
+              --title "Civet $TAG" "${flags[@]}"
+          fi
