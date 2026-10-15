@@ -155,6 +155,15 @@ pub async fn list_worktrees(
 }
 
 #[tauri::command]
+pub async fn list_pull_requests(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+) -> Res<Vec<civet_proto::PullRequestInfo>> {
+    state.hosts.list_pull_requests(&host_id, repo).await
+}
+
+#[tauri::command]
 pub async fn create_worktree(
     state: State<'_, AppState>,
     host_id: String,
@@ -395,6 +404,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         prepare_file_drop,
         upload_file,
         list_worktrees,
+        list_pull_requests,
         create_worktree,
         remove_worktree,
         list_panes,

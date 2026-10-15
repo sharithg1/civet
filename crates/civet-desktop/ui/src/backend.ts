@@ -36,7 +36,8 @@ import type {
   TermSize,
   TransportChoice,
   WorktreeId,
-  WorktreeInfo
+  WorktreeInfo,
+  PullRequestInfo
 } from './types'
 
 export type Unlisten = () => void
@@ -101,6 +102,8 @@ export interface CivetBackend {
   addRepo(hostId: string, path: string): Promise<RepoInfo>
   removeRepo(hostId: string, repo: RepoId): Promise<void>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
+  /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
+  listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -239,6 +242,9 @@ export class TauriBackend implements CivetBackend {
   }
   listWorktrees(hostId: string, repo: RepoId) {
     return this.call<WorktreeInfo[]>('list_worktrees', { hostId, repo })
+  }
+  listPullRequests(hostId: string, repo: RepoId) {
+    return this.call<PullRequestInfo[]>('list_pull_requests', { hostId, repo })
   }
   createWorktree(
     hostId: string,

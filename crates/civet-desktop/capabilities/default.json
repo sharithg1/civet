@@ -22,6 +22,7 @@
     "allow-prepare-file-drop",
     "allow-upload-file",
     "allow-list-worktrees",
+    "allow-list-pull-requests",
     "allow-create-worktree",
     "allow-remove-worktree",
     "allow-list-panes",

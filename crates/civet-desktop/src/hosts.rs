@@ -951,7 +951,7 @@ impl HostManager {
                 })
                 .collect());
         }
-        self.check_upload_support(host_id)?;
+        self.check_daemon_version(host_id, civet_proto::UPLOAD_FILE_MIN_DAEMON_VERSION)?;
         let mut out = Vec::with_capacity(paths.len());
         for source in paths {
             let r = self.upload_one(host_id, &source).await;
@@ -1006,7 +1006,7 @@ impl HostManager {
         name: String,
         data: Vec<u8>,
     ) -> Result<String, CmdError> {
-        self.check_upload_support(host_id)?;
+        self.check_daemon_version(host_id, civet_proto::UPLOAD_FILE_MIN_DAEMON_VERSION)?;
         if data.len() > civet_proto::MAX_UPLOAD_BYTES {
             return Err(CmdError::new(
                 "invalidArgument",
@@ -1022,10 +1022,10 @@ impl HostManager {
         )
     }
 
-    /// `UploadFile` would make an older daemon drop the connection.
-    fn check_upload_support(&self, host_id: &str) -> Result<(), CmdError> {
+    /// Requests appended after `min` would make an older daemon drop the
+    /// connection.
+    fn check_daemon_version(&self, host_id: &str, min: &str) -> Result<(), CmdError> {
         let running = lock(&self.host(host_id)?.status).daemon_version.clone();
-        let min = civet_proto::UPLOAD_FILE_MIN_DAEMON_VERSION;
         if running.as_deref().is_none_or(|v| version_older(v, min)) {
             return Err(CmdError::new(
                 "unsupported",
@@ -1087,6 +1087,16 @@ impl HostManager {
         repo: civet_proto::RepoId,
     ) -> Result<Vec<civet_proto::WorktreeInfo>, CmdError> {
         expect_response!(self.request(host_id, Request::ListWorktrees { repo }).await?, Response::Worktrees(w) => w)
+    }
+
+    /// `list_pull_requests`: `gh pr list` on the host.
+    pub async fn list_pull_requests(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+    ) -> Result<Vec<civet_proto::PullRequestInfo>, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::LIST_PULL_REQUESTS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::ListPullRequests { repo }).await?, Response::PullRequests(p) => p)
     }
 
     /// `create_worktree`

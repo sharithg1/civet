@@ -45,7 +45,8 @@ import type {
   SpawnPaneRequest,
   TermSize,
   TransportChoice,
-  WorktreeInfo
+  WorktreeInfo,
+  PullRequestInfo
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
@@ -811,6 +812,23 @@ export class MockBackend implements CivetBackend {
 
   async listWorktrees(hostId: string, repo: string) {
     return [...(this.host(hostId).worktrees.get(repo) ?? [])]
+  }
+
+  async listPullRequests(_hostId: string, repo: string): Promise<PullRequestInfo[]> {
+    if (repo !== 'civet') return []
+    const pr = (number: number, branch: string, title: string, state: PullRequestInfo['state']) => ({
+      number,
+      branch,
+      title,
+      url: `https://github.com/example/civet/pull/${number}`,
+      state
+    })
+    return [
+      pr(48, 'NO-TICKET/workspace-v3', 'Workspace v3 chrome', 'draft'),
+      pr(47, 'quic-resume', 'Resume QUIC sessions across network changes', 'open'),
+      pr(45, 'fix-flaky-e2e', 'Fix the flaky reconnect e2e', 'closed'),
+      pr(44, 'scrollback-paging', 'Page scrollback over the control stream', 'merged')
+    ]
   }
 
   async createWorktree(

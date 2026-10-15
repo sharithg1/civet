@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "prepare_file_drop",
     "upload_file",
     "list_worktrees",
+    "list_pull_requests",
     "create_worktree",
     "remove_worktree",
     "list_panes",

@@ -54,6 +54,7 @@ function fakeBackend(over: Partial<CivetBackend> = {}): CivetBackend {
     listRepos: async () => [],
     listPanes: async () => [],
     listWorktrees: async () => [],
+    listPullRequests: async () => [],
     setPrediction: vi.fn(noop),
     notifyNetworkChange: noop,
     onHostState: un,

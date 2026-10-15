@@ -42,6 +42,37 @@ pub struct WorktreeInfo {
     pub locked: bool,
 }
 
+/// State of a [`PullRequestInfo`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PullRequestState {
+    /// Open and ready for review.
+    Open,
+    /// Open as a draft.
+    Draft,
+    /// Merged.
+    Merged,
+    /// Closed without merging.
+    Closed,
+}
+
+/// A GitHub pull request whose head is a branch of the repository itself
+/// (not a fork), as `gh pr list` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestInfo {
+    /// PR number.
+    pub number: u64,
+    /// Head branch name.
+    pub branch: String,
+    /// Title.
+    pub title: String,
+    /// Web URL.
+    pub url: String,
+    /// State.
+    pub state: PullRequestState,
+}
+
 /// Program + argv for a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -310,6 +341,14 @@ pub enum Request {
         #[serde(with = "serde_bytes")]
         data: Vec<u8>,
     },
+    /// The repository's recent pull requests (`gh pr list` on the host,
+    /// newest first; fork PRs left out). -> [`Response::PullRequests`].
+    /// Clients send it only to daemons of at least
+    /// [`crate::LIST_PULL_REQUESTS_MIN_DAEMON_VERSION`].
+    ListPullRequests {
+        /// Repository.
+        repo: RepoId,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -355,6 +394,8 @@ pub enum Response {
         /// Absolute path of the stored file on the daemon's host.
         path: String,
     },
+    /// Reply to [`Request::ListPullRequests`].
+    PullRequests(Vec<PullRequestInfo>),
 }
 
 /// Error category for a failed request.

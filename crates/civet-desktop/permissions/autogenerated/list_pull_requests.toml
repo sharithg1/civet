@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-pull-requests"
+description = "Enables the list_pull_requests command without any pre-configured scope."
+commands.allow = ["list_pull_requests"]
+
+[[permission]]
+identifier = "deny-list-pull-requests"
+description = "Denies the list_pull_requests command without any pre-configured scope."
+commands.deny = ["list_pull_requests"]
