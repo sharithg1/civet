@@ -103,6 +103,10 @@ type State = {
   switcherOpen: boolean
   settings: SettingsPage | null
   removeWorktree: { hostId: string; worktree: string } | null
+  /** wsKeys of worktrees whose removal is in flight (see removeWorktree) */
+  removing: Record<string, true>
+  /** wsKey → git's refusal of the last removal; the dialog then offers "Remove anyway" */
+  removeRefused: Record<string, string>
   /** key: wtKey(hostId, repoId) of collapsed project groups */
   /** wsKeys, most recently selected first */
   mru: string[]
@@ -136,6 +140,8 @@ export const useStore = create<State>(() => ({
   switcherOpen: false,
   settings: null,
   removeWorktree: null,
+  removing: {},
+  removeRefused: {},
   mru: [],
   seen: {},
   dismissedUpgrades: {}
@@ -157,6 +163,9 @@ const get = useStore.getState
 
 export const wtKey = (hostId: string, repo: string) => `${hostId}\u0000${repo}`
 export const wsKey = (hostId: string, worktree: string) => `${hostId}\u0000${worktree}`
+
+/** True while `removeWorktree` runs for this worktree: no new tabs or panes there. */
+export const isRemoving = (hostId: string, worktree: string) => !!get().removing[wsKey(hostId, worktree)]
 
 /** Size used for spawns before the pane is measured; the pane resizes on mount. */
 export const DEFAULT_SPAWN_SIZE: TermSize = termSize(120, 32)
@@ -757,6 +766,7 @@ async function spawnShell(hostId: string, worktree: string): Promise<PaneInfo> {
 }
 
 export async function newTerminalTab(hostId: string, worktree: string): Promise<void> {
+  if (isRemoving(hostId, worktree)) return
   try {
     const pane = await spawnShell(hostId, worktree)
     openPaneInTab(hostId, worktree, pane.id)
@@ -767,7 +777,7 @@ export async function newTerminalTab(hostId: string, worktree: string): Promise<
 
 export async function splitFocused(dir: SplitDirection): Promise<void> {
   const active = get().active
-  if (!active) return
+  if (!active || isRemoving(active.hostId, active.worktree)) return
   const key = wsKey(active.hostId, active.worktree)
   const ws = get().workspaces[key]
   const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
@@ -897,6 +907,7 @@ const agentOf = (cmd: CommandSpec) => cmd.program.split('/').pop() || null
 
 /** New tab running an agent (⌥C / "+" → Claude Code) in an existing worktree. */
 export async function newAgentTab(hostId: string, worktree: string, commandLine?: string): Promise<void> {
+  if (isRemoving(hostId, worktree)) return
   try {
     const command = parseCommand(commandLine ?? usePrefs.getState().agentCommand)
     if (!command) throw new Error('No agent command configured')
@@ -1015,11 +1026,38 @@ export async function createWorktreeWithSteps(p: {
   pushToast({ kind: 'info', title: `${what} · ${label}` }, 3200)
 }
 
-/** Remove a worktree on the host, then close the panes that ran in it. */
+/**
+ * Remove a worktree on the host, then close the panes that ran in it. Runs in
+ * the background: only this worktree is marked `removing` (its sidebar row,
+ * tabs and panes are disabled) while the rest of the app stays usable. A
+ * second call for the same worktree while one is in flight is ignored.
+ * Failures are reported as a toast; git's refusal is kept so reopening the
+ * dialog offers "Remove anyway".
+ */
 export async function removeWorktree(hostId: string, worktree: string, force: boolean): Promise<void> {
+  const key = wsKey(hostId, worktree)
+  if (get().removing[key]) return
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
-  await backend().removeWorktree(hostId, worktree, force)
-  if (usePrefs.getState().archivedWorktrees[wsKey(hostId, worktree)]) {
+  const name = wt?.branch ?? worktree
+  set((s) => ({ removing: { ...s.removing, [key]: true } }))
+  const settle = (refused: string | null) =>
+    set((s) => {
+      const removing = { ...s.removing }
+      delete removing[key]
+      const removeRefused = { ...s.removeRefused }
+      if (refused === null) delete removeRefused[key]
+      else removeRefused[key] = refused
+      return { removing, removeRefused }
+    })
+  try {
+    await backend().removeWorktree(hostId, worktree, force)
+  } catch (err) {
+    settle(CivetError.from(err).message)
+    reportError(`Could not remove ${name}`, err)
+    return
+  }
+  settle(null)
+  if (usePrefs.getState().archivedWorktrees[key]) {
     setWorktreeArchived(hostId, worktree, false)
   }
   const panes = panesOfWorktree(get().panes[hostId], worktree)
@@ -1031,21 +1069,23 @@ export async function removeWorktree(hostId: string, worktree: string, force: bo
   }
   set((s) => {
     const workspaces = { ...s.workspaces }
-    delete workspaces[wsKey(hostId, worktree)]
+    delete workspaces[key]
     const worktrees = { ...s.worktrees }
     if (wt) {
       const k = wtKey(hostId, wt.repo)
       worktrees[k] = (worktrees[k] ?? []).filter((w) => w.id !== worktree)
     }
-    const key = wsKey(hostId, worktree)
     return { workspaces, worktrees, mru: s.mru.filter((k) => k !== key) }
   })
-  if (get().active?.worktree === worktree) {
+  // Why: the removal can take a while; if the user moved to another worktree
+  // meanwhile, leave their selection alone.
+  const a = get().active
+  if (a?.hostId === hostId && a.worktree === worktree) {
     const main = worktreesOf(hostId).find((w) => w.isMain && (!wt || w.repo === wt.repo))
     if (main) selectWorktree(hostId, main.id)
     else set({ active: null })
   }
-  pushToast({ kind: 'info', title: `Removed ${wt?.branch ?? worktree} on ${get().hosts[hostId]?.label ?? hostId}` }, 3200)
+  pushToast({ kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` }, 3200)
 }
 
 /**
