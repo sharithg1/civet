@@ -7,6 +7,9 @@ members = [
     "crates/civet-session",
     "crates/civetd",
     "crates/civet-desktop",
+    # Hardening / end-to-end harness (impairment proxy, resume, throughput,
+    # memory). Not a default member: `cargo test -p civet-e2e`.
+    "tests/e2e",
 ]
 # civet-desktop pulls in Tauri (hundreds of crates + webview bindings). Keep it
 # out of the default build so `cargo check` / `cargo test` at the root stay
