@@ -39,6 +39,7 @@ const COMMANDS: &[&str] = &[
     "stop_forward",
     "list_forwards",
     "open_local_url",
+    "open_pull_request",
 ];
 
 /// Bundled daemon binaries (`bundle.resources` in tauri.conf.json):

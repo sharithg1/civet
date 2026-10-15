@@ -141,6 +141,8 @@ export interface CivetBackend {
   listForwards(hostId: string): Promise<ForwardView[]>
   /** Open an `http(s)://localhost` / `127.0.0.1` URL in the default browser. */
   openLocalUrl(url: string): Promise<void>
+  /** Open a `https://<host>/<owner>/<repo>/pull/<n>` URL in the browser. */
+  openPullRequest(url: string): Promise<void>
 
   onHostState(cb: (e: HostStateEvent) => void): Promise<Unlisten>
   onBootstrapProgress(cb: (e: BootstrapProgressEvent) => void): Promise<Unlisten>
@@ -351,6 +353,9 @@ export class TauriBackend implements CivetBackend {
   }
   openLocalUrl(url: string) {
     return this.callVoid('open_local_url', { url })
+  }
+  openPullRequest(url: string) {
+    return this.callVoid('open_pull_request', { url })
   }
 
   private on<T>(event: string, cb: (payload: T) => void): Promise<Unlisten> {

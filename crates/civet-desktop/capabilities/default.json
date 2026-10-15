@@ -42,6 +42,7 @@
     "allow-forward-port",
     "allow-stop-forward",
     "allow-list-forwards",
-    "allow-open-local-url"
+    "allow-open-local-url",
+    "allow-open-pull-request"
   ]
 }

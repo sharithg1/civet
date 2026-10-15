@@ -556,6 +556,14 @@ export function refreshPullRequests(hostId: string, repo: string): void {
     )
 }
 
+export async function openPullRequest(pr: PullRequestInfo): Promise<void> {
+  try {
+    await backend().openPullRequest(pr.url)
+  } catch (err) {
+    reportError(`Could not open PR #${pr.number}`, err)
+  }
+}
+
 function resyncPullRequests(): void {
   const s = get()
   for (const [hostId, h] of Object.entries(s.hosts)) {

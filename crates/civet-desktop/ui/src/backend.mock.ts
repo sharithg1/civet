@@ -732,6 +732,10 @@ export class MockBackend implements CivetBackend {
     window.open(url, '_blank', 'noopener')
   }
 
+  async openPullRequest(url: string) {
+    window.open(url, '_blank', 'noopener')
+  }
+
   async disconnectHost(hostId: string) {
     this.host(hostId)
     this.hostState(hostId, { state: 'disconnected', transport: null, rttMs: null, message: null })

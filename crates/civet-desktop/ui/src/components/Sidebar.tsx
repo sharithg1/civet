@@ -42,6 +42,7 @@ import {
   activateTabIndex,
   cycleWorktree,
   disconnectHost,
+  openPullRequest,
   panesOfWorktree,
   reconnectHost,
   requestRestartDaemon,
@@ -543,14 +544,22 @@ const PR_ICON = {
   closed: { Icon: GitPullRequestClosed, className: 'text-status-err', label: 'Closed' }
 } as const
 
-/** The branch's pull request state, as in Cursor's sidebar. */
+/** The branch's pull request state, as in Cursor's sidebar; opens it on GitHub. */
 function PullRequestIcon({ pr }: { pr: PullRequestInfo }) {
   const { Icon, className, label } = PR_ICON[pr.state]
-  const text = `#${pr.number} · ${label}\n${pr.title}`
   return (
-    <span role="img" aria-label={text} title={text} className="grid shrink-0 place-items-center">
+    <button
+      type="button"
+      aria-label={`Open PR #${pr.number} on GitHub`}
+      title={`#${pr.number} · ${label}\n${pr.title}\nClick to open on GitHub`}
+      onClick={(e) => {
+        e.stopPropagation()
+        void openPullRequest(pr)
+      }}
+      className="-mx-1 grid size-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] hover:bg-hover-strong"
+    >
       <Icon className={cn('size-3.5', className)} />
-    </span>
+    </button>
   )
 }
 
