@@ -29,6 +29,7 @@ civet-term.workspace = true
 civetd.workspace = true
 tauri.workspace = true
 tauri-plugin-notification.workspace = true
+tauri-plugin-dialog.workspace = true
 tokio.workspace = true
 futures.workspace = true
 serde.workspace = true

@@ -101,6 +101,12 @@ export type PaneInfo = {
   exited: boolean
   createdAtMs: number
   state: number
+  /**
+   * UI only (not sent by civetd): the first prompt sent to the agent, from
+   * its UserPromptSubmit hook. Labels the session until the agent sets a
+   * title of its own.
+   */
+  prompt?: string
 }
 
 export type SubscribeInfo = {

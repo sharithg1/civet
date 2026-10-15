@@ -63,20 +63,48 @@ export function cleanTitle(title: string): string {
   return title.replace(/^[^\p{L}\p{N}]+/u, '').trim()
 }
 
+/** Titles agents show before they have named the session. */
+const GENERIC_AGENT_TITLES = new Set(['claude code', 'claude', 'codex'])
+
 /**
- * The worktree's "task": the title of its oldest agent pane (Claude Code sets
- * it to a summary of the session via OSC 0/2), when it says more than the
- * branch or the command does.
+ * An agent pane's own title (Claude Code sets it to a summary of the session
+ * via OSC 0/2), or null while it is only a placeholder ("✳ Claude Code") or
+ * the command line.
+ */
+export function agentTitle(p: PaneInfo): string | null {
+  const t = cleanTitle(p.title)
+  const low = t.toLowerCase()
+  if (!t || GENERIC_AGENT_TITLES.has(low)) return null
+  if (low === (p.agent ?? '').toLowerCase() || low === p.command.join(' ').toLowerCase()) return null
+  return t
+}
+
+/**
+ * The session label from a submitted prompt: its first non-empty line,
+ * collapsed whitespace, at most 80 characters. Slash commands ("/clear")
+ * are not a task, so null.
+ */
+export function promptLabel(message: string | null | undefined): string | null {
+  const line = (message ?? '')
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .find((l) => l)
+  if (!line || line.startsWith('/')) return null
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line
+}
+
+/**
+ * The worktree's "task": the title of its oldest agent pane, else that
+ * pane's first prompt, when it says more than the branch does.
  */
 export function worktreeTask(wt: WorktreeInfo, panes: readonly PaneInfo[]): string | null {
   const agents = panes.filter((p) => p.agent).sort((a, b) => a.id - b.id)
   const branch = worktreeBranch(wt)
   for (const p of agents) {
-    const t = cleanTitle(p.title)
+    const t = agentTitle(p) ?? p.prompt
     if (!t) continue
     const low = t.toLowerCase()
     if (low === branch.toLowerCase() || low === splitBranch(branch).name.toLowerCase()) continue
-    if (low === (p.agent ?? '').toLowerCase() || low === p.command.join(' ').toLowerCase()) continue
     return t
   }
   return null
@@ -111,9 +139,8 @@ export function tabLabels(tabPanes: readonly (readonly (PaneInfo | undefined)[])
 /** What a pane is doing, for the sidebar tab list and tooltips. */
 export function paneWhat(p: PaneInfo | undefined): { text: string; mono: boolean } {
   if (!p) return { text: 'shell', mono: true }
-  const title = cleanTitle(p.title)
-  if (p.agent) return { text: title || 'new session', mono: false }
-  return { text: title || p.command.join(' ') || 'shell', mono: true }
+  if (p.agent) return { text: agentTitle(p) ?? p.prompt ?? 'new session', mono: false }
+  return { text: cleanTitle(p.title) || p.command.join(' ') || 'shell', mono: true }
 }
 
 /** `/home/me/x` or `/Users/me/x` → `~/x`. */

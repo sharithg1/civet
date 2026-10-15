@@ -24,7 +24,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -84,6 +84,7 @@ dirs = "7.0.0"
 tauri = { version = "2.12.4", features = [] }
 tauri-build = { version = "2.7.3", features = [] }
 tauri-plugin-notification = "2.7.0"
+tauri-plugin-dialog = "=2.7.3"
 # macOS wake notification (NSWorkspaceDidWakeNotification) and the
 # clipboard (NSPasteboard, OSC 52 / Cmd+C); already in the
 # graph via tao/wry, only features are added.

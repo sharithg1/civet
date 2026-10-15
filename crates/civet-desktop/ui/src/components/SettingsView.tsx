@@ -371,8 +371,8 @@ function HostsPage() {
                   Restart daemon…
                 </button>
               )}
-              <button type="button" className={btn} onClick={() => useStore.setState({ addRepoFor: id })}>
-                Add repository…
+              <button type="button" className={btn} onClick={() => useStore.setState({ addProject: { hostId: id } })}>
+                Add project…
               </button>
               <button type="button" className={btn} onClick={() => void disconnectHost(id)}>
                 Disconnect

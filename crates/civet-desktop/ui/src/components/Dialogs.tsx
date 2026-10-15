@@ -1,8 +1,9 @@
-// Small dialogs: add repository (shadcn Dialog) and confirm (shadcn
+// Small dialogs: add project (shadcn Dialog) and confirm (shadcn
 // AlertDialog). Both are driven by the store and hand focus back to the
 // terminal when they close.
 import { useRef, useState } from 'react'
-import { addRepo, useStore, type ConfirmRequest } from '@/state/store'
+import { isTauri } from '@tauri-apps/api/core'
+import { addProject, useStore, type ConfirmRequest } from '@/state/store'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,6 +26,15 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { Spinner } from '@/components/ui/spinner'
 
 /** Keeps the last non-null value so content stays put during the close animation. */
 function useLast<T>(value: T | null): T | null {
@@ -33,32 +43,64 @@ function useLast<T>(value: T | null): T | null {
   return value ?? last
 }
 
-export function AddRepoDialog() {
-  const hostId = useStore((s) => s.addRepoFor)
-  const shownHost = useLast(hostId)
-  const close = () => useStore.setState({ addRepoFor: null })
+/** Select value for "New SSH host…" (never a host id: ids are hostnames or "local"). */
+const NEW_HOST = '\u0000new-ssh-host'
+
+/**
+ * "Add project": a git repository on any host, This Mac included even when
+ * its daemon is not running yet (it starts on submit). Opened from the
+ * sidebar's "+" (⌘O), a host's menu (preselected) or the status bar.
+ */
+export function AddProjectDialog() {
+  const req = useStore((s) => s.addProject)
+  const shown = useLast(req)
+  const close = () => useStore.setState({ addProject: null })
   return (
-    <Dialog open={hostId !== null} onOpenChange={(open) => !open && close()}>
+    <Dialog open={req !== null} onOpenChange={(open) => !open && close()}>
       <DialogContent onCloseAutoFocus={restoreTerminalFocus}>
         <DialogHeader className="gap-1.5">
-          <DialogTitle className="text-[14px] leading-normal">Add repository</DialogTitle>
-          <DialogDescription>A git repository on {shownHost}.</DialogDescription>
+          <DialogTitle className="text-[14px] leading-normal">Add project</DialogTitle>
+          <DialogDescription>A git repository on this Mac or a connected host.</DialogDescription>
         </DialogHeader>
-        {shownHost && <AddRepoForm hostId={shownHost} onDone={close} />}
+        {shown && <AddProjectForm key={shown.hostId ?? ''} initialHost={shown.hostId} onDone={close} />}
       </DialogContent>
     </Dialog>
   )
 }
 
-function AddRepoForm({ hostId, onDone }: { hostId: string; onDone: () => void }) {
+function defaultLocation(): string {
+  const s = useStore.getState()
+  return s.active?.hostId ?? s.hostOrder[0] ?? 'local'
+}
+
+function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; onDone: () => void }) {
+  const hostOrder = useStore((s) => s.hostOrder)
+  const hosts = useStore((s) => s.hosts)
+  const canPick = useStore((s) => s.backend?.kind !== 'mock') && isTauri()
+  const [hostId, setHostId] = useState(() => initialHost ?? defaultLocation())
   const [path, setPath] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // This Mac is always offered; it connects on submit.
+  const locations = hostOrder.includes('local') ? hostOrder : ['local', ...hostOrder]
+  const isLocal = hostId === 'local'
+  const localUp = hosts.local?.state === 'connected'
+
+  async function choose() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const picked = await open({ directory: true, multiple: false, title: 'Choose a git repository' })
+      if (typeof picked === 'string') setPath(picked)
+    } catch (err) {
+      setError((err as Error).message ?? String(err))
+    }
+  }
+
   async function submit() {
     setBusy(true)
     setError(null)
     try {
-      await addRepo(hostId, path.trim())
+      await addProject(hostId, path.trim())
       onDone()
     } catch (err) {
       setError((err as Error).message ?? String(err))
@@ -66,6 +108,7 @@ function AddRepoForm({ hostId, onDone }: { hostId: string; onDone: () => void })
       setBusy(false)
     }
   }
+
   return (
     <form
       className="flex flex-col gap-4"
@@ -75,25 +118,72 @@ function AddRepoForm({ hostId, onDone }: { hostId: string; onDone: () => void })
       }}
     >
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="repo-path" className="text-xs text-muted-foreground">
-          Path on the host
+        <Label htmlFor="project-location" className="text-xs text-muted-foreground">
+          Location
         </Label>
-        <Input
-          id="repo-path"
-          className="h-8 rounded-[5px] border-border bg-field font-mono text-[12.5px] shadow-none md:text-[12.5px] dark:bg-field"
-          placeholder="~/src/project"
-          value={path}
-          spellCheck={false}
-          onChange={(e) => setPath(e.target.value)}
-        />
+        <Select
+          value={hostId}
+          disabled={busy}
+          onValueChange={(v) => {
+            if (v === NEW_HOST) {
+              useStore.setState({ addProject: null, addProjectAfterConnect: true, showConnect: true })
+              return
+            }
+            setHostId(v)
+            setPath('')
+            setError(null)
+          }}
+        >
+          <SelectTrigger id="project-location" className="h-8 w-full text-[12.5px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {locations.map((id) => (
+              <SelectItem key={id} value={id}>
+                {id === 'local' ? 'This Mac' : (hosts[id]?.label ?? id)}
+              </SelectItem>
+            ))}
+            <SelectSeparator />
+            <SelectItem value={NEW_HOST}>New SSH host…</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="project-path" className="text-xs text-muted-foreground">
+          Folder
+        </Label>
+        <div className="flex gap-2">
+          <Input
+            id="project-path"
+            className="h-8 min-w-0 flex-1 rounded-[5px] border-border bg-field font-mono text-[12.5px] shadow-none md:text-[12.5px] dark:bg-field"
+            placeholder={isLocal ? '~/src/project' : `~/src/project on ${hosts[hostId]?.label ?? hostId}`}
+            value={path}
+            spellCheck={false}
+            autoFocus
+            disabled={busy}
+            onChange={(e) => setPath(e.target.value)}
+          />
+          {isLocal && canPick && (
+            <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void choose()}>
+              Choose…
+            </Button>
+          )}
+        </div>
+        <p className="text-[11px] text-muted-foreground">Must be a git repository.</p>
+      </div>
+      {busy && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+          <Spinner className="size-3.5" />
+          {isLocal && !localUp ? 'Starting Civet on this Mac…' : 'Adding project…'}
+        </div>
+      )}
+      {error && !busy && <p className="text-xs text-destructive">{error}</p>}
       <DialogFooter>
         <Button type="button" variant="outline" size="md" onClick={onDone}>
           Cancel
         </Button>
         <Button type="submit" size="md" disabled={busy || !path.trim()}>
-          Add
+          Add project
         </Button>
       </DialogFooter>
     </form>

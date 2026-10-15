@@ -16,8 +16,10 @@ import {
   setRatio
 } from '../layout/pane-tree'
 import { aggregateStatus } from '../lib/agent-status'
+import { promptLabel, worktreeBranch } from '../lib/worktree-view'
 import { splitShellWords } from '../lib/shell-words'
-import { onPrefsChange, usePrefs, type CreateStep } from './prefs'
+import { applyOrder, onPrefsChange, setPrefs, usePrefs, type CreateStep, type Prefs } from './prefs'
+import { forgetHost, loadSavedHosts, savedHost, saveHost } from './saved-hosts'
 import type {
   AgentAttentionEvent,
   AgentStatus,
@@ -70,7 +72,7 @@ export type ConfirmRequest = {
 
 export type NewWorktreeRequest = { hostId: string; repo?: string }
 
-export type RightTab = 'files' | 'changes' | 'branch'
+export type RightTab = Prefs['rightTab']
 export type SettingsPage = 'general' | 'hosts' | 'projects' | 'keyboard'
 
 type State = {
@@ -88,7 +90,10 @@ type State = {
   unread: Record<string, AgentStatus>
   showConnect: boolean
   newWorktree: NewWorktreeRequest | null
-  addRepoFor: string | null
+  /** "Add project" dialog: open, with the location preselected (null: default). */
+  addProject: { hostId: string | null } | null
+  /** Reopen "Add project" on the host a pending "New SSH host…" connects. */
+  addProjectAfterConnect: boolean
   confirm: ConfirmRequest | null
   toasts: Toast[]
   // ── v3 chrome (UI-only) ──
@@ -99,7 +104,6 @@ type State = {
   settings: SettingsPage | null
   removeWorktree: { hostId: string; worktree: string } | null
   /** key: wtKey(hostId, repoId) of collapsed project groups */
-  collapsedRepos: Record<string, true>
   /** wsKeys, most recently selected first */
   mru: string[]
   /** wsKey → when it was last left / selected (ms) */
@@ -120,20 +124,33 @@ export const useStore = create<State>(() => ({
   unread: {},
   showConnect: false,
   newWorktree: null,
-  addRepoFor: null,
+  addProject: null,
+  addProjectAfterConnect: false,
   confirm: null,
   toasts: [],
-  sidebarOpen: true,
-  rightPanelOpen: typeof window === 'undefined' || window.innerWidth >= 1100,
-  rightTab: 'branch',
+  // Panels start as last left (prefs), else open (right: on wide windows).
+  sidebarOpen: usePrefs.getState().sidebarOpen ?? true,
+  rightPanelOpen:
+    usePrefs.getState().rightPanelOpen ?? (typeof window === 'undefined' || window.innerWidth >= 1100),
+  rightTab: usePrefs.getState().rightTab,
   switcherOpen: false,
   settings: null,
   removeWorktree: null,
-  collapsedRepos: {},
   mru: [],
   seen: {},
   dismissedUpgrades: {}
 }))
+
+// Remember the panel toggles (title bar buttons, ⌥B / ⌥E) and the right tab.
+useStore.subscribe((s, prev) => {
+  if (
+    s.sidebarOpen !== prev.sidebarOpen ||
+    s.rightPanelOpen !== prev.rightPanelOpen ||
+    s.rightTab !== prev.rightTab
+  ) {
+    setPrefs({ sidebarOpen: s.sidebarOpen, rightPanelOpen: s.rightPanelOpen, rightTab: s.rightTab })
+  }
+})
 
 const set = useStore.setState
 const get = useStore.getState
@@ -196,7 +213,16 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
     const hosts = await b.listHosts()
     for (const h of hosts) upsertHost(h)
     await Promise.all(hosts.filter((h) => h.state === 'connected').map((h) => refreshHost(h.hostId)))
-    set({ showConnect: hosts.length === 0 })
+    // Fresh launch: reconnect the hosts saved last time instead of asking again.
+    // runConnect registers each host right away, so the workspace (not the
+    // connect screen) shows while they connect.
+    const saved = hosts.length === 0 ? loadSavedHosts() : []
+    for (const h of saved) {
+      void connectHost(h.target, h.transport).catch((err) =>
+        reportError(`Could not reconnect to ${h.hostId}`, err)
+      )
+    }
+    set({ showConnect: hosts.length === 0 && saved.length === 0 })
   } catch (err) {
     reportError('Could not list hosts', err)
     set({ showConnect: true })
@@ -310,7 +336,13 @@ export function onDaemonEvent(hostId: string, event: DaemonEvent): void {
   } else if ('paneResized' in event) {
     patchPane(hostId, event.paneResized.pane, { size: event.paneResized.size })
   } else if ('agentStatus' in event) {
-    patchPane(hostId, event.agentStatus.pane, { status: event.agentStatus.status })
+    const e = event.agentStatus
+    const cur = get().panes[hostId]?.[e.pane]
+    // A hook `running` with a message is a prompt submit (civetd's Claude
+    // UserPromptSubmit hook): the first one labels the session.
+    const prompt =
+      e.source === 'hook' && e.status === 'running' && !cur?.prompt ? promptLabel(e.message) : null
+    patchPane(hostId, e.pane, prompt ? { status: e.status, prompt } : { status: e.status })
   } else if ('worktreesChanged' in event) {
     void refreshWorktrees(hostId, event.worktreesChanged.repo)
   }
@@ -375,7 +407,11 @@ async function refreshWorktrees(hostId: string, repo: string): Promise<void> {
 async function refreshPanes(hostId: string): Promise<void> {
   const list = await backend().listPanes(hostId)
   const map: Record<PaneId, PaneInfo> = {}
-  for (const p of list) map[p.id] = p
+  const prev = get().panes[hostId] ?? {}
+  for (const p of list) {
+    const prompt = prev[p.id]?.prompt
+    map[p.id] = prompt ? { ...p, prompt } : p
+  }
   set((s) => ({ panes: { ...s.panes, [hostId]: map } }))
   // Drop layout leaves for panes that no longer exist (e.g. daemon restarted).
   for (const key of Object.keys(get().workspaces)) {
@@ -467,7 +503,11 @@ export async function connectHost(target: HostTarget, transport: TransportChoice
   const summary = await runConnect(hostId, target.kind === 'local' ? 'This Mac' : hostId, () =>
     backend().connectHost(target, transport)
   )
+  saveHost({ hostId: summary.hostId, target, transport })
   set({ showConnect: false })
+  if (get().addProjectAfterConnect) {
+    set({ addProject: { hostId: summary.hostId }, addProjectAfterConnect: false })
+  }
   // Focus the first worktree that has panes, else the first main worktree.
   if (!get().active) {
     const first = worktreesOf(summary.hostId)[0]
@@ -481,8 +521,13 @@ export async function connectHost(target: HostTarget, transport: TransportChoice
  */
 export async function reconnectHost(hostId: string): Promise<void> {
   const label = get().hosts[hostId]?.label ?? hostId
+  // A saved host whose launch-time reconnect failed may be unknown to Rust,
+  // so reconnect from the saved target.
+  const saved = savedHost(hostId)
   try {
-    await runConnect(hostId, label, () => backend().reconnectHost(hostId))
+    await runConnect(hostId, label, () =>
+      saved ? backend().connectHost(saved.target, saved.transport) : backend().reconnectHost(hostId)
+    )
   } catch (err) {
     reportError(`Could not reconnect to ${label}`, err)
   }
@@ -522,6 +567,7 @@ export async function restartDaemon(hostId: string): Promise<void> {
 }
 
 export async function disconnectHost(hostId: string): Promise<void> {
+  forgetHost(hostId)
   try {
     await backend().disconnectHost(hostId)
   } catch (err) {
@@ -767,9 +813,26 @@ export function closeTab(key: string, tabId: string): void {
 
 // ── Repos, worktrees and agents ───────────────────────────────────────────
 
-export async function addRepo(hostId: string, path: string): Promise<void> {
-  await backend().addRepo(hostId, path)
+export async function addRepo(hostId: string, path: string): Promise<RepoInfo> {
+  const repo = await backend().addRepo(hostId, path)
   await refreshRepos(hostId)
+  return repo
+}
+
+/**
+ * "Add project": add a git repository on a host, starting This Mac's daemon
+ * first when needed (no separate connect step), then open its main worktree.
+ */
+export async function addProject(hostId: string, path: string): Promise<void> {
+  if (hostId === 'local' && get().hosts.local?.state !== 'connected') {
+    await connectHost({ kind: 'local' }, 'auto')
+  }
+  const repo = await addRepo(hostId, path)
+  const k = wtKey(hostId, repo.id)
+  if (usePrefs.getState().collapsedRepos[k]) toggleRepoCollapsed(hostId, repo.id)
+  const list = get().worktrees[k] ?? []
+  const main = list.find((w) => w.isMain) ?? list[0]
+  if (main) selectWorktree(hostId, main.id)
 }
 
 export type AgentChoice = 'claude' | 'codex' | 'custom'
@@ -870,24 +933,30 @@ export async function createWorktreeWithSteps(p: {
 
   let worktree: WorktreeInfo
   const opened: PaneId[] = []
-  if (firstAgent >= 0) {
+  const branch = p.branch.trim()
+  if (!branch) {
+    // No branch name: no new worktree, the steps run in the main checkout.
+    const main = worktreesOf(p.hostId).find((w) => w.repo === p.repo && w.isMain)
+    if (!main) throw new Error("This project's main checkout was not found")
+    worktree = main
+  } else if (firstAgent >= 0) {
     const command = specs[firstAgent]!
     const res = await backend().launchAgent(p.hostId, {
       repo: p.repo,
-      branch: p.branch,
+      branch,
       base: p.base,
       worktreePath: null,
       command,
       env: [],
       size: DEFAULT_SPAWN_SIZE,
-      title: prompt ? prompt.slice(0, 80) : p.branch,
+      title: prompt ? prompt.slice(0, 80) : branch,
       agent: agentOf(command)
     })
     worktree = res.worktree
     addPaneSnapshot(p.hostId, res.pane)
     opened[firstAgent] = res.pane.id
   } else {
-    worktree = await backend().createWorktree(p.hostId, p.repo, p.branch, p.base, null)
+    worktree = await backend().createWorktree(p.hostId, p.repo, branch, p.base, null)
   }
   set((s) => {
     const k = wtKey(p.hostId, worktree.repo)
@@ -898,7 +967,8 @@ export async function createWorktreeWithSteps(p: {
   })
 
   for (const [i, st] of steps.entries()) {
-    if (i === firstAgent) continue
+    // With a new worktree the first agent was started by launch_agent.
+    if (i === firstAgent && branch) continue
     try {
       const pane = await backend().spawnPane(p.hostId, {
         worktree: worktree.id,
@@ -906,7 +976,7 @@ export async function createWorktreeWithSteps(p: {
         command: st.kind === 'agent' ? specs[i]! : null,
         env: [],
         size: DEFAULT_SPAWN_SIZE,
-        title: null,
+        title: i === firstAgent && prompt ? prompt.slice(0, 80) : null,
         agent: st.kind === 'agent' ? agentOf(specs[i]!) : null
       })
       addPaneSnapshot(p.hostId, pane)
@@ -928,13 +998,17 @@ export async function createWorktreeWithSteps(p: {
   const label = steps.length
     ? steps.map((st) => (st.kind === 'agent' ? `opened ${st.cmd}` : `ran ${st.cmd}`)).join(', ')
     : 'no on-create steps'
-  pushToast({ kind: 'info', title: `Created ${p.branch} · ${label}` }, 3200)
+  const what = branch ? `Created ${branch}` : `Opened in ${worktreeBranch(worktree)}`
+  pushToast({ kind: 'info', title: `${what} · ${label}` }, 3200)
 }
 
 /** Remove a worktree on the host, then close the panes that ran in it. */
 export async function removeWorktree(hostId: string, worktree: string, force: boolean): Promise<void> {
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   await backend().removeWorktree(hostId, worktree, force)
+  if (usePrefs.getState().archivedWorktrees[wsKey(hostId, worktree)]) {
+    setWorktreeArchived(hostId, worktree, false)
+  }
   const panes = panesOfWorktree(get().panes[hostId], worktree)
   for (const pane of panes) {
     backend()
@@ -961,14 +1035,40 @@ export async function removeWorktree(hostId: string, worktree: string, force: bo
   pushToast({ kind: 'info', title: `Removed ${wt?.branch ?? worktree} on ${get().hosts[hostId]?.label ?? hostId}` }, 3200)
 }
 
-/** All worktrees in sidebar order (hosts, then repos), optionally skipping collapsed repos. */
+/**
+ * All worktrees in sidebar order (hosts, then repos), optionally skipping
+ * collapsed repos and archived worktrees.
+ */
 export function allWorktrees(opts: { visibleOnly?: boolean } = {}): { hostId: string; wt: WorktreeInfo }[] {
   const s = get()
-  return s.hostOrder.flatMap((hostId) =>
-    (s.repos[hostId] ?? [])
-      .filter((r) => !opts.visibleOnly || !s.collapsedRepos[wtKey(hostId, r.id)])
-      .flatMap((r) => (s.worktrees[wtKey(hostId, r.id)] ?? []).map((wt) => ({ hostId, wt })))
-  )
+  const { archivedWorktrees: archived, collapsedHosts, collapsedRepos } = usePrefs.getState()
+  return sortedHostIds(s.hostOrder)
+    .filter((hostId) => !opts.visibleOnly || !collapsedHosts[hostId])
+    .flatMap((hostId) =>
+      sortedRepos(hostId, s.repos[hostId] ?? [])
+        .filter((r) => !opts.visibleOnly || !collapsedRepos[wtKey(hostId, r.id)])
+        .flatMap((r) => (s.worktrees[wtKey(hostId, r.id)] ?? []).map((wt) => ({ hostId, wt })))
+        .filter((x) => !opts.visibleOnly || !archived[wsKey(hostId, x.wt.id)])
+    )
+}
+
+/**
+ * Archive: hide a worktree in its project's collapsed "Archived" group. Files
+ * and panes are untouched; the flag is a client pref (this machine only).
+ * Archiving the selected worktree moves the selection to the repo's main one.
+ */
+export function setWorktreeArchived(hostId: string, worktree: string, archived: boolean): void {
+  const key = wsKey(hostId, worktree)
+  const archivedWorktrees = { ...usePrefs.getState().archivedWorktrees }
+  if (archived) archivedWorktrees[key] = true
+  else delete archivedWorktrees[key]
+  setPrefs({ archivedWorktrees })
+  const a = get().active
+  if (archived && a?.hostId === hostId && a.worktree === worktree) {
+    const wt = worktreesOf(hostId).find((w) => w.id === worktree)
+    const main = worktreesOf(hostId).find((w) => w.isMain && (!wt || w.repo === wt.repo))
+    if (main) selectWorktree(hostId, main.id)
+  }
 }
 
 /** ⌥` : back to the previously selected worktree. */
@@ -1004,10 +1104,29 @@ export function activateTabIndex(i: number): void {
 
 export function toggleRepoCollapsed(hostId: string, repo: string): void {
   const k = wtKey(hostId, repo)
-  set((s) => {
-    const collapsedRepos = { ...s.collapsedRepos }
-    if (collapsedRepos[k]) delete collapsedRepos[k]
-    else collapsedRepos[k] = true
-    return { collapsedRepos }
-  })
+  const collapsedRepos = { ...usePrefs.getState().collapsedRepos }
+  if (collapsedRepos[k]) delete collapsedRepos[k]
+  else collapsedRepos[k] = true
+  setPrefs({ collapsedRepos })
+}
+
+export function toggleHostCollapsed(hostId: string): void {
+  const collapsedHosts = { ...usePrefs.getState().collapsedHosts }
+  if (collapsedHosts[hostId]) delete collapsedHosts[hostId]
+  else collapsedHosts[hostId] = true
+  setPrefs({ collapsedHosts })
+}
+
+/** Hosts in sidebar order (the user's drag order, then new hosts). */
+export function sortedHostIds(hostOrder: readonly string[]): string[] {
+  return applyOrder(hostOrder, usePrefs.getState().hostOrder)
+}
+
+/** A host's repos in sidebar order. */
+export function sortedRepos(hostId: string, repos: readonly RepoInfo[]): RepoInfo[] {
+  const byId = new Map(repos.map((r) => [r.id, r]))
+  return applyOrder(
+    repos.map((r) => r.id),
+    usePrefs.getState().repoOrder[hostId]
+  ).map((id) => byId.get(id)!)
 }

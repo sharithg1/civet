@@ -5,10 +5,12 @@
 //! * `civet-status-hook.sh <status> [soft | --codex-notify JSON]`: a POSIX sh
 //!   script that writes `<status>` (plus a message taken from the hook's
 //!   event JSON) to `$CIVET_STATUS_FILE` atomically. A no-op outside Civet
-//!   panes. The top-level `"message"` field is extracted with a small POSIX
-//!   awk JSON scanner (handles escapes and nesting; no jq/python needed).
+//!   panes. The top-level `"message"` field (`"prompt"` for a prompt
+//!   submit) is extracted with a small POSIX awk JSON scanner (handles
+//!   escapes and nesting; no jq/python needed).
 //! * `claude-settings.json`: Claude Code settings registering that script for
-//!   `UserPromptSubmit` / `PostToolUse` (running), `PreToolUse` (running,
+//!   `UserPromptSubmit` (running, with the prompt as the message: clients
+//!   label the session with it), `PostToolUse` (running), `PreToolUse` (running,
 //!   "soft": never replaces a pending needs_input), `Notification` (needs
 //!   input) and `Stop` (done).
 //! * `bin/claude`, `bin/codex`: PATH shims. Every pane gets `bin/` first on
@@ -91,6 +93,8 @@ const SCRIPT_HEAD: &str = r#"#!/bin/sh
 #                        hide a permission prompt)
 #   MODE --codex-notify  Codex `notify`: the event JSON is the next argument
 #                        and its "last-assistant-message" is the message
+#   MODE prompt          Claude Code UserPromptSubmit: the event's "prompt"
+#                        is the message (clients label the session with it)
 # Otherwise the hook's JSON event is read from stdin (Claude Code). For
 # needs_input its top-level "message" becomes the status message, and
 # Notification events of type idle_prompt / auth_success are ignored.
@@ -110,9 +114,10 @@ if [ "$mode" = soft ] && [ -f "$CIVET_STATUS_FILE" ]; then
   esac
 fi
 msg=""
-if [ "$status" = needs_input ] || [ "$mode" = "--codex-notify" ]; then
+if [ "$status" = needs_input ] || [ "$mode" = "--codex-notify" ] || [ "$mode" = prompt ]; then
   want=message
   [ "$mode" = "--codex-notify" ] && want=last-assistant-message
+  [ "$mode" = prompt ] && want=prompt
   parsed=$(printf '%s\n' "$input" | awk -v want="$want" "$prog" 2>/dev/null)
   ntype=$(printf '%s\n' "$parsed" | head -n 1)
   msg=$(printf '%s\n' "$parsed" | sed '1d')
@@ -163,8 +168,21 @@ for d in $PATH; do
 done
 IFS=$old_ifs
 set +f
+# Not on the login PATH: installers often add their dir only in an
+# interactive rc file (~/.zshrc, ~/.bashrc), which `$SHELL -lc` skips. Try
+# the usual install dirs and put the hit on PATH for the program's children.
 if [ -z "$real" ]; then
-  echo "{name}: command not found" >&2
+  for d in "$HOME/.local/bin" "$HOME/.claude/local" "$HOME/.npm-global/bin" "$HOME/bin"; do
+    if [ -f "$d/{name}" ] && [ -x "$d/{name}" ]; then
+      real="$d/{name}"
+      PATH="$PATH:$d"
+      export PATH
+      break
+    fi
+  done
+fi
+if [ -z "$real" ]; then
+  echo "{name}: command not found (not on your login shell's PATH; add its dir to ~/.profile or ~/.zprofile)" >&2
   exit 127
 fi
 "#,
@@ -248,7 +266,7 @@ fn claude_settings(script: &Path) -> serde_json::Value {
     };
     json!({
         "hooks": {
-            "UserPromptSubmit": [{ "hooks": [cmd("running")] }],
+            "UserPromptSubmit": [{ "hooks": [cmd("running prompt")] }],
             "PreToolUse": [{ "matcher": "*", "hooks": [cmd("running soft")] }],
             "PostToolUse": [{ "matcher": "*", "hooks": [cmd("running")] }],
             "Notification": [{ "hooks": [cmd("needs_input")] }],
@@ -556,6 +574,18 @@ mod tests {
         // soft from running is a normal write
         let got = run(&["running", "soft"], "{}");
         assert_eq!(parse(&got).unwrap().0, civet_proto::AgentStatus::Running);
+        // UserPromptSubmit: the prompt is the message (session label)
+        let got = run(
+            &["running", "prompt"],
+            r#"{"hook_event_name":"UserPromptSubmit","prompt":"Fix the \"copay\" bug","message":"x"}"#,
+        );
+        assert_eq!(
+            parse(&got),
+            Some((
+                civet_proto::AgentStatus::Running,
+                Some(r#"Fix the "copay" bug"#.into())
+            ))
+        );
         let got = run(&["done"], "{}");
         assert_eq!(parse(&got), Some((civet_proto::AgentStatus::Done, None)));
         // idle reminder and auth_success leave the file alone
@@ -672,17 +702,29 @@ mod tests {
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex/config.toml"), "notify = [\"x\"]\n").unwrap();
         assert_eq!(run("codex x", true), "[x]");
-        // No real program: 127.
-        let out = Command::new("/bin/sh")
-            .arg("-c")
-            .arg("claude")
-            .env(
-                "PATH",
-                format!("{}:/usr/bin:/bin", files.shim_dir.display()),
-            )
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(127));
+        // No real program on PATH nor in the usual install dirs: 127.
+        let bare = |cmd: &str| {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(cmd)
+                .env(
+                    "PATH",
+                    format!("{}:/usr/bin:/bin", files.shim_dir.display()),
+                )
+                .env("HOME", &home)
+                .env_remove(civet_proto::ENV_STATUS_FILE)
+                .output()
+                .unwrap()
+        };
+        assert_eq!(bare("claude").status.code(), Some(127));
+        // Installed only in ~/.local/bin (added by an interactive rc file,
+        // so not on the login PATH): found there.
+        let local_bin = home.join(".local/bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        std::fs::copy(real.join("claude"), local_bin.join("claude")).unwrap();
+        let out = bare("claude a");
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "[a]");
     }
 
     #[test]

@@ -15,6 +15,7 @@ import { PaneStream, type LineRange } from './pane-stream'
 import { RecordParseError, parseRecords, type TermRecord } from './records'
 import { ScrollbackPager } from './scrollback-pager'
 import { handleClipboardKey, isMacPlatform } from './clipboard-keys'
+import { handleShiftEnter } from './newline-keys'
 import { InputQueue } from './input-queue'
 import { buildDefaultTerminalOptions } from './terminal-options'
 import { attachWebgl, type WebglHandle } from './webgl'
@@ -105,17 +106,23 @@ export class PaneController {
     })
     this.cleanups.push(() => d1.dispose(), () => d2.dispose(), () => d3.dispose())
 
-    // Cmd+C copies xterm's selection, Cmd+A selects all (see clipboard-keys).
+    // Shift+Enter inserts a newline (see newline-keys); Cmd+C copies xterm's
+    // selection, Cmd+A selects all (see clipboard-keys).
     const isMac = isMacPlatform()
-    this.term.attachCustomKeyEventHandler((ev) =>
-      handleClipboardKey(ev, this.term, {
-        isMac,
-        copy: (text) => {
-          this.backend.writeClipboard(text).catch((err: unknown) =>
-            this.cb.onError(`copy: ${String((err as Error).message ?? err)}`)
-          )
-        }
-      })
+    const sendNewline = (data: string) => {
+      if (!this.stream.closed) this.input.push('text', data)
+    }
+    this.term.attachCustomKeyEventHandler(
+      (ev) =>
+        handleShiftEnter(ev, sendNewline) &&
+        handleClipboardKey(ev, this.term, {
+          isMac,
+          copy: (text) => {
+            this.backend.writeClipboard(text).catch((err: unknown) =>
+              this.cb.onError(`copy: ${String((err as Error).message ?? err)}`)
+            )
+          }
+        })
     )
 
     // Scrolling up while already at the top (or with no local scrollback yet).

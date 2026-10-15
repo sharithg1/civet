@@ -161,6 +161,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let ui = Arc::new(TauriUi {
                 app: app.handle().clone(),

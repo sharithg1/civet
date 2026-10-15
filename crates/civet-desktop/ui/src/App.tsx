@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getBackend } from './backend'
 import { ConnectScreen } from './components/ConnectScreen'
-import { AddRepoDialog, ConfirmDialog } from './components/Dialogs'
+import { AddProjectDialog, ConfirmDialog } from './components/Dialogs'
 import { NewWorktreeDialog } from './components/NewWorktreeDialog'
 import { RemoveWorktreeDialog } from './components/RemoveWorktreeDialog'
 import { RightPanel } from './components/RightPanel'
@@ -79,10 +79,10 @@ export function App() {
       <StatusBar />
       <SettingsView />
       <WorktreeSwitcher />
-      {showConnect && <ConnectScreen onCancel={() => useStore.setState({ showConnect: false })} />}
+      {showConnect && <ConnectScreen onCancel={() => useStore.setState({ showConnect: false, addProjectAfterConnect: false })} />}
       {newWorktree && <NewWorktreeDialog key={`${newWorktree.hostId}:${newWorktree.repo ?? ''}`} />}
       <RemoveWorktreeDialog />
-      <AddRepoDialog />
+      <AddProjectDialog />
       <ConfirmDialog />
       <Toasts />
     </div>
@@ -119,6 +119,11 @@ function useShortcuts() {
         if (!state.hostOrder.length) return
         e.preventDefault()
         useStore.setState({ switcherOpen: !state.switcherOpen, settings: null })
+        return
+      }
+      if (mod && e.code === 'KeyO' && !e.shiftKey && !overlay) {
+        e.preventDefault()
+        useStore.setState({ addProject: { hostId: null }, settings: null })
         return
       }
       if (mod && e.key === ',') {

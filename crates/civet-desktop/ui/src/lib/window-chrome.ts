@@ -1,7 +1,7 @@
 // macOS overlay title bar (tauri.conf.json: titleBarStyle "Overlay",
 // hiddenTitle, trafficLightPosition): the web content starts at the very top
 // of the window, so the v3 title bar doubles as the tab row. It needs
-//  * a left inset so the traffic lights (x 14, y 13) do not cover the wordmark
+//  * a left inset so the traffic lights (x 14, y 22) do not cover the wordmark
 //    (none in fullscreen, where macOS hides them), and
 //  * `data-tauri-drag-region` on its empty parts (window drag; a double click
 //    zooms, via Tauri's drag script + `core:window:allow-start-dragging`).
@@ -11,8 +11,8 @@
 import { useEffect, useState } from 'react'
 import { isTauri } from '@tauri-apps/api/core'
 
-/** Width reserved for the three traffic lights (14 + 3×14 + 2×8 + gap). */
-export const TRAFFIC_LIGHTS_INSET = 78
+/** Width reserved for the three traffic lights (x 14 + ~60 for the buttons + a 12 gap). */
+export const TRAFFIC_LIGHTS_INSET = 86
 
 function isMac(): boolean {
   return typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)

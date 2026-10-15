@@ -1,4 +1,5 @@
-// "New worktree" (Civet v3): project chips, branch name, a preview line with
+// "New worktree" (Civet v3): project chips, branch name (optional: empty runs
+// the steps in the project's main checkout), a preview line with
 // the (editable) base, ordered on-create steps (Claude / Terminal, each opens
 // in its own tab), "Save as default for <project>", and an optional first
 // task for Claude. The first agent step goes through `launch_agent`, so the
@@ -11,6 +12,7 @@ import { setPrefs, usePrefs, type CreateStep } from '@/state/prefs'
 import { splitShellWords } from '@/lib/shell-words'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
+import { worktreeBranch } from '@/lib/worktree-view'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -48,10 +50,14 @@ export function NewWorktreeDialog() {
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const mainWt = useStore((s) =>
+    req ? s.worktrees[wtKey(req.hostId, repoId)]?.find((w) => w.isMain) : undefined
+  )
 
   if (!req) return null
   const close = () => useStore.setState({ newWorktree: null })
   const nameError = name ? branchNameError(name) : null
+  const useMain = !name.trim()
   const baseValue = base ?? repo?.defaultBranch ?? ''
   const stepError = steps
     .map((st, i) => {
@@ -64,7 +70,7 @@ export function NewWorktreeDialog() {
       }
     })
     .find(Boolean)
-  const canSubmit = !busy && !!repo && !branchNameError(name) && !stepError
+  const canSubmit = !busy && !!repo && !nameError && !stepError
   const hasAgent = steps.some((s) => s.kind === 'agent')
   const slug = name.trim() || '<branch>'
   const update = (i: number, patch: Partial<CreateStep>) =>
@@ -141,7 +147,7 @@ export function NewWorktreeDialog() {
               id="nw-name"
               autoFocus
               aria-label="Branch name"
-              placeholder="branch name, e.g. NO-TICKET/short-task"
+              placeholder="new branch, e.g. NO-TICKET/short-task (empty: use the main checkout)"
               value={name}
               autoComplete="off"
               spellCheck={false}
@@ -151,21 +157,28 @@ export function NewWorktreeDialog() {
             />
             {nameError && <span className="text-[11px] text-status-err-text">{nameError}</span>}
           </div>
-          <div className="flex items-center font-mono text-[11px] text-faint">
-            <span className="truncate">
-              {hostLabel}:{repo?.name ?? '…'}/{slug} · from&nbsp;
-            </span>
-            <input
-              aria-label="Base branch"
-              title="Base branch"
-              value={baseValue}
-              placeholder="HEAD"
-              spellCheck={false}
-              onChange={(e) => setBase(e.target.value)}
-              style={{ width: `${Math.max(4, baseValue.length + 1)}ch` }}
-              className="rounded-sm border-none bg-transparent p-0 font-mono text-[11px] text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none hover:text-foreground focus:text-foreground"
-            />
-          </div>
+          {useMain ? (
+            <div className="truncate font-mono text-[11px] text-faint">
+              {hostLabel}:{repo?.name ?? '…'} · main checkout
+              {mainWt ? ` (${worktreeBranch(mainWt)})` : ''} · no new worktree
+            </div>
+          ) : (
+            <div className="flex items-center font-mono text-[11px] text-faint">
+              <span className="truncate">
+                {hostLabel}:{repo?.name ?? '…'}/{slug} · from&nbsp;
+              </span>
+              <input
+                aria-label="Base branch"
+                title="Base branch"
+                value={baseValue}
+                placeholder="HEAD"
+                spellCheck={false}
+                onChange={(e) => setBase(e.target.value)}
+                style={{ width: `${Math.max(4, baseValue.length + 1)}ch` }}
+                className="rounded-sm border-none bg-transparent p-0 font-mono text-[11px] text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none hover:text-foreground focus:text-foreground"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-1.5">
             <div className="flex items-baseline justify-between text-[12px]">
               <span className="font-medium text-body">On create</span>
@@ -275,7 +288,7 @@ export function NewWorktreeDialog() {
             </Button>
             <Button type="submit" size="md" disabled={!canSubmit}>
               {busy && <Spinner className="size-3.5" />}
-              Create
+              {useMain ? 'Open in main checkout' : 'Create'}
             </Button>
           </div>
         </form>

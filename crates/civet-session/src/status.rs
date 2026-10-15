@@ -170,7 +170,13 @@ impl StatusTracker {
         if change.source == AgentStatusSource::ProcessExit {
             self.exited = true;
         }
-        if change.status == self.status {
+        // A prompt-submit hook re-reports `running` with the prompt as its
+        // message (clients use it to label the session); let it through even
+        // when heuristics already switched to running.
+        let prompt = change.source == AgentStatusSource::Hook
+            && change.status == AgentStatus::Running
+            && change.message.is_some();
+        if change.status == self.status && !prompt {
             return None;
         }
         let previous = std::mem::replace(&mut self.status, change.status);
@@ -522,6 +528,24 @@ mod tests {
 
     /// The first hook report makes a shell pane an agent pane; OSC 9 is
     /// then ignored (L9).
+    #[test]
+    fn prompt_hook_reports_while_already_running() {
+        let mut s = StatusTracker::new(PaneId(1), true, ms(500));
+        assert!(hook(&mut s, AgentStatus::Running).is_some());
+        // Same status, no message: deduplicated.
+        assert!(hook(&mut s, AgentStatus::Running).is_none());
+        // Same status with a prompt: passes (clients label the session).
+        let ev = s
+            .apply(Change::new(
+                AgentStatus::Running,
+                AgentStatusSource::Hook,
+                Some("Fix the copay bug".into()),
+            ))
+            .unwrap();
+        assert_eq!(ev.previous, AgentStatus::Running);
+        assert_eq!(ev.message.as_deref(), Some("Fix the copay bug"));
+    }
+
     #[test]
     fn hook_makes_agent_and_mutes_osc_notifications() {
         let t0 = Instant::now();

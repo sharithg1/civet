@@ -8,6 +8,8 @@ import {
   highlightRuns,
   matchFields,
   paneDot,
+  paneWhat,
+  promptLabel,
   shortPath,
   splitBranch,
   tabLabels,
@@ -106,5 +108,25 @@ describe('fuzzy', () => {
       { s: 'b', hit: true },
       { s: 'c', hit: false }
     ])
+  })
+})
+
+describe('session label from the first prompt', () => {
+  const claude = (p: Partial<PaneInfo>) => pane({ agent: 'claude', command: ['claude'], ...p })
+
+  it('promptLabel: first line, collapsed, capped; no slash commands', () => {
+    expect(promptLabel('  fix the   copay\ndisplay\n')).toBe('fix the copay')
+    expect(promptLabel('\n\nhi')).toBe('hi')
+    expect(promptLabel('/clear')).toBeNull()
+    expect(promptLabel(null)).toBeNull()
+    expect(promptLabel('x'.repeat(100))).toHaveLength(80)
+  })
+
+  it('placeholder title falls back to the prompt, a real title wins', () => {
+    expect(paneWhat(claude({ title: '✳ Claude Code' })).text).toBe('new session')
+    expect(paneWhat(claude({ title: '✳ Claude Code', prompt: 'hi' })).text).toBe('hi')
+    expect(paneWhat(claude({ title: '✳ Worktree cleanup', prompt: 'hi' })).text).toBe('Worktree cleanup')
+    expect(worktreeTask(wt, [claude({ title: '✳ Claude Code', prompt: 'Fix copay' })])).toBe('Fix copay')
+    expect(worktreeTask(wt, [claude({ title: '✳ Claude Code' })])).toBeNull()
   })
 })

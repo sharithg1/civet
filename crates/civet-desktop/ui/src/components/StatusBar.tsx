@@ -96,8 +96,8 @@ function HostPopover({ hostId }: { hostId: string }) {
           </button>
         )}
         <div className="grid grid-cols-2 gap-1.5">
-          <button type="button" className={btn} onClick={() => useStore.setState({ addRepoFor: hostId })}>
-            Add repository…
+          <button type="button" className={btn} onClick={() => useStore.setState({ addProject: { hostId } })}>
+            Add project…
           </button>
           <button type="button" className={btn} onClick={() => useStore.setState({ showConnect: true })}>
             Connect host…

@@ -35,7 +35,35 @@ export type Prefs = {
   createSteps: Record<string, CreateStep[]>
   /** Local echo prediction (sent to the core with `set_prediction`). */
   prediction: Prediction
+  /** Worktrees hidden from the sidebar's main list, by `wsKey(hostId, worktree)`. */
+  archivedWorktrees: Record<string, true>
+  /** Sidebar layout (drag to reorder): host ids; hosts not listed follow. */
+  hostOrder: string[]
+  /** Sidebar layout: repo ids per host; repos not listed follow. */
+  repoOrder: Record<string, string[]>
+  /** Collapsed hosts in the sidebar. */
+  collapsedHosts: Record<string, true>
+  /** Collapsed projects in the sidebar, by `wtKey(hostId, repoId)`. */
+  collapsedRepos: Record<string, true>
+  /** Panels as last toggled (⌥B / ⌥E); null: the default for the window size. */
+  sidebarOpen: boolean | null
+  rightPanelOpen: boolean | null
+  /** Right panel tab last selected. */
+  rightTab: 'files' | 'changes' | 'branch'
 }
+
+/** Fields kept by "Reset to defaults": saved data and sidebar layout, not settings. */
+const KEPT_ON_RESET = [
+  'createSteps',
+  'archivedWorktrees',
+  'hostOrder',
+  'repoOrder',
+  'collapsedHosts',
+  'collapsedRepos',
+  'sidebarOpen',
+  'rightPanelOpen',
+  'rightTab'
+] as const
 
 export const DEFAULT_PREFS: Prefs = {
   worktreeLabel: 'task',
@@ -44,7 +72,15 @@ export const DEFAULT_PREFS: Prefs = {
   agentCommand: 'claude',
   confirmCloseRunning: true,
   createSteps: {},
-  prediction: 'auto'
+  prediction: 'auto',
+  archivedWorktrees: {},
+  hostOrder: [],
+  repoOrder: {},
+  collapsedHosts: {},
+  collapsedRepos: {},
+  sidebarOpen: null,
+  rightPanelOpen: null,
+  rightTab: 'branch'
 }
 
 const KEY = 'civet.prefs.v1'
@@ -74,5 +110,15 @@ export function setPrefs(patch: Partial<Prefs>): void {
 }
 
 export function resetPrefs(): void {
-  setPrefs({ ...DEFAULT_PREFS, createSteps: usePrefs.getState().createSteps })
+  const cur = usePrefs.getState()
+  const kept = Object.fromEntries(KEPT_ON_RESET.map((k) => [k, cur[k]])) as Partial<Prefs>
+  setPrefs({ ...DEFAULT_PREFS, ...kept })
+}
+
+/** `ids` in the saved `order` first, then the rest in their original order. */
+export function applyOrder(ids: readonly string[], order: readonly string[] | undefined): string[] {
+  if (!order?.length) return [...ids]
+  const rank = new Map(order.map((id, i) => [id, i]))
+  const known = ids.filter((id) => rank.has(id)).sort((a, b) => rank.get(a)! - rank.get(b)!)
+  return [...known, ...ids.filter((id) => !rank.has(id))]
 }

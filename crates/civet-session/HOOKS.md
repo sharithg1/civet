@@ -124,7 +124,7 @@ The generated Claude settings register:
 
 | Claude Code hook | Status |
 |---|---|
-| `UserPromptSubmit` | running |
+| `UserPromptSubmit` | running (`prompt` mode: the prompt becomes the message, used as the session label) |
 | `PreToolUse` (matcher `*`) | running, `soft` (never replaces a pending needs_input) |
 | `PostToolUse` (matcher `*`) | running (e.g. after a permission was granted) |
 | `Notification` | needs_input (message = notification text; idle/auth notifications ignored) |
@@ -136,7 +136,7 @@ hooks to `~/.claude/settings.json` or the project's `.claude/settings.json`:
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running prompt" }] }],
     "PreToolUse":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running soft" }] }],
     "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running" }] }],
     "Notification": [{ "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh needs_input" }] }],
@@ -190,7 +190,7 @@ Better signals, from simplest to most complete:
    ```json
    {
      "hooks": {
-       "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running" }] }],
+       "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running prompt" }] }],
        "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running" }] }],
        "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh needs_input" }] }],
        "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/.civet/hooks/civet-status-hook.sh running" }] }],
