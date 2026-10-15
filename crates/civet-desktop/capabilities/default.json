@@ -36,6 +36,11 @@
     "allow-fetch-scrollback",
     "allow-set-agent-status",
     "allow-set-prediction",
-    "allow-write-clipboard"
+    "allow-write-clipboard",
+    "allow-list-ports",
+    "allow-forward-port",
+    "allow-stop-forward",
+    "allow-list-forwards",
+    "allow-open-local-url"
   ]
 }

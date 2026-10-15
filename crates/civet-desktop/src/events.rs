@@ -15,6 +15,10 @@ pub const EV_DAEMON_EVENT: &str = "civet://daemon-event";
 pub const EV_AGENT_ATTENTION: &str = "civet://agent-attention";
 /// `civet://clipboard`
 pub const EV_CLIPBOARD: &str = "civet://clipboard";
+/// `civet://ports`
+pub const EV_PORTS: &str = "civet://ports";
+/// `civet://forwards`
+pub const EV_FORWARDS: &str = "civet://forwards";
 
 /// What `connect_host` connects to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +276,60 @@ pub struct ClipboardEvent {
     pub ok: bool,
 }
 
+/// Whether a host's listening ports can be watched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortsStatus {
+    /// Not known yet (connecting, or the first update is on its way).
+    Pending,
+    /// Updates arrive.
+    Watching,
+    /// Not on this host: stream (SSH tunnel) link or a daemon that predates
+    /// port detection. `message` says which.
+    Unsupported,
+}
+
+/// `civet://ports` and the `list_ports` result: a host's listening TCP
+/// ports, as the daemon last reported them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortsEvent {
+    /// Host.
+    pub host_id: String,
+    /// See [`PortsStatus`].
+    pub status: PortsStatus,
+    /// Why ports are unsupported.
+    pub message: Option<String>,
+    /// The ports, sorted by port.
+    pub ports: Vec<civet_proto::ListeningPort>,
+}
+
+/// One forwarded port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardView {
+    /// Port on the host.
+    pub remote_port: u16,
+    /// Port on this Mac's loopback interface (differs from `remote_port`
+    /// when that was taken).
+    pub local_port: u16,
+    /// Connections currently open through it.
+    pub connections: u32,
+    /// Why the last connection could not be forwarded (cleared by the next
+    /// one that works).
+    pub last_error: Option<String>,
+}
+
+/// `civet://forwards`: every forward of a host, after any change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardsEvent {
+    /// Host.
+    pub host_id: String,
+    /// Forwards, sorted by remote port.
+    pub forwards: Vec<ForwardView>,
+}
+
 /// `fetch_scrollback` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -324,6 +382,10 @@ pub trait UiEvents: Send + Sync + 'static {
     /// OSC 52 from a pane: write the system clipboard, then emit
     /// `civet://clipboard`. Default: ignore (tests that do not care).
     fn clipboard(&self, _write: ClipboardWrite) {}
+    /// `civet://ports`. Default: ignore.
+    fn ports(&self, _e: PortsEvent) {}
+    /// `civet://forwards`. Default: ignore.
+    fn forwards(&self, _e: ForwardsEvent) {}
 }
 
 #[cfg(test)]

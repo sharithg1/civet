@@ -27,6 +27,7 @@ use crate::conn::{
     Tasks, TransportKind, WriteCmd, classify_client_message, frame, quic_end_item, spawn_writer,
 };
 use crate::error::{TransportError, close_code, frame_error, from_conn_error, stream_error};
+use crate::tunnel::{ForwardRequest, PortsSink};
 
 /// QUIC idle timeout: a laptop that wakes within 6 h continues the same
 /// connection.
@@ -46,7 +47,10 @@ pub const DEFAULT_PORT_RANGE: std::ops::RangeInclusive<u16> = 60001..=60999;
 /// for the connection close that carries the reason code.
 const CLOSE_REASON_WAIT: Duration = Duration::from_millis(250);
 
-const MAX_BIDI_STREAMS: u32 = 64;
+/// Concurrent client-opened bidi streams: scrollback fetches plus one per
+/// forwarded TCP connection (a browser opens a handful per page, more with
+/// HMR sockets and parallel asset loads).
+const MAX_BIDI_STREAMS: u32 = 512;
 const MAX_UNI_STREAMS: u32 = 1024;
 
 fn transport_config(client: bool) -> TransportConfig {
@@ -392,19 +396,11 @@ pub(crate) fn spawn_server_readers(
                 let conn = conn.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    match read_scrollback_request(recv).await {
-                        Ok(request) => {
-                            let responder = ScrollbackResponder {
-                                inner: ResponderInner::Quic { send, conn },
-                            };
-                            let _ = tx
-                                .send(RxItem::Item(ServerIncoming::Scrollback {
-                                    request,
-                                    responder,
-                                }))
-                                .await;
+                    match read_client_stream(send, recv, conn).await {
+                        Ok(item) => {
+                            let _ = tx.send(RxItem::Item(item)).await;
                         }
-                        Err(e) => tracing::debug!(error = %e, "bad scrollback stream"),
+                        Err(e) => tracing::debug!(error = %e, "bad client stream"),
                     }
                 });
             }
@@ -419,25 +415,44 @@ pub(crate) fn spawn_server_readers(
     .abort_handle()
 }
 
-async fn read_scrollback_request(
+/// Read the header of a client-opened bidi stream (and, for scrollback,
+/// its request) and turn it into a `ServerIncoming`. An unknown header (a
+/// newer client) only drops this stream.
+async fn read_client_stream(
+    send: quinn::SendStream,
     mut recv: quinn::RecvStream,
-) -> Result<ScrollbackRequest, TransportError> {
+    conn: quinn::Connection,
+) -> Result<ServerIncoming, TransportError> {
     tokio::time::timeout(HELLO_TIMEOUT, async move {
         let open = read_raw_frame_limited(&mut recv, MAX_STREAM_OPEN_LEN)
             .await?
             .ok_or_else(|| TransportError::ProtocolViolation("empty stream".into()))?;
-        if decode::<StreamOpen>(&open)? != StreamOpen::Scrollback {
-            return Err(TransportError::ProtocolViolation(
-                "client-opened stream is not a scrollback stream".into(),
-            ));
+        match decode::<StreamOpen>(&open)? {
+            StreamOpen::Scrollback => {
+                let req = read_raw_frame(&mut recv).await?.ok_or_else(|| {
+                    TransportError::ProtocolViolation("no scrollback request".into())
+                })?;
+                Ok(ServerIncoming::Scrollback {
+                    request: decode::<ScrollbackRequest>(&req)?,
+                    responder: ScrollbackResponder {
+                        inner: ResponderInner::Quic { send, conn },
+                    },
+                })
+            }
+            StreamOpen::Ports => Ok(ServerIncoming::Ports(PortsSink { send, conn })),
+            StreamOpen::Forward { port } => Ok(ServerIncoming::Forward(ForwardRequest {
+                port,
+                send,
+                recv,
+                conn,
+            })),
+            other => Err(TransportError::ProtocolViolation(format!(
+                "client opened a {other:?} stream"
+            ))),
         }
-        let req = read_raw_frame(&mut recv)
-            .await?
-            .ok_or_else(|| TransportError::ProtocolViolation("no scrollback request".into()))?;
-        Ok(decode::<ScrollbackRequest>(&req)?)
     })
     .await
-    .map_err(|_| TransportError::Timeout("scrollback request"))?
+    .map_err(|_| TransportError::Timeout("client stream header"))?
 }
 
 // ---------------------------------------------------------------------------

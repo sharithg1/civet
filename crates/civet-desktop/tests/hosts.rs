@@ -907,3 +907,216 @@ async fn reattach_racing_the_linger_expiry_keeps_streaming() {
     }
     m.shutdown().await;
 }
+
+/// Records `civet://ports` and `civet://forwards` on top of [`RecordingUi`].
+#[derive(Default)]
+struct PortsUi {
+    base: RecordingUi,
+    ports: Mutex<Vec<civet_desktop::events::PortsEvent>>,
+    forwards: Mutex<Vec<civet_desktop::events::ForwardsEvent>>,
+}
+
+impl UiEvents for PortsUi {
+    fn host_state(&self, e: HostStateEvent) {
+        self.base.host_state(e);
+    }
+    fn bootstrap_progress(&self, e: BootstrapProgressEvent) {
+        self.base.bootstrap_progress(e);
+    }
+    fn daemon_event(&self, e: DaemonEventPayload) {
+        self.base.daemon_event(e);
+    }
+    fn agent_attention(&self, e: AgentAttentionEvent) {
+        self.base.agent_attention(e);
+    }
+    fn window_focused(&self) -> bool {
+        false
+    }
+    fn notify(&self, _title: &str, _body: &str) {}
+    fn ports(&self, e: civet_desktop::events::PortsEvent) {
+        self.ports.lock().unwrap().push(e);
+    }
+    fn forwards(&self, e: civet_desktop::events::ForwardsEvent) {
+        self.forwards.lock().unwrap().push(e);
+    }
+}
+
+async fn ports_rig() -> (tempfile::TempDir, Daemon, Arc<PortsUi>, HostManager) {
+    let dir = tempfile::Builder::new()
+        .prefix("cvt")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let daemon = Daemon::start(daemon_opts(dir.path())).await.unwrap();
+    let ui = Arc::new(PortsUi::default());
+    let connector = Arc::new(DirConnector {
+        state_dir: dir.path().to_path_buf(),
+        client_id: ClientId::generate().unwrap(),
+        used_keys: Mutex::new(Vec::new()),
+    });
+    let mgr = HostManager::new(
+        fast(),
+        ui.clone(),
+        connector,
+        tokio::runtime::Handle::current(),
+    );
+    (dir, daemon, ui, mgr)
+}
+
+/// Echo server in this process; returns its port.
+async fn echo_server() -> u16 {
+    use tokio::io::AsyncWriteExt;
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = s.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+                let _ = w.shutdown().await;
+            });
+        }
+    });
+    port
+}
+
+async fn echo_through(local: u16, data: &[u8]) -> Vec<u8> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local))
+        .await
+        .unwrap();
+    s.write_all(data).await.unwrap();
+    s.shutdown().await.unwrap();
+    let mut back = Vec::new();
+    tokio::time::timeout(T, s.read_to_end(&mut back))
+        .await
+        .unwrap()
+        .unwrap();
+    back
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ports_are_watched_and_forwards_survive_a_daemon_restart() {
+    use civet_desktop::events::PortsStatus;
+    let (dir, daemon, ui, m) = ports_rig().await;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Auto)
+        .await
+        .unwrap();
+    let port = echo_server().await;
+
+    // The listener shows up in the ports report.
+    eventually("port reported", || {
+        let p = m.list_ports(h).unwrap();
+        p.status == PortsStatus::Watching && p.ports.iter().any(|x| x.port == port)
+    })
+    .await;
+    assert!(
+        ui.ports
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.ports.iter().any(|x| x.port == port)),
+        "civet://ports carried the port"
+    );
+
+    // This Mac: never the same port number (the daemon would dial the
+    // forward's own listener).
+    let fwd = m.forward_port(h, port, None).await.unwrap();
+    assert_eq!(fwd.remote_port, port);
+    assert_ne!(fwd.local_port, port);
+    // Forwarding again returns the same forward; asking for another local
+    // port for it is refused.
+    assert_eq!(m.forward_port(h, port, None).await.unwrap(), fwd);
+    assert_eq!(
+        m.forward_port(h, port, Some(1)).await.unwrap_err().code,
+        "alreadyExists"
+    );
+    assert_eq!(
+        m.forward_port(h, port + 1, Some(port + 1))
+            .await
+            .unwrap_err()
+            .code,
+        "invalidArgument"
+    );
+    let data: Vec<u8> = (0..300_000u32).map(|i| i as u8).collect();
+    assert_eq!(echo_through(fwd.local_port, &data).await, data);
+    assert_eq!(
+        m.list_forwards(h).unwrap(),
+        vec![fwd.clone()]
+            .into_iter()
+            .map(|mut f| {
+                f.connections = 0;
+                f
+            })
+            .collect::<Vec<_>>()
+    );
+    assert!(!ui.forwards.lock().unwrap().is_empty());
+
+    // A daemon restart re-bootstraps the host; the forward keeps its local
+    // port and works over the new session.
+    let first = m.list_hosts()[0].instance_id.clone();
+    daemon.shutdown("test restart").await;
+    let daemon = Daemon::start(daemon_opts(dir.path())).await.unwrap();
+    eventually("re-bootstrapped", || {
+        let s = &m.list_hosts()[0];
+        s.instance_id != first && s.state == HostState::Connected
+    })
+    .await;
+    assert_eq!(
+        echo_through(fwd.local_port, b"after restart").await,
+        b"after restart"
+    );
+
+    // Nothing listens on the far side: the local connection is closed and
+    // the forward reports why.
+    let dead = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let f2 = m.forward_port(h, dead, None).await.unwrap();
+    {
+        use tokio::io::AsyncReadExt;
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", f2.local_port))
+            .await
+            .unwrap();
+        let mut buf = [0u8; 16];
+        match tokio::time::timeout(T, s.read(&mut buf)).await.unwrap() {
+            Ok(0) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            other => panic!("expected the connection to close, got {other:?}"),
+        }
+    }
+    eventually("error reported", || {
+        m.list_forwards(h)
+            .unwrap()
+            .iter()
+            .any(|f| f.remote_port == dead && f.last_error.is_some())
+    })
+    .await;
+
+    // Stopping closes the local listener.
+    m.stop_forward(h, port).unwrap();
+    assert_eq!(m.stop_forward(h, port).unwrap_err().code, "notFound");
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", fwd.local_port))
+            .await
+            .is_err()
+    );
+    m.disconnect_host(h).await.unwrap();
+    daemon.shutdown("test done").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ports_are_unsupported_on_the_stream_link() {
+    use civet_desktop::events::PortsStatus;
+    let (_dir, daemon, _ui, m) = ports_rig().await;
+    m.connect_host(HostTarget::Local, TransportChoice::Ssh)
+        .await
+        .unwrap();
+    eventually("unsupported", || {
+        m.list_ports("local").unwrap().status == PortsStatus::Unsupported
+    })
+    .await;
+    m.disconnect_host("local").await.unwrap();
+    daemon.shutdown("test done").await;
+}

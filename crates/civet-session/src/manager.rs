@@ -798,6 +798,16 @@ impl SessionManager {
         panes.iter().map(|p| p.info()).collect()
     }
 
+    /// Running panes' root processes (pane, pid, worktree), for attributing
+    /// listening ports to panes.
+    pub fn pane_processes(&self) -> Vec<(PaneId, u32, Option<WorktreeId>)> {
+        lock(&self.inner.panes)
+            .values()
+            .filter(|p| !p.is_exited())
+            .filter_map(|p| Some((p.id, p.pid()?, p.worktree())))
+            .collect()
+    }
+
     /// One pane's info.
     pub fn pane_info(&self, pane: PaneId) -> Result<PaneInfo, SessionError> {
         Ok(self.pane(pane)?.info())

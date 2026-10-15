@@ -33,6 +33,11 @@ const COMMANDS: &[&str] = &[
     "set_agent_status",
     "set_prediction",
     "write_clipboard",
+    "list_ports",
+    "forward_port",
+    "stop_forward",
+    "list_forwards",
+    "open_local_url",
 ];
 
 /// Bundled daemon binaries (`bundle.resources` in tauri.conf.json):

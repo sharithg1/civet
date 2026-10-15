@@ -1,23 +1,28 @@
-// Right panel of the v3 workspace (Files / Changes / Branch). civetd does not
+// Right panel of the v3 workspace (Files / Changes / Branch / Ports). civetd does not
 // expose a worktree's files, git status, diffs, commits or PRs yet, so Files
 // and Changes are explanatory placeholders and Branch shows what the daemon
-// does report (branch, HEAD, path, agents) plus "Remove worktree…".
+// does report (branch, HEAD, path, agents) plus "Remove worktree…". Ports
+// lists listening ports and port forwards (see PortsTab.tsx).
 // Backend follow-up: list_files / git_status / git_diff / branch_info.
 import { panesOfWorktree, pushToast, useStore, type RightTab } from '@/state/store'
 import { cn } from '@/lib/utils'
 import { DOT_LABEL, paneDot, splitBranch, worktreeBranch } from '@/lib/worktree-view'
 import { useWorktreeInfo } from './chrome'
+import { usePorts } from '@/state/ports'
+import { PortsTab } from './PortsTab'
 import { StatusDot } from './StatusDot'
 
 const TABS: [RightTab, string][] = [
   ['files', 'Files'],
   ['changes', 'Changes'],
-  ['branch', 'Branch']
+  ['branch', 'Branch'],
+  ['ports', 'Ports']
 ]
 
 export function RightPanel() {
   const active = useStore((s) => s.active)
   const tab = useStore((s) => s.rightTab)
+  const forwardCount = usePorts((s) => (active ? (s.forwards[active.hostId]?.length ?? 0) : 0))
   return (
     <aside className="flex min-h-0 w-[300px] shrink-0 flex-col border-l border-border bg-chrome">
       <div className="flex h-9 shrink-0 items-stretch border-b border-border px-1.5" role="tablist">
@@ -34,6 +39,7 @@ export function RightPanel() {
             )}
           >
             {label}
+            {id === 'ports' && forwardCount > 0 && <span className="font-mono text-2xs text-faint">{forwardCount}</span>}
             {tab === id && <span aria-hidden className="absolute inset-x-2 -bottom-px h-0.5 bg-soft" />}
           </button>
         ))}
@@ -86,6 +92,9 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
             Git status and diffs aren&apos;t reported by civetd yet. Run{' '}
             <span className="font-mono text-2xs text-muted-foreground">git status</span> in a Terminal tab.
           </Note>
+        )}
+        {tab === 'ports' && (
+          <PortsTab hostId={hostId} worktree={worktree} panes={panes} connected={connected} />
         )}
         {tab === 'branch' && (
           <div className="flex flex-col gap-2.5 px-2 py-0.5 text-sm">

@@ -39,6 +39,7 @@ pub(crate) struct Server {
     pub hostname: String,
     pub resume_ttl: Duration,
     clients: Mutex<HashMap<ClientId, ClientState>>,
+    ports: Arc<super::ports::PortWatcher>,
     shutting_down: AtomicBool,
     next_conn: AtomicU64,
 }
@@ -94,6 +95,7 @@ impl Server {
         hostname: String,
     ) -> Self {
         Self {
+            ports: super::ports::PortWatcher::new(sessions.clone()),
             sessions,
             key,
             instance_id,
@@ -284,6 +286,12 @@ impl Server {
                             tracing::debug!(error = %e, "scrollback reply failed");
                         }
                     });
+                }
+                Ok(Some(ServerIncoming::Ports(sink))) => {
+                    tokio::spawn(self.ports.clone().serve(sink));
+                }
+                Ok(Some(ServerIncoming::Forward(req))) => {
+                    tokio::spawn(super::ports::forward(req));
                 }
                 Ok(None) => break,
                 Err(e) => {

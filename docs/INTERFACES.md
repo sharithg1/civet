@@ -117,7 +117,8 @@ map. Everything is re-exported from the crate root.
 | Bootstrap JSON line | `BootstrapInfo { civet_bootstrap, daemon_version, proto_version, udp_port, session_key, cert_fingerprint, pid, reattached, available_version?, live_panes?, upgrade_available }` (the last three are set only in `civetd bootstrap` output; null/false otherwise), `to_json_line`, `find_in_output` (skips MOTD noise, takes the last valid line), `BOOTSTRAP_FORMAT` |
 | Secrets/ids | `SessionKey` (32 B, `ct_eq`), `CertFingerprint` (SHA-256 of cert DER), `ResumeToken` (32 B, `ct_eq`), `ClientId` (16 B, per installation), `PaneId(u64)`, `RepoId(String)`, `WorktreeId(String)` (= canonical path), `RequestId = u64` |
 | Handshake | `ClientHello { magic, proto_version, session_key, client_id, client_name, client_version, resume: Option<ResumeToken> }`, `ClientHello::validate(&key) -> Result<(), HelloReject>`, `hello::peek_hello_version(&payload)`, `HelloReply::{Accepted(ServerHello), Rejected(HelloReject)}`, `ServerHello { proto_version, daemon_version, instance_id, resumed, server_time_ms, resume_token, resumed_subscriptions: Vec<SubscribeInfo> }`, `RejectReason::{BadKey, VersionMismatch, BadMagic, ShuttingDown}` |
-| Stream header | `StreamOpen::{Control, Screen { pane }, Scrollback}`: first frame on every QUIC stream (and on the stdio link: `Control`) |
+| Stream header | `StreamOpen::{Control, Screen { pane }, Scrollback, Ports, Forward { port: u16 }}`: first frame on every QUIC stream (and on the stdio link: `Control`) |
+| Ports (`ports.rs`) | `ListeningPort { port, addrs: Vec<String>, pid, process, command, pane, worktree }`, `PortsUpdate { ports }` (sorted by port), `ForwardReply = Result<(), RpcError>`, `MAX_PORT_COMMAND_CHARS` (200) |
 | Envelopes | `ClientMessage::{Request(ControlRequest), Input(InputMessage), Ack(ScreenAck), Goodbye}`; `ServerMessage::{Response(ControlResponse), Event(Event), Screen(ScreenUpdate), InputAck { pane, seq }, Goodbye { reason }}` |
 | RPC | `ControlRequest { id, request: Request }`, `ControlResponse { id, result: Result<Response, RpcError> }`, `RpcError { code: ErrorCode, message }` |
 | Requests → responses | `Ping{nonce}`→`Pong{nonce, server_time_ms}`; `GetDaemonInfo`→`DaemonInfo`; `ListRepos`→`Repos`; `AddRepo{path}`→`Repo`; `RemoveRepo{repo}`→`Ok`; `ListWorktrees{repo}`→`Worktrees`; `CreateWorktree{repo, branch, base, path}`→`Worktree`; `RemoveWorktree{worktree, force}`→`Ok`; `SpawnPane(SpawnPaneRequest)`→`PaneSpawned(PaneInfo)`; `LaunchAgent(LaunchAgentRequest)`→`AgentLaunched{worktree, pane}`; `ResizePane{pane, size}`→`Ok`; `KillPane{pane, signal}`→`Ok`; `ListPanes`→`Panes`; `SubscribePane{pane, known_state}`→`Subscribed(SubscribeInfo)`; `UnsubscribePane{pane}`→`Ok`; `FetchScrollback(ScrollbackRequest)`→`Scrollback(ScrollbackPage)`; `SetAgentStatus{pane, status}`→`Ok` |
@@ -136,6 +137,8 @@ map. Everything is re-exported from the crate root.
 | Control (bidi, exactly one, the first) | client | C→S: `StreamOpen::Control`, `ClientHello`, then `ClientMessage`*. S→C: `HelloReply`, then `ServerMessage`* (`Response`, `Event`, `InputAck`, `Goodbye`; on QUIC never `Screen`) |
 | Screen (uni, one per subscribed pane per connection) | daemon | `StreamOpen::Screen { pane }`, then `ServerMessage::Screen`* for that pane in state order. Daemon `finish()`es it on unsubscribe or pane close |
 | Scrollback (bidi, one per request) | client | C→S: `StreamOpen::Scrollback`, `ScrollbackRequest`, FIN. S→C: `Result<ScrollbackPage, RpcError>`, FIN |
+| Ports (bidi, at most one per connection) | client | C→S: `StreamOpen::Ports`, then nothing (the client closes it to stop). S→C: one `PortsUpdate` at once, another whenever the daemon user's listening TCP ports change (scanned every 2 s while anyone watches) |
+| Forward (bidi, one per forwarded TCP connection) | client | C→S: `StreamOpen::Forward { port }`. S→C: one `ForwardReply` (`Err(NotFound)`: nothing listens on `127.0.0.1` / `::1` at `port`). After `Ok`: raw TCP bytes both ways, FIN = half-close. Send priority −1 (below control and screen streams) |
 | **Stdio link** (SSH fallback, unix socket): one byte stream | client | Same as Control, except screen updates arrive as `ServerMessage::Screen` on it and scrollback uses `Request::FetchScrollback` → `Response::Scrollback` |
 
 Rules:
@@ -147,6 +150,10 @@ Rules:
 - Responses may arrive out of order relative to requests (match on `id`).
   Events and responses share the control stream in send order.
 - A screen update for a pane may arrive before the `Subscribed` response.
+- `Ports` and `Forward` were added within protocol 1 without a version
+  gate: they never touch the control stream, and a daemon that predates them
+  fails to decode the header and drops only that stream (the client reports
+  `ErrorCode::Unsupported`). They do not exist on the stdio link.
 
 ---
 
@@ -242,7 +249,7 @@ verification). TLS 1.3 only, ALPN `civet_proto::ALPN`. Use quinn's
 | `keep_alive_interval` (client only) | 2 s | Keeps NAT bindings while awake; nothing is sent while asleep. |
 | Server `migration` | `true` (quinn default) | Client IP/port changes follow automatically. |
 | `initial_rtt` | 100 ms | |
-| Stream limits | bidi 64, uni 1024 | One uni stream per subscribed pane. |
+| Stream limits | bidi 512, uni 1024 | One uni stream per subscribed pane; bidi: scrollback fetches and one per forwarded TCP connection. |
 | Connect (handshake + hello) timeout | 5 s (client config) | |
 | Daemon hello read timeout | 10 s | Then drop the connection. |
 
@@ -1664,6 +1671,11 @@ JSON forms unless shown. Errors reject the promise with
 | `set_agent_status` | `{ hostId, pane, status: AgentStatus }` | `null` |
 | `set_prediction` | `{ enabled: boolean }` | `null` (Settings → "Local echo prediction": Auto = true, Off = false; persisted by the UI and sent at startup) |
 | `write_clipboard` | `{ text: string }` | `null` (Cmd+C on an xterm selection; sync command, runs on the main thread for NSPasteboard) |
+| `list_ports` | `{ hostId }` | `PortsEvent` (last report; also pushed as `civet://ports`) |
+| `forward_port` | `{ hostId, remotePort, localPort?: number \| null }` | `ForwardView`. Listens on `127.0.0.1:localPort` (null: `remotePort` if free, else any free port; on This Mac never `remotePort`) and tunnels each connection over a `Forward` stream of the host's current session, so forwards survive reconnects and re-bootstraps; `disconnect_host` drops them. Idempotent per remote port (`alreadyExists` if a different `localPort` is asked for, or if `localPort` is taken) |
+| `stop_forward` | `{ hostId, remotePort }` | `null` (`notFound` if not forwarded); closes the listener and its connections |
+| `list_forwards` | `{ hostId }` | `ForwardView[]` |
+| `open_local_url` | `{ url }` | `null`: opens an `http(s)://localhost` / `127.0.0.1` URL in the default browser (anything else is `invalidArgument`) |
 
 ```ts
 type HostTarget =
@@ -1683,6 +1695,14 @@ type HostSummary = {
 // An older daemon kept because it has live panes although this app's newer
 // civetd is installed (BootstrapInfo.upgrade_available).
 type DaemonUpgrade = { runningVersion: string; availableVersion: string; livePanes: number };
+
+type PortsEvent = {
+  hostId: string;
+  status: "pending" | "watching" | "unsupported"; // unsupported: stdio link or a daemon without port detection
+  message: string | null;
+  ports: ListeningPort[];   // proto JSON
+};
+type ForwardView = { remotePort: number; localPort: number; connections: number; lastError: string | null };
 
 type ScrollbackPageView = {
   start: number; oldestAvailable: number; endAvailable: number;
@@ -1739,6 +1759,8 @@ visible latency for keystroke echoes).
 | `civet://bootstrap-progress` | `{ hostId, step: "probe" \| "upload" \| "start" \| "resolve" \| "dial" \| "fallback", message: string \| null }` |
 | `civet://daemon-event` | `{ hostId, event: Event }` (proto JSON, e.g. `{ "paneTitle": { "pane": 3, "title": "vim" } }`) |
 | `civet://agent-attention` | `{ hostId, pane, status: "done" \| "needsInput", previous, title, worktree: string \| null, message: string \| null }` |
+| `civet://ports` | `PortsEvent`, when a host's listening ports or their status change |
+| `civet://forwards` | `{ hostId, forwards: ForwardView[] }` after any change (added, stopped, connection count, `lastError`) |
 | `civet://clipboard` | `{ hostId, pane, chars: number, ok: boolean }`: a pane's program set the clipboard (OSC 52). Rust already wrote the system clipboard (NSPasteboard, no user gesture needed); success is silent, the UI shows an error toast when `ok` is false. Applied only while a Civet window is focused and the pane is attached in the UI, at most once per second per pane; otherwise dropped (debug log, no event). `Event::Clipboard` is not forwarded as a `civet://daemon-event` |
 
 ```ts

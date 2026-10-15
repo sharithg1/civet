@@ -17,6 +17,8 @@ import type {
   ClipboardEvent,
   DaemonEventEnvelope,
   DaemonInfo,
+  ForwardsEvent,
+  ForwardView,
   HostStateEvent,
   HostSummary,
   HostTarget,
@@ -24,6 +26,7 @@ import type {
   LaunchAgentRequest,
   PaneId,
   PaneInfo,
+  PortsEvent,
   RepoId,
   RepoInfo,
   ScrollbackPageView,
@@ -44,7 +47,9 @@ export const CivetEvents = {
   bootstrapProgress: 'civet://bootstrap-progress',
   daemonEvent: 'civet://daemon-event',
   agentAttention: 'civet://agent-attention',
-  clipboard: 'civet://clipboard'
+  clipboard: 'civet://clipboard',
+  ports: 'civet://ports',
+  forwards: 'civet://forwards'
 } as const
 
 /** Rejection type of every backend call: `{ code, message }` from Rust, as an Error. */
@@ -122,11 +127,25 @@ export interface CivetBackend {
   /** Write text to the system clipboard (Cmd+C on a terminal selection). */
   writeClipboard(text: string): Promise<void>
 
+  /** The host's listening ports as last reported (also pushed as `onPorts`). */
+  listPorts(hostId: string): Promise<PortsEvent>
+  /**
+   * Forward `remotePort` on the host to `localhost:localPort` on this Mac
+   * (null: the same number if free, else any). Idempotent per remote port.
+   */
+  forwardPort(hostId: string, remotePort: number, localPort?: number | null): Promise<ForwardView>
+  stopForward(hostId: string, remotePort: number): Promise<void>
+  listForwards(hostId: string): Promise<ForwardView[]>
+  /** Open an `http(s)://localhost` / `127.0.0.1` URL in the default browser. */
+  openLocalUrl(url: string): Promise<void>
+
   onHostState(cb: (e: HostStateEvent) => void): Promise<Unlisten>
   onBootstrapProgress(cb: (e: BootstrapProgressEvent) => void): Promise<Unlisten>
   onDaemonEvent(cb: (e: DaemonEventEnvelope) => void): Promise<Unlisten>
   onAgentAttention(cb: (e: AgentAttentionEvent) => void): Promise<Unlisten>
   onClipboard(cb: (e: ClipboardEvent) => void): Promise<Unlisten>
+  onPorts(cb: (e: PortsEvent) => void): Promise<Unlisten>
+  onForwards(cb: (e: ForwardsEvent) => void): Promise<Unlisten>
 
   /**
    * Make files dropped on a pane usable from its host: local paths as they
@@ -312,6 +331,21 @@ export class TauriBackend implements CivetBackend {
   writeClipboard(text: string) {
     return this.callVoid('write_clipboard', { text })
   }
+  listPorts(hostId: string) {
+    return this.call<PortsEvent>('list_ports', { hostId })
+  }
+  forwardPort(hostId: string, remotePort: number, localPort: number | null = null) {
+    return this.call<ForwardView>('forward_port', { hostId, remotePort, localPort })
+  }
+  stopForward(hostId: string, remotePort: number) {
+    return this.callVoid('stop_forward', { hostId, remotePort })
+  }
+  listForwards(hostId: string) {
+    return this.call<ForwardView[]>('list_forwards', { hostId })
+  }
+  openLocalUrl(url: string) {
+    return this.callVoid('open_local_url', { url })
+  }
 
   private on<T>(event: string, cb: (payload: T) => void): Promise<Unlisten> {
     return this.deps.listen<T>(event, (e) => cb(e.payload))
@@ -330,6 +364,12 @@ export class TauriBackend implements CivetBackend {
   }
   onClipboard(cb: (e: ClipboardEvent) => void) {
     return this.on(CivetEvents.clipboard, cb)
+  }
+  onPorts(cb: (e: PortsEvent) => void) {
+    return this.on(CivetEvents.ports, cb)
+  }
+  onForwards(cb: (e: ForwardsEvent) => void) {
+    return this.on(CivetEvents.forwards, cb)
   }
 
   prepareFileDrop(hostId: string, paths: string[]) {

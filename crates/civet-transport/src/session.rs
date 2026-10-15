@@ -695,6 +695,36 @@ impl ClientSession {
         }
     }
 
+    fn current_conn(&self) -> Result<ClientConnection, RequestError> {
+        let st = self.inner().lock();
+        if st.finished {
+            return Err(RequestError::Closed);
+        }
+        st.conn.clone().ok_or(RequestError::ConnectionLost)
+    }
+
+    /// Listening-port updates from the daemon, on the current connection.
+    /// The watch ends with the connection; open a new one after the next
+    /// `SessionEvent::Connected`. `Rpc(Unsupported)` on stream links.
+    pub async fn watch_ports(&self) -> Result<crate::PortsWatch, RequestError> {
+        match self.current_conn()?.watch_ports().await {
+            Ok(Ok(w)) => Ok(w),
+            Ok(Err(rpc)) => Err(RequestError::Rpc(rpc)),
+            Err(_) => Err(RequestError::ConnectionLost),
+        }
+    }
+
+    /// Forward one TCP connection to `port` on the daemon's loopback
+    /// interface, on the current connection. `Rpc(NotFound)`: nothing
+    /// listens there; `Rpc(Unsupported)`: stream link or an older daemon.
+    pub async fn open_forward(&self, port: u16) -> Result<crate::Tunnel, RequestError> {
+        match self.current_conn()?.open_forward(port).await {
+            Ok(Ok(t)) => Ok(t),
+            Ok(Err(rpc)) => Err(RequestError::Rpc(rpc)),
+            Err(_) => Err(RequestError::ConnectionLost),
+        }
+    }
+
     /// Hint from the OS/UI: wake from sleep or network change. Rebinds the
     /// QUIC endpoint, sends a Ping immediately, and starts stall detection.
     /// This is what makes "the next packet is the reconnect" true.

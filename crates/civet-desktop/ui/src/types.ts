@@ -192,6 +192,46 @@ export type AgentAttentionEvent = {
   message: string | null
 }
 
+/** A TCP port something listens on, on a host (`civet_proto::ListeningPort`). */
+export type ListeningPort = {
+  port: number
+  /** Bound addresses: `127.0.0.1`, `::1`, `0.0.0.0`, `::`... */
+  addrs: string[]
+  pid: number | null
+  /** Process name (`node`, `python3`...). */
+  process: string | null
+  /** Command line (truncated). */
+  command: string | null
+  /** Pane whose process tree opened it. */
+  pane: PaneId | null
+  /** The pane's worktree, else the one containing the process's cwd. */
+  worktree: WorktreeId | null
+}
+
+/** `pending`: not known yet; `unsupported`: SSH tunnel link or an older daemon (see `message`). */
+export type PortsStatus = 'pending' | 'watching' | 'unsupported'
+
+/** `civet://ports` and `list_ports`: a host's listening ports. */
+export type PortsEvent = {
+  hostId: string
+  status: PortsStatus
+  message: string | null
+  ports: ListeningPort[]
+}
+
+/** A forwarded port: `localhost:localPort` on this Mac → `remotePort` on the host. */
+export type ForwardView = {
+  remotePort: number
+  localPort: number
+  /** Connections open through it right now. */
+  connections: number
+  /** Why the last connection could not be forwarded; cleared by the next that works. */
+  lastError: string | null
+}
+
+/** `civet://forwards`: every forward of a host, after any change. */
+export type ForwardsEvent = { hostId: string; forwards: ForwardView[] }
+
 /** Promise rejection shape of every command (INTERFACES §6.1). */
 export type CivetErrorPayload = { code: string; message: string }
 

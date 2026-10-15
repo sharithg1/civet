@@ -114,6 +114,24 @@ describe('MockBackend', () => {
     expect(seen).toEqual([])
   })
 
+  it('reports sample ports and forwards with a remap when the local port is taken', async () => {
+    const { b } = await connected()
+    const ports = await b.listPorts('devbox')
+    expect(ports.status).toBe('watching')
+    expect(ports.ports.map((p) => p.port)).toEqual(expect.arrayContaining([3001, 5173, 5432]))
+    const events: number[][] = []
+    await b.onForwards((e) => events.push(e.forwards.map((f) => f.remotePort)))
+    expect(await b.forwardPort('devbox', 5173)).toMatchObject({ remotePort: 5173, localPort: 5173 })
+    // 3001 is "taken" locally in the mock: remapped.
+    expect((await b.forwardPort('devbox', 3001)).localPort).toBe(51842)
+    // Idempotent; a different explicit local port is refused.
+    expect((await b.forwardPort('devbox', 3001)).localPort).toBe(51842)
+    await expect(b.forwardPort('devbox', 3001, 9000)).rejects.toMatchObject({ code: 'alreadyExists' })
+    await b.stopForward('devbox', 5173)
+    await expect(b.stopForward('devbox', 5173)).rejects.toMatchObject({ code: 'notFound' })
+    expect(events.at(-1)).toEqual([3001])
+  })
+
   it('rejects unknown hosts with a CivetError code', async () => {
     const b = new MockBackend()
     await expect(b.listRepos('nope')).rejects.toMatchObject({ code: 'noSuchHost' })

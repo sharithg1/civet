@@ -14,8 +14,8 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
-    DaemonInfoView, HostSummary, HostTarget, LaunchedAgent, PingResult, ScrollbackPageView,
-    TransportChoice,
+    DaemonInfoView, ForwardView, HostSummary, HostTarget, LaunchedAgent, PingResult, PortsEvent,
+    ScrollbackPageView, TransportChoice,
 };
 use crate::hosts::HostManager;
 
@@ -292,6 +292,79 @@ pub async fn set_prediction(state: State<'_, AppState>, enabled: bool) -> Res<()
     Ok(())
 }
 
+#[tauri::command]
+pub async fn list_ports(state: State<'_, AppState>, host_id: String) -> Res<PortsEvent> {
+    state.hosts.list_ports(&host_id)
+}
+
+#[tauri::command]
+pub async fn forward_port(
+    state: State<'_, AppState>,
+    host_id: String,
+    remote_port: u16,
+    local_port: Option<u16>,
+) -> Res<ForwardView> {
+    state
+        .hosts
+        .forward_port(&host_id, remote_port, local_port)
+        .await
+}
+
+#[tauri::command]
+pub async fn stop_forward(
+    state: State<'_, AppState>,
+    host_id: String,
+    remote_port: u16,
+) -> Res<()> {
+    state.hosts.stop_forward(&host_id, remote_port)
+}
+
+#[tauri::command]
+pub async fn list_forwards(state: State<'_, AppState>, host_id: String) -> Res<Vec<ForwardView>> {
+    state.hosts.list_forwards(&host_id)
+}
+
+/// Open a forwarded port in the default browser. Only
+/// `http(s)://localhost` / `127.0.0.1` URLs: the UI never needs anything
+/// else, and nothing else should be openable from the webview.
+#[tauri::command]
+pub async fn open_local_url(url: String) -> Res<()> {
+    if !is_local_url(&url) {
+        return Err(CmdError::new(
+            "invalidArgument",
+            "only http://localhost URLs can be opened",
+        ));
+    }
+    let status = tokio::process::Command::new("/usr/bin/open")
+        .arg(&url)
+        .status()
+        .await
+        .map_err(|e| CmdError::new("io", format!("open: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CmdError::new("io", format!("open {url} failed ({status})")))
+    }
+}
+
+/// `http(s)://localhost[:port][/...]` or the same with `127.0.0.1`.
+pub fn is_local_url(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (authority, None),
+    };
+    matches!(host, "localhost" | "127.0.0.1")
+        && port.is_none_or(|p| !p.is_empty() && p.parse::<u16>().is_ok())
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// Put `text` on the system clipboard (Cmd+C on an xterm selection).
 /// Synchronous on purpose: Tauri runs sync commands on the main thread,
 /// where AppKit's pasteboard wants to be used. Write only.
@@ -337,6 +410,11 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         set_agent_status,
         set_prediction,
         write_clipboard,
+        list_ports,
+        forward_port,
+        stop_forward,
+        list_forwards,
+        open_local_url,
     ]
 }
 
@@ -351,5 +429,20 @@ mod tests {
             vec![0, b'a', 0xff, 0x80]
         );
         assert_eq!(binary_string_bytes("\u{100}"), vec![b'?']);
+    }
+
+    #[test]
+    fn only_local_urls_open() {
+        assert!(is_local_url("http://localhost:5173"));
+        assert!(is_local_url("http://localhost:5173/a?b#c"));
+        assert!(is_local_url("https://127.0.0.1:8443/"));
+        assert!(is_local_url("http://localhost"));
+        assert!(!is_local_url("http://localhost.evil.com:80"));
+        assert!(!is_local_url("http://localhost:/"));
+        assert!(!is_local_url("http://localhost:99999"));
+        assert!(!is_local_url("http://user@localhost:80"));
+        assert!(!is_local_url("file:///etc/passwd"));
+        assert!(!is_local_url("http://example.com"));
+        assert!(!is_local_url("http://localhost:80/ -a Terminal"));
     }
 }

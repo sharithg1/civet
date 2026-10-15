@@ -323,6 +323,15 @@ impl Pane {
         lock(&self.meta).exited
     }
 
+    /// Process id of the pane's child (session leader), if known.
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    pub(crate) fn worktree(&self) -> Option<civet_proto::WorktreeId> {
+        lock(&self.meta).worktree.clone()
+    }
+
     fn emit(&self, event: Event) {
         let announced = lock(&self.announced);
         if *announced {

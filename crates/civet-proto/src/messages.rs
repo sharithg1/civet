@@ -9,6 +9,8 @@
 //! | `Control` (bidi, exactly one, first) | client | C->S: [`crate::ClientHello`], then [`ClientMessage`]*; S->C: [`crate::HelloReply`], then [`ServerMessage`]* |
 //! | `Screen { pane }` (uni) | daemon | [`ServerMessage::Screen`]* for that pane, in state order |
 //! | `Scrollback` (bidi, one per request) | client | C->S: one [`crate::ScrollbackRequest`]; S->C: one `Result<ScrollbackPage, RpcError>`, then FIN |
+//! | `Ports` (bidi, at most one) | client | S->C: [`crate::PortsUpdate`]* (see [`crate::ports`]) |
+//! | `Forward { port }` (bidi, one per TCP connection) | client | S->C: one [`crate::ForwardReply`], then raw TCP bytes both ways |
 //!
 //! When everything has to share one ordered byte stream (the SSH-tunnel
 //! fallback, or tests), screen updates may instead be sent on the control
@@ -34,6 +36,14 @@ pub enum StreamOpen {
     },
     /// One scrollback request/response exchange.
     Scrollback,
+    /// Listening-port updates (see [`crate::ports`]).
+    Ports,
+    /// One forwarded TCP connection to `port` on the daemon's loopback
+    /// interface (see [`crate::ports`]).
+    Forward {
+        /// TCP port.
+        port: u16,
+    },
 }
 
 /// Messages client -> daemon on the control stream (after the hello).

@@ -411,6 +411,8 @@ impl TestDaemon {
                     };
                     let _ = responder.respond(Ok(page)).await;
                 }
+                // Dropped, like a daemon that predates these streams does.
+                ServerIncoming::Ports(_) | ServerIncoming::Forward(_) => {}
             }
         }
     }

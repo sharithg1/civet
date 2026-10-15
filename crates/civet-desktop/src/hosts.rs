@@ -27,9 +27,11 @@ use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
     AgentAttentionEvent, BootstrapProgressEvent, ClipboardWrite, DaemonEventPayload,
-    DaemonInfoView, DaemonUpgrade, HostState, HostStateEvent, HostSummary, HostTarget,
-    LaunchedAgent, PingResult, ProgressStep, ScrollbackPageView, TransportChoice, UiEvents,
+    DaemonInfoView, DaemonUpgrade, ForwardView, HostState, HostStateEvent, HostSummary, HostTarget,
+    LaunchedAgent, PingResult, PortsEvent, ProgressStep, ScrollbackPageView, TransportChoice,
+    UiEvents,
 };
+use crate::forwards::{Forwards, PortsState};
 use crate::linkstate::{HostStateUpdate, LinkAction, LinkMapper, RECONNECTING_AFTER};
 use crate::pane::PaneView;
 use crate::predict::DEFAULT_MIN_RTT;
@@ -135,6 +137,12 @@ struct Host {
     task: Mutex<Option<JoinHandle<()>>>,
     /// Events of a freshly installed session, until the host task takes them.
     pending_events: Mutex<Option<UnboundedReceiver<SessionEvent>>>,
+    /// Listening ports, as last reported.
+    ports: Arc<PortsState>,
+    /// Watches the current session's ports.
+    ports_task: Mutex<Option<JoinHandle<()>>>,
+    /// Port forwards (outlive sessions, not the host).
+    forwards: Arc<Forwards>,
     closed: AtomicBool,
 }
 
@@ -356,7 +364,18 @@ impl HostManager {
             }
             self.shutdown_host(&h).await;
         }
-        let host = Arc::new(Host {
+        let host = Arc::new_cyclic(|weak: &std::sync::Weak<Host>| Host {
+            ports: PortsState::new(&id),
+            ports_task: Mutex::new(None),
+            forwards: Forwards::new(
+                &id,
+                {
+                    let weak = weak.clone();
+                    Arc::new(move || weak.upgrade().and_then(|h| lock(&h.session).clone()))
+                },
+                self.inner.ui.clone(),
+                self.inner.rt.clone(),
+            ),
             id: id.clone(),
             label: target.label(),
             target: target.clone(),
@@ -444,6 +463,14 @@ impl HostManager {
         }
         *lock(&host.session) = Some(est.session.clone());
         *lock(&host.pending_events) = Some(est.events);
+        let watcher = self.inner.rt.spawn(crate::forwards::watch_ports(
+            est.session.clone(),
+            host.ports.clone(),
+            self.inner.ui.clone(),
+        ));
+        if let Some(old) = lock(&host.ports_task).replace(watcher) {
+            old.abort();
+        }
         self.publish(
             host,
             HostStateUpdate {
@@ -805,6 +832,10 @@ impl HostManager {
         if let Some(t) = lock(&host.task).take() {
             t.abort();
         }
+        if let Some(t) = lock(&host.ports_task).take() {
+            t.abort();
+        }
+        host.forwards.clear();
         let views: Vec<ViewRef> = lock(&host.views).drain().map(|(_, v)| v).collect();
         for v in views {
             lock(&v).detach();
@@ -1005,6 +1036,48 @@ impl HostManager {
             ));
         }
         Ok(())
+    }
+
+    // ----- ports -----
+
+    /// `list_ports`: the host's listening ports as last reported (they
+    /// also arrive as `civet://ports`).
+    pub fn list_ports(&self, host_id: &str) -> Result<PortsEvent, CmdError> {
+        Ok(self.host(host_id)?.ports.snapshot())
+    }
+
+    /// `forward_port`: listen on `127.0.0.1:local` (None: the same port if
+    /// free, else any) and tunnel every connection to `remote` on the host.
+    pub async fn forward_port(
+        &self,
+        host_id: &str,
+        remote: u16,
+        local: Option<u16>,
+    ) -> Result<ForwardView, CmdError> {
+        // Allowed for This Mac too (a second port number for a local
+        // server); the UI only offers it for remote hosts.
+        let same_machine = matches!(self.host(host_id)?.target, HostTarget::Local);
+        self.host(host_id)?
+            .forwards
+            .add(remote, local, same_machine)
+            .await
+    }
+
+    /// `stop_forward` (`notFound` if `remote` is not forwarded).
+    pub fn stop_forward(&self, host_id: &str, remote: u16) -> Result<(), CmdError> {
+        if self.host(host_id)?.forwards.remove(remote) {
+            Ok(())
+        } else {
+            Err(CmdError::code(
+                civet_proto::ErrorCode::NotFound,
+                format!("port {remote} is not forwarded"),
+            ))
+        }
+    }
+
+    /// `list_forwards`
+    pub fn list_forwards(&self, host_id: &str) -> Result<Vec<ForwardView>, CmdError> {
+        Ok(self.host(host_id)?.forwards.list())
     }
 
     /// `list_worktrees`
