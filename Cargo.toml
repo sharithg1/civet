@@ -1,0 +1,99 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/civet-proto",
+    "crates/civet-transport",
+    "crates/civet-term",
+    "crates/civet-session",
+    "crates/civetd",
+    "crates/civet-desktop",
+]
+# civet-desktop pulls in Tauri (hundreds of crates + webview bindings). Keep it
+# out of the default build so `cargo check` / `cargo test` at the root stay
+# fast for the daemon/transport crates. Build it explicitly with
+# `cargo check -p civet-desktop`.
+default-members = [
+    "crates/civet-proto",
+    "crates/civet-transport",
+    "crates/civet-term",
+    "crates/civet-session",
+    "crates/civetd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+# --- internal crates ---
+civet-proto = { path = "crates/civet-proto" }
+civet-transport = { path = "crates/civet-transport" }
+civet-term = { path = "crates/civet-term" }
+civet-session = { path = "crates/civet-session" }
+
+# --- async runtime ---
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "fs", "signal"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
+futures = "0.3.34"
+
+# --- transport / crypto ---
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rustls-pki-types = "1.15"
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring", "pem"] }
+sha2 = "0.11.1"
+getrandom = "0.3.4"
+rand = "0.9.5"
+subtle = "2.6"
+
+# --- serialization ---
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+serde_bytes = "0.11.19"
+postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
+bytes = "1.12.1"
+hex = "0.4.3"
+
+# --- errors / logging / CLI ---
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+
+# --- terminal / PTY / git ---
+alacritty_terminal = "0.26.0"
+portable-pty = "0.9.0"
+git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
+notify = "8.2.0"
+dirs = "7.0.0"
+
+# --- desktop (only used by civet-desktop, which is not a default member) ---
+tauri = { version = "2.12.4", features = [] }
+tauri-build = { version = "2.7.3", features = [] }
+tauri-plugin-notification = "2.7.0"
+
+# --- test helpers ---
+tempfile = "3.27"
+proptest = "1.12"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+# Small, static-ish daemon binary for shipping to remote hosts.
+[profile.dist]
+inherits = "release"
+opt-level = "z"

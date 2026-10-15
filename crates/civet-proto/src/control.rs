@@ -1,0 +1,448 @@
+//! Control RPC (request/response on the control stream) and pushed events.
+
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use crate::agent::{AgentStatus, AgentStatusSource};
+use crate::ids::{PaneId, RepoId, RequestId, WorktreeId};
+use crate::term::{ScrollbackPage, ScrollbackRequest, TermSize};
+
+/// A repository known to the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoInfo {
+    /// Opaque id.
+    pub id: RepoId,
+    /// Display name (directory name by default).
+    pub name: String,
+    /// Absolute path of the main worktree (or bare repo dir) on the host.
+    pub path: String,
+    /// Default branch (`main`, `master`...) if it could be determined.
+    pub default_branch: Option<String>,
+}
+
+/// A git worktree of a repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    /// Opaque id (the canonical path).
+    pub id: WorktreeId,
+    /// Owning repository.
+    pub repo: RepoId,
+    /// Absolute path on the host.
+    pub path: String,
+    /// Checked-out branch short name; None if detached.
+    pub branch: Option<String>,
+    /// HEAD commit sha (hex), None for an unborn branch.
+    pub head: Option<String>,
+    /// True for the repository's main worktree.
+    pub is_main: bool,
+    /// True if the worktree is locked (`git worktree lock`).
+    pub locked: bool,
+}
+
+/// Program + argv for a pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandSpec {
+    /// Executable (looked up in PATH if not absolute).
+    pub program: String,
+    /// Arguments (not including the program).
+    pub args: Vec<String>,
+}
+
+impl CommandSpec {
+    /// Convenience constructor.
+    pub fn new<I, S>(program: impl Into<String>, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Parameters for [`Request::SpawnPane`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnPaneRequest {
+    /// Worktree the pane belongs to (used for grouping in the sidebar and as
+    /// the default cwd).
+    pub worktree: Option<WorktreeId>,
+    /// Working directory; defaults to the worktree path, else `$HOME`.
+    pub cwd: Option<String>,
+    /// Command to run; None = the user's login shell.
+    pub command: Option<CommandSpec>,
+    /// Extra environment variables (added to the daemon's environment;
+    /// `TERM=xterm-256color` and `CIVET_PANE_ID` are always set).
+    pub env: Vec<(String, String)>,
+    /// Initial terminal size.
+    pub size: TermSize,
+    /// Optional display title.
+    pub title: Option<String>,
+    /// Agent kind hint for status detection, e.g. `"claude"`, `"codex"`, or
+    /// None for a plain shell / unknown CLI.
+    pub agent: Option<String>,
+}
+
+/// Snapshot of a pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneInfo {
+    /// Pane id.
+    pub id: PaneId,
+    /// Owning worktree, if any.
+    pub worktree: Option<WorktreeId>,
+    /// Working directory at spawn time.
+    pub cwd: String,
+    /// argv (program first).
+    pub command: Vec<String>,
+    /// Current title (from OSC 0/2 or the spawn request).
+    pub title: String,
+    /// Current size.
+    pub size: TermSize,
+    /// Agent kind hint from the spawn request.
+    pub agent: Option<String>,
+    /// Current agent status.
+    pub status: AgentStatus,
+    /// Exit code once the process has exited; None while running (or if
+    /// killed by a signal, in which case `exited` is still true).
+    pub exit_code: Option<i32>,
+    /// True once the process has exited. The pane (and its screen and
+    /// scrollback) stays readable until killed.
+    pub exited: bool,
+    /// Creation time, ms since epoch.
+    pub created_at_ms: u64,
+    /// Current screen state number.
+    pub state: u64,
+}
+
+/// Signal used by [`Request::KillPane`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KillSignal {
+    /// SIGHUP (default; what closing a terminal sends).
+    #[default]
+    Hangup,
+    /// SIGTERM.
+    Terminate,
+    /// SIGKILL.
+    Kill,
+}
+
+/// Result of [`Request::SubscribePane`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscribeInfo {
+    /// Pane.
+    pub pane: PaneId,
+    /// Server's current state number.
+    pub state: u64,
+    /// Current size.
+    pub size: TermSize,
+    /// Current `history_lines` (see [`crate::ScreenUpdate`]).
+    pub history_lines: u64,
+    /// Highest input seq from this client already applied; the client resends
+    /// anything after it and continues numbering from `last_input_seq + 1`.
+    pub last_input_seq: u64,
+}
+
+/// Daemon metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonInfo {
+    /// `civetd` version.
+    pub daemon_version: String,
+    /// Protocol version.
+    pub proto_version: u32,
+    /// Process id.
+    pub pid: u32,
+    /// Daemon instance id (see [`crate::ServerHello::instance_id`]).
+    pub instance_id: u64,
+    /// Start time, ms since epoch.
+    pub started_at_ms: u64,
+    /// Host name.
+    pub hostname: String,
+}
+
+/// Control requests, client -> daemon. Append-only (see crate docs).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Request {
+    /// Liveness / RTT probe. -> [`Response::Pong`]
+    Ping {
+        /// Echoed back.
+        nonce: u64,
+    },
+    /// -> [`Response::DaemonInfo`]
+    GetDaemonInfo,
+    /// -> [`Response::Repos`]
+    ListRepos,
+    /// Register a repository by path on the host. -> [`Response::Repo`]
+    AddRepo {
+        /// Path to any directory inside the repo (or a bare repo).
+        path: String,
+    },
+    /// -> [`Response::Worktrees`]
+    ListWorktrees {
+        /// Repository.
+        repo: RepoId,
+    },
+    /// `git worktree add`. -> [`Response::Worktree`]
+    CreateWorktree {
+        /// Repository.
+        repo: RepoId,
+        /// Branch to check out in the new worktree.
+        branch: String,
+        /// If set, create `branch` from this rev (branch/sha); if None,
+        /// `branch` must already exist (or is created from HEAD if missing).
+        base: Option<String>,
+        /// Target directory; None = daemon's default layout
+        /// (`<repo-parent>/<repo-name>-worktrees/<branch>`).
+        path: Option<String>,
+    },
+    /// `git worktree remove`. -> [`Response::Ok`]
+    RemoveWorktree {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Remove even if dirty.
+        force: bool,
+    },
+    /// Start a PTY. -> [`Response::PaneSpawned`]
+    SpawnPane(SpawnPaneRequest),
+    /// -> [`Response::Ok`]
+    ResizePane {
+        /// Pane.
+        pane: PaneId,
+        /// New size.
+        size: TermSize,
+    },
+    /// Signal the process and drop the pane. -> [`Response::Ok`]
+    KillPane {
+        /// Pane.
+        pane: PaneId,
+        /// Signal.
+        signal: KillSignal,
+    },
+    /// -> [`Response::Panes`]
+    ListPanes,
+    /// Start receiving [`crate::ScreenUpdate`]s for a pane.
+    /// -> [`Response::Subscribed`]; the daemon then sends a first update that
+    /// is a `Diff` from `known_state` if it still has that state, else `Full`.
+    SubscribePane {
+        /// Pane.
+        pane: PaneId,
+        /// Last state the client rendered (from a previous connection), if any.
+        known_state: Option<u64>,
+    },
+    /// Stop screen updates for a pane. -> [`Response::Ok`]
+    UnsubscribePane {
+        /// Pane.
+        pane: PaneId,
+    },
+    /// Scrollback over the control stream (alternative to a dedicated
+    /// scrollback stream). -> [`Response::Scrollback`]
+    FetchScrollback(ScrollbackRequest),
+    /// Override a pane's agent status (e.g. user dismissed "done").
+    /// -> [`Response::Ok`]
+    SetAgentStatus {
+        /// Pane.
+        pane: PaneId,
+        /// New status.
+        status: AgentStatus,
+    },
+}
+
+/// Successful responses. Append-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Response {
+    /// Generic success with no payload.
+    Ok,
+    /// Reply to [`Request::Ping`].
+    Pong {
+        /// Echo of the request nonce.
+        nonce: u64,
+        /// Daemon wall clock, ms since epoch.
+        server_time_ms: u64,
+    },
+    /// Reply to [`Request::GetDaemonInfo`].
+    DaemonInfo(DaemonInfo),
+    /// Reply to [`Request::ListRepos`].
+    Repos(Vec<RepoInfo>),
+    /// Reply to [`Request::AddRepo`].
+    Repo(RepoInfo),
+    /// Reply to [`Request::ListWorktrees`].
+    Worktrees(Vec<WorktreeInfo>),
+    /// Reply to [`Request::CreateWorktree`].
+    Worktree(WorktreeInfo),
+    /// Reply to [`Request::SpawnPane`].
+    PaneSpawned(PaneInfo),
+    /// Reply to [`Request::ListPanes`].
+    Panes(Vec<PaneInfo>),
+    /// Reply to [`Request::SubscribePane`].
+    Subscribed(SubscribeInfo),
+    /// Reply to [`Request::FetchScrollback`].
+    Scrollback(ScrollbackPage),
+}
+
+/// Error category for a failed request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorCode {
+    /// Unknown pane / repo / worktree.
+    NotFound,
+    /// Malformed or contradictory arguments.
+    InvalidArgument,
+    /// Already exists (repo registered, branch/worktree exists...).
+    AlreadyExists,
+    /// git operation failed.
+    Git,
+    /// Spawning the process / PTY failed.
+    Spawn,
+    /// Filesystem or other I/O failure.
+    Io,
+    /// Not supported by this daemon.
+    Unsupported,
+    /// Anything else.
+    Internal,
+}
+
+/// Failed request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcError {
+    /// Category.
+    pub code: ErrorCode,
+    /// Human-readable message.
+    pub message: String,
+}
+
+impl RpcError {
+    /// Convenience constructor.
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// `NotFound` shortcut.
+    pub fn not_found(what: impl fmt::Display) -> Self {
+        Self::new(ErrorCode::NotFound, format!("{what} not found"))
+    }
+}
+
+impl fmt::Display for RpcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
+/// Request envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRequest {
+    /// Client-chosen id, echoed in the response.
+    pub id: RequestId,
+    /// The request.
+    pub request: Request,
+}
+
+/// Response envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlResponse {
+    /// Id of the request this answers.
+    pub id: RequestId,
+    /// Outcome.
+    pub result: Result<Response, RpcError>,
+}
+
+/// Agent status transition for a pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStatusEvent {
+    /// Pane.
+    pub pane: PaneId,
+    /// New status.
+    pub status: AgentStatus,
+    /// Previous status.
+    pub previous: AgentStatus,
+    /// Which detector fired.
+    pub source: AgentStatusSource,
+    /// Optional detail (notification text from OSC 9/777, hook message...).
+    pub message: Option<String>,
+    /// When, ms since epoch.
+    pub at_ms: u64,
+}
+
+/// Events pushed by the daemon to every authenticated client. Append-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Event {
+    /// A pane was created (by any client).
+    PaneCreated(PaneInfo),
+    /// A pane's process exited.
+    PaneExited {
+        /// Pane.
+        pane: PaneId,
+        /// Exit code, None if killed by a signal.
+        exit_code: Option<i32>,
+    },
+    /// A pane was removed (killed); its id is now invalid.
+    PaneClosed {
+        /// Pane.
+        pane: PaneId,
+    },
+    /// Title changed (OSC 0/2).
+    PaneTitle {
+        /// Pane.
+        pane: PaneId,
+        /// New title.
+        title: String,
+    },
+    /// Pane was resized (by any client).
+    PaneResized {
+        /// Pane.
+        pane: PaneId,
+        /// New size.
+        size: TermSize,
+    },
+    /// Agent status changed.
+    AgentStatus(AgentStatusEvent),
+    /// BEL received.
+    Bell {
+        /// Pane.
+        pane: PaneId,
+    },
+    /// The set of repos changed.
+    ReposChanged,
+    /// The worktrees of a repo changed.
+    WorktreesChanged {
+        /// Repository.
+        repo: RepoId,
+    },
+}
+
+impl Event {
+    /// Pane the event concerns, if any.
+    pub fn pane(&self) -> Option<PaneId> {
+        match self {
+            Event::PaneCreated(info) => Some(info.id),
+            Event::PaneExited { pane, .. }
+            | Event::PaneClosed { pane }
+            | Event::PaneTitle { pane, .. }
+            | Event::PaneResized { pane, .. }
+            | Event::Bell { pane } => Some(*pane),
+            Event::AgentStatus(e) => Some(e.pane),
+            Event::ReposChanged | Event::WorktreesChanged { .. } => None,
+        }
+    }
+}

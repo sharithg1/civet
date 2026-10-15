@@ -1,0 +1,17 @@
+[package]
+name = "civet-term"
+description = "Server-side terminal emulation for Civet: screen state, diff-to-VT encoding, scrollback store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+civet-proto.workspace = true
+alacritty_terminal.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

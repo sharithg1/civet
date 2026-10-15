@@ -1,0 +1,18 @@
+[package]
+name = "civet-desktop"
+description = "Civet desktop app (Tauri, Rust side). Frontend lives in ./ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Placeholder: the desktop agent adds tauri / tauri-build (pinned in the
+# workspace) and a [[bin]] target. This crate is excluded from the
+# workspace's default-members so Tauri doesn't slow everyone else's builds.
+
+[dependencies]
+civet-proto.workspace = true
+
+[lints]
+workspace = true

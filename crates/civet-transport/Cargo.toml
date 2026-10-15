@@ -1,0 +1,27 @@
+[package]
+name = "civet-transport"
+description = "QUIC transport for Civet: session-key auth, cert pinning, connection migration, stream mux, SSH fallback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+civet-proto.workspace = true
+tokio.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+anyhow.workspace = true
+
+[lints]
+workspace = true

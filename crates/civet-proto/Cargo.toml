@@ -1,0 +1,32 @@
+[package]
+name = "civet-proto"
+description = "Wire protocol for Civet: versioned message types (serde + postcard) and length-prefixed framing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["tokio"]
+# Async `read_frame` / `write_frame` helpers over tokio AsyncRead/AsyncWrite.
+tokio = ["dep:tokio"]
+
+[dependencies]
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+postcard.workspace = true
+bytes.workspace = true
+hex.workspace = true
+getrandom.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+proptest.workspace = true
+
+[lints]
+workspace = true

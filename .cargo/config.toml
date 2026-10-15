@@ -1,0 +1,5 @@
+[alias]
+# Fast check of everything except the Tauri desktop crate.
+check-core = "check --workspace --exclude civet-desktop --all-targets"
+test-core = "test --workspace --exclude civet-desktop"
+clippy-core = "clippy --workspace --exclude civet-desktop --all-targets -- -D warnings"
