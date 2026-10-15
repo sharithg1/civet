@@ -89,6 +89,34 @@ pub struct SpawnPaneRequest {
     pub agent: Option<String>,
 }
 
+/// Parameters for [`Request::LaunchAgent`]: create a new worktree (new
+/// branch) and start an agent CLI in it, in one round trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchAgentRequest {
+    /// Repository to branch from.
+    pub repo: RepoId,
+    /// New branch name (also the default worktree directory name, with `/`
+    /// replaced by `-`). Must not exist yet.
+    pub branch: String,
+    /// Rev to branch from; None = the repo's default branch (else HEAD).
+    pub base: Option<String>,
+    /// Worktree directory; None = daemon's default layout (see
+    /// [`Request::CreateWorktree`]).
+    pub worktree_path: Option<String>,
+    /// Agent CLI to run, e.g. `claude` / `codex` with args. Run through the
+    /// user's login shell (`$SHELL -lc`) so PATH from shell rc files applies.
+    pub command: CommandSpec,
+    /// Extra environment variables (see [`SpawnPaneRequest::env`]).
+    pub env: Vec<(String, String)>,
+    /// Initial terminal size.
+    pub size: TermSize,
+    /// Display title; None = branch name.
+    pub title: Option<String>,
+    /// Agent kind hint (`"claude"`, `"codex"`, ...) for status detection.
+    pub agent: Option<String>,
+}
+
 /// Snapshot of a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -232,7 +260,11 @@ pub enum Request {
     ListPanes,
     /// Start receiving [`crate::ScreenUpdate`]s for a pane.
     /// -> [`Response::Subscribed`]; the daemon then sends a first update that
-    /// is a `Diff` from `known_state` if it still has that state, else `Full`.
+    /// is a `Diff` from `known_state` if it still holds that snapshot for this
+    /// client, else `Full`. Sending it again for an already-subscribed pane
+    /// resets the baseline the same way (use `known_state: None` to force a
+    /// `Full`, e.g. after the client dropped a `Diff` whose `base_state` did
+    /// not match). The first update may arrive before the response.
     SubscribePane {
         /// Pane.
         pane: PaneId,
@@ -254,6 +286,16 @@ pub enum Request {
         pane: PaneId,
         /// New status.
         status: AgentStatus,
+    },
+    /// Create a worktree on a new branch and spawn an agent in it.
+    /// -> [`Response::AgentLaunched`]. If the spawn fails, the worktree is
+    /// left in place and the error is returned (code `Spawn`).
+    LaunchAgent(LaunchAgentRequest),
+    /// Unregister a repository (does not touch files or worktrees).
+    /// -> [`Response::Ok`]
+    RemoveRepo {
+        /// Repository.
+        repo: RepoId,
     },
 }
 
@@ -288,6 +330,13 @@ pub enum Response {
     Subscribed(SubscribeInfo),
     /// Reply to [`Request::FetchScrollback`].
     Scrollback(ScrollbackPage),
+    /// Reply to [`Request::LaunchAgent`].
+    AgentLaunched {
+        /// The new worktree.
+        worktree: WorktreeInfo,
+        /// The agent's pane.
+        pane: PaneInfo,
+    },
 }
 
 /// Error category for a failed request.

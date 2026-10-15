@@ -13,22 +13,35 @@ path = "src/lib.rs"
 [[bin]]
 name = "civetd"
 path = "src/main.rs"
+required-features = ["server"]
 
 [[bin]]
 name = "civet-cli"
 path = "src/bin/civet-cli.rs"
 
+[features]
+# `server` = the daemon itself (PTYs, terminal emulation). The client-side
+# `bootstrap` module and `civet-cli` only need civet-proto + civet-transport,
+# so civet-desktop depends on this crate with `default-features = false`.
+default = ["server"]
+server = ["dep:civet-session", "dep:civet-term"]
+
 [dependencies]
 civet-proto.workspace = true
 civet-transport.workspace = true
-civet-term.workspace = true
-civet-session.workspace = true
+civet-term = { workspace = true, optional = true }
+civet-session = { workspace = true, optional = true }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+crossterm.workspace = true
+dirs.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

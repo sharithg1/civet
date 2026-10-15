@@ -76,6 +76,7 @@ fn screen_update(kind: UpdateKind) -> ScreenUpdate {
         acked_input_seq: 33,
         size: TermSize::new(80, 24),
         history_lines: 1234,
+        history_start: 1200,
         payload: b"\x1b[H\x1b[2J\x1b[1;31mhello\x1b[0m\x1b[5;3H".to_vec(),
     }
 }
@@ -172,6 +173,20 @@ fn all_requests() -> Vec<Request> {
             pane: PaneId(1),
             status: AgentStatus::Idle,
         },
+        Request::LaunchAgent(LaunchAgentRequest {
+            repo: RepoId::from("r"),
+            branch: "agent/fix-bug".into(),
+            base: Some("main".into()),
+            worktree_path: None,
+            command: CommandSpec::new("claude", ["--permission-mode", "plan"]),
+            env: vec![("ANTHROPIC_LOG".into(), "debug".into())],
+            size: TermSize::new(120, 40),
+            title: None,
+            agent: Some("claude".into()),
+        }),
+        Request::RemoveRepo {
+            repo: RepoId::from("r"),
+        },
     ]
 }
 
@@ -205,6 +220,10 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             last_input_seq: 4,
         })),
         Ok(Response::Scrollback(scrollback_page())),
+        Ok(Response::AgentLaunched {
+            worktree: worktree(),
+            pane: pane_info(),
+        }),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -254,12 +273,45 @@ fn hello_and_bootstrap() {
         "civet-desktop",
         "0.1.0",
     ));
+    rt(&ClientHello::new(
+        SessionKey::generate().unwrap(),
+        ClientId::generate().unwrap(),
+        "civet-cli",
+        "0.1.0",
+    )
+    .with_resume(Some(ResumeToken::generate().unwrap())));
     rt(&HelloReply::Accepted(ServerHello {
         proto_version: PROTOCOL_VERSION,
         daemon_version: "0.1.0".into(),
         instance_id: 1,
         resumed: false,
         server_time_ms: now_ms(),
+        resume_token: ResumeToken::generate().unwrap(),
+        resumed_subscriptions: vec![],
+    }));
+    rt(&HelloReply::Accepted(ServerHello {
+        proto_version: PROTOCOL_VERSION,
+        daemon_version: "0.1.0".into(),
+        instance_id: 1,
+        resumed: true,
+        server_time_ms: now_ms(),
+        resume_token: ResumeToken([9; 32]),
+        resumed_subscriptions: vec![
+            SubscribeInfo {
+                pane: PaneId(1),
+                state: 10,
+                size: TermSize::new(80, 24),
+                history_lines: 0,
+                last_input_seq: 7,
+            },
+            SubscribeInfo {
+                pane: PaneId(2),
+                state: 1,
+                size: TermSize::new(200, 60),
+                history_lines: 99_999,
+                last_input_seq: 0,
+            },
+        ],
     }));
     for reason in [
         RejectReason::BadKey,
@@ -388,6 +440,18 @@ fn json_shapes_for_ui() {
 
     let v = serde_json::to_value(Request::ListPanes).unwrap();
     assert_eq!(v, "listPanes");
+
+    let v = serde_json::to_value(Response::AgentLaunched {
+        worktree: worktree(),
+        pane: pane_info(),
+    })
+    .unwrap();
+    assert_eq!(v["agentLaunched"]["pane"]["id"], 7);
+    assert_eq!(v["agentLaunched"]["worktree"]["isMain"], true);
+
+    let v = serde_json::to_value(screen_update(UpdateKind::Full)).unwrap();
+    assert_eq!(v["kind"], "full");
+    assert_eq!(v["ackedInputSeq"], 33);
 }
 
 #[test]
@@ -457,7 +521,7 @@ proptest! {
         let m = ServerMessage::Screen(ScreenUpdate {
             pane: PaneId(1), state, base_state: base,
             kind: if full { UpdateKind::Full } else { UpdateKind::Diff },
-            acked_input_seq: seq, size: TermSize::new(cols, rows), history_lines: hist, payload,
+            acked_input_seq: seq, size: TermSize::new(cols, rows), history_lines: hist, history_start: hist / 2, payload,
         });
         prop_assert_eq!(decode::<ServerMessage>(&encode(&m).unwrap()).unwrap(), m);
     }

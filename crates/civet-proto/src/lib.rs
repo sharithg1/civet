@@ -53,22 +53,23 @@ pub mod keys;
 pub mod messages;
 pub mod term;
 
-pub use agent::{AgentStatus, AgentStatusSource};
+pub use agent::{AgentStatus, AgentStatusSource, parse_status_file};
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
     AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, ErrorCode, Event,
-    KillSignal, PaneInfo, RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo,
-    WorktreeInfo,
+    KillSignal, LaunchAgentRequest, PaneInfo, RepoInfo, Request, Response, RpcError,
+    SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
 };
 pub use error::ProtoError;
 pub use frame::{FrameDecoder, MAX_FRAME_LEN, decode, encode, encode_frame};
 pub use hello::{ClientHello, HelloReject, HelloReply, RejectReason, ServerHello};
 pub use ids::{ClientId, PaneId, RepoId, RequestId, WorktreeId};
-pub use keys::{CertFingerprint, SessionKey};
+pub use keys::{CertFingerprint, ResumeToken, SessionKey};
 pub use messages::{ClientMessage, ServerMessage, StreamOpen};
 pub use term::{
-    InputMessage, ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage, ScrollbackQuery,
-    ScrollbackRequest, TermSize, UpdateKind,
+    ECHO_ACK_DELAY_MS, FULL_REPLAY_LINES, InputMessage, MAX_INFLIGHT_UPDATES, MAX_REPLAY_LINES,
+    ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage, ScrollbackQuery, ScrollbackRequest,
+    TermSize, UpdateKind,
 };
 
 /// Wire protocol version. Bump on any incompatible change (see crate docs).
@@ -84,6 +85,21 @@ pub const MAGIC: [u8; 4] = *b"CIVT";
 
 /// ALPN protocol id used for the QUIC/TLS handshake.
 pub const ALPN: &[u8] = b"civet/1";
+
+/// Environment variable set in every pane: the pane id (decimal).
+pub const ENV_PANE_ID: &str = "CIVET_PANE_ID";
+
+/// Environment variable set in every pane: absolute path of the pane's agent
+/// status hook file. Agent hooks write a status into it (format:
+/// [`agent::parse_status_file`]); the daemon watches it.
+pub const ENV_STATUS_FILE: &str = "CIVET_STATUS_FILE";
+
+/// Name of the per-user state directory under `$HOME` (`~/.civet`).
+pub const STATE_DIR_NAME: &str = ".civet";
+
+/// Environment variable that overrides the state directory (tests, multiple
+/// daemons on one host).
+pub const ENV_STATE_DIR: &str = "CIVET_STATE_DIR";
 
 /// Milliseconds since the Unix epoch, used for timestamps in messages.
 pub fn now_ms() -> u64 {

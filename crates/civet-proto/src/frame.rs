@@ -1,9 +1,12 @@
 //! Length-prefixed framing.
 //!
 //! A frame is a 4-byte big-endian payload length followed by the payload.
-//! Payloads are postcard-encoded messages ([`encode`] / [`decode`]), except
-//! where a transport chooses to carry opaque bytes (e.g. tunnelled QUIC
-//! datagrams over the SSH fallback) with the `*_raw_*` helpers.
+//! Payloads are postcard-encoded messages ([`encode`] / [`decode`]). The
+//! `*_raw_*` helpers move already-encoded payloads (e.g. a hello peeked with
+//! [`crate::hello::peek_hello_version`] before full decoding).
+//!
+//! The same framing is used on every QUIC stream and on the SSH/stdio
+//! fallback, where the whole session is one ordered byte stream.
 //!
 //! ```
 //! use civet_proto::{FrameDecoder, encode_frame, ScreenAck, PaneId};

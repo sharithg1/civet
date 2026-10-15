@@ -8,9 +8,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::MAGIC;
+use crate::control::SubscribeInfo;
 use crate::error::ProtoError;
 use crate::ids::ClientId;
-use crate::keys::SessionKey;
+use crate::keys::{ResumeToken, SessionKey};
 
 /// First frame the client sends on the control stream.
 ///
@@ -31,6 +32,10 @@ pub struct ClientHello {
     pub client_name: String,
     /// Client build version (semver).
     pub client_version: String,
+    /// Token from the previous connection's [`ServerHello::resume_token`],
+    /// if the client wants to resume that session (subscriptions, acked
+    /// states, input seqs). None for a fresh session.
+    pub resume: Option<ResumeToken>,
 }
 
 impl ClientHello {
@@ -48,7 +53,14 @@ impl ClientHello {
             client_id,
             client_name: client_name.into(),
             client_version: client_version.into(),
+            resume: None,
         }
+    }
+
+    /// Builder: attach a resume token from a previous connection.
+    pub fn with_resume(mut self, token: Option<ResumeToken>) -> Self {
+        self.resume = token;
+        self
     }
 
     /// Daemon-side validation: magic, version and key (constant time).
@@ -108,11 +120,24 @@ pub struct ServerHello {
     /// client saw before, the daemon restarted: pane ids, screen state numbers
     /// and input sequence numbers from the old instance are void.
     pub instance_id: u64,
-    /// True if the daemon already had state for this [`ClientId`] (the client
-    /// can resume subscriptions with its known state numbers).
+    /// True if [`ClientHello::resume`] was valid for this [`ClientId`] and the
+    /// daemon restored the previous session's state. False means a fresh
+    /// session: the client must re-subscribe its panes.
     pub resumed: bool,
     /// Daemon wall clock, ms since epoch (for latency/skew diagnostics).
     pub server_time_ms: u64,
+    /// Token to present in the next connection's [`ClientHello::resume`].
+    /// Rotated on every accepted hello.
+    pub resume_token: ResumeToken,
+    /// When `resumed`: the subscriptions the daemon restored (paused), with
+    /// the current server state and the last input seq applied for each pane.
+    /// The daemon sends no screen updates for them until the client re-sends
+    /// `SubscribePane { known_state }` (which it should pipeline right after
+    /// its hello, without waiting for this reply). The client then resends
+    /// its buffered input with `seq > last_input_seq`. When **not** resumed
+    /// the client must not resend old input (it may already have been
+    /// applied) and restarts numbering at 1. Empty when not resumed.
+    pub resumed_subscriptions: Vec<SubscribeInfo>,
 }
 
 /// Why a hello was refused.
@@ -171,6 +196,8 @@ mod tests {
     fn roundtrip() {
         let h = hello();
         assert_eq!(decode::<ClientHello>(&encode(&h).unwrap()).unwrap(), h);
+        let r = hello().with_resume(Some(ResumeToken([5; 32])));
+        assert_eq!(decode::<ClientHello>(&encode(&r).unwrap()).unwrap(), r);
 
         for reply in [
             HelloReply::Accepted(ServerHello {
@@ -179,6 +206,14 @@ mod tests {
                 instance_id: 77,
                 resumed: true,
                 server_time_ms: 123,
+                resume_token: ResumeToken([4; 32]),
+                resumed_subscriptions: vec![SubscribeInfo {
+                    pane: crate::PaneId(1),
+                    state: 5,
+                    size: crate::TermSize::new(80, 24),
+                    history_lines: 0,
+                    last_input_seq: 3,
+                }],
             }),
             HelloReply::Rejected(HelloReject::new(RejectReason::BadKey, "nope")),
         ] {

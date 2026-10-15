@@ -33,6 +33,8 @@ civet-proto = { path = "crates/civet-proto" }
 civet-transport = { path = "crates/civet-transport" }
 civet-term = { path = "crates/civet-term" }
 civet-session = { path = "crates/civet-session" }
+# civet-desktop uses only the client-side `bootstrap` module.
+civetd = { path = "crates/civetd", default-features = false }
 
 # --- async runtime ---
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "fs", "signal"] }
@@ -64,10 +66,12 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 
-# --- terminal / PTY / git ---
+# --- terminal / PTY / OS ---
+# Repos/worktrees are managed by shelling out to the `git` CLI (no git2/gix).
 alacritty_terminal = "0.26.0"
 portable-pty = "0.9.0"
-git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
+crossterm = "0.29.0"
+libc = "0.2.190"
 notify = "8.2.0"
 dirs = "7.0.0"
 

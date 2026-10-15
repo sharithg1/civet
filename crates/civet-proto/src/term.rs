@@ -8,21 +8,55 @@
 //! * The client sends keystrokes as [`InputMessage`]s with a per-(client,
 //!   pane) **input sequence number**, starting at 1 and incremented by one per
 //!   message. The daemon applies each `seq` at most once, in order, so the
-//!   client may safely resend unacknowledged input after a reconnect.
+//!   client may safely resend unacknowledged input after a resumed reconnect.
 //! * The daemon sends [`ScreenUpdate`]s: VT bytes that transform the screen at
 //!   `base_state` into the screen at `state` (`UpdateKind::Diff`) or repaint
 //!   it from scratch (`UpdateKind::Full`). Each update also echoes the highest
 //!   input `seq` applied (`acked_input_seq`), which drives local-echo
 //!   prediction and input retransmission.
-//! * The client acknowledges the newest state it has rendered with
-//!   [`ScreenAck`]. The daemon diffs future updates against the newest acked
-//!   state it still holds; if it no longer has that state, it sends `Full`.
-//! * History that scrolls off the top is not re-sent in screen updates; the
-//!   client fetches it lazily with [`ScrollbackRequest`].
+//! * Within one connection the daemon diffs against the last state it
+//!   **sent** (streams are reliable and ordered) and keeps at most
+//!   [`MAX_INFLIGHT_UPDATES`] unacknowledged updates per pane; while that
+//!   window is full it coalesces further changes into the next update
+//!   (newest-wins). The client acknowledges what it has applied with
+//!   [`ScreenAck`]. After a reconnect the daemon diffs against whatever state
+//!   the client says it has (`known_state` in `SubscribePane`) if it still
+//!   holds that snapshot (the last acked one or one still in flight), else
+//!   sends `Full`.
+//!
+//! # Scrollback
+//!
+//! Lines that scroll off the top of a pane's primary screen get an
+//! **absolute line number** (0 = first line ever scrolled off) and are kept
+//! in the daemon's scrollback store. Screen updates *replay* newly scrolled
+//! lines into the client terminal's own scrollback (see
+//! [`ScreenUpdate::history_start`]), capped at [`MAX_REPLAY_LINES`] per
+//! update and [`FULL_REPLAY_LINES`] for a full repaint. Anything older, or
+//! skipped because of the cap, is fetched lazily in pages with
+//! [`ScrollbackRequest`].
 
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{PaneId, RequestId};
+
+/// Max unacknowledged [`ScreenUpdate`]s the daemon keeps in flight per
+/// (client, pane). Bounds memory (retained snapshots) and wasted bandwidth.
+pub const MAX_INFLIGHT_UPDATES: usize = 8;
+
+/// Max history lines a `Diff` update replays into the client's scrollback.
+/// If more lines scrolled off since `base_state`, only the newest
+/// `MAX_REPLAY_LINES` are replayed and the client has a gap it can fill via
+/// scrollback fetch.
+pub const MAX_REPLAY_LINES: u64 = 2000;
+
+/// History lines a `Full` update replays (newest ones).
+pub const FULL_REPLAY_LINES: u64 = 1000;
+
+/// Delay after which an input seq counts as "echo-acknowledged" (mosh's
+/// echo-ack heuristic): `acked_input_seq` only covers input written to the
+/// PTY at least this long before the snapshot was taken, or whose effect is
+/// already visible. Milliseconds.
+pub const ECHO_ACK_DELAY_MS: u64 = 50;
 
 /// Terminal dimensions in character cells (plus optional pixel size, passed to
 /// the PTY for programs that care).
@@ -92,11 +126,19 @@ pub enum UpdateKind {
 
 /// Screen change for one pane, daemon -> client.
 ///
-/// `payload` is a VT/ANSI byte stream that xterm.js can `write()` directly.
-/// It always leaves the cursor at the correct position/visibility and the
-/// SGR attributes reset, and includes any mode changes (alternate screen,
-/// bracketed paste, mouse reporting, application cursor keys) needed to make
-/// the client terminal match the server's.
+/// `payload` is a VT/ANSI byte stream that xterm.js can `write()` directly,
+/// after resizing the client terminal to `size` if it differs. Applied to a
+/// terminal showing `base_state` (or anything, for `Full`), it:
+///
+/// 1. appends history lines `history_start..history_lines` (absolute line
+///    numbers, oldest first) to the client terminal's scrollback, then
+/// 2. leaves the visible screen, cursor position/visibility/shape and all
+///    input-affecting modes (alternate screen, bracketed paste, mouse
+///    reporting, application cursor/keypad, focus events) equal to `state`,
+///    with SGR attributes reset.
+///
+/// A `Full` payload starts with RIS (`ESC c`), which also clears the client's
+/// scrollback, then replays up to [`FULL_REPLAY_LINES`] lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenUpdate {
@@ -117,9 +159,15 @@ pub struct ScreenUpdate {
     /// Terminal size this screen state was rendered at.
     pub size: TermSize,
     /// Total number of lines that have ever scrolled into this pane's
-    /// scrollback (absolute line counter). If it advanced by more than the
-    /// client saw stream past, the client can fetch the gap via scrollback.
+    /// scrollback (absolute line counter) as of `state`.
     pub history_lines: u64,
+    /// First absolute history line this payload replays into the client's
+    /// scrollback (`== history_lines` if none). For a `Diff`, if
+    /// `history_start` is greater than the `history_lines` of `base_state`,
+    /// the lines in between were skipped (cap) and can be fetched via
+    /// scrollback. For a `Full`, the client's scrollback afterwards is exactly
+    /// `history_start..history_lines`.
+    pub history_start: u64,
     /// VT bytes; see type docs.
     #[serde(with = "serde_bytes")]
     pub payload: Vec<u8>,

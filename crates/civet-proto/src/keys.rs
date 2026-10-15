@@ -202,9 +202,77 @@ impl<'de> Deserialize<'de> for CertFingerprint {
     }
 }
 
+/// Secret issued by the daemon in [`crate::ServerHello::resume_token`] and
+/// presented by the client in [`crate::ClientHello::resume`] on its next
+/// connection. A valid token (bound to the same [`crate::ClientId`]) lets the
+/// daemon restore the client's per-connection state: pane subscriptions,
+/// last acked screen state per pane and last applied input seq per pane.
+///
+/// The daemon issues a **fresh** token on every accepted hello (rotation);
+/// the previous token stays valid until the new connection is established so
+/// a client that loses the reply can still retry with the old one.
+///
+/// `Debug` is redacted; compare with [`ResumeToken::ct_eq`].
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ResumeToken(pub [u8; 32]);
+
+impl ResumeToken {
+    /// Generate a fresh random token.
+    pub fn generate() -> Result<Self, ProtoError> {
+        let mut k = [0u8; 32];
+        random_bytes(&mut k)?;
+        Ok(Self(k))
+    }
+
+    /// Lowercase hex encoding (64 chars).
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0)
+    }
+
+    /// Parse from a 64-char hex string.
+    pub fn from_hex(s: &str) -> Result<Self, ProtoError> {
+        parse_hex(s).map(Self)
+    }
+
+    /// Constant-time equality.
+    pub fn ct_eq(&self, other: &ResumeToken) -> bool {
+        self.0.ct_eq(&other.0).into()
+    }
+}
+
+impl fmt::Debug for ResumeToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ResumeToken(<redacted>)")
+    }
+}
+
+impl Serialize for ResumeToken {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        hex_array::serialize(&self.0, s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResumeToken {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        hex_array::deserialize(d).map(Self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_token_roundtrip() {
+        let t = ResumeToken::generate().unwrap();
+        assert!(t.ct_eq(&ResumeToken::from_hex(&t.to_hex()).unwrap()));
+        assert_eq!(format!("{t:?}"), "ResumeToken(<redacted>)");
+        let bin = postcard::to_stdvec(&t).unwrap();
+        assert_eq!(bin.len(), 32);
+        assert_eq!(postcard::from_bytes::<ResumeToken>(&bin).unwrap(), t);
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(serde_json::from_str::<ResumeToken>(&json).unwrap(), t);
+    }
 
     #[test]
     fn session_key_hex_roundtrip_and_ct_eq() {
