@@ -1,5 +1,5 @@
 // Copied from Orca: src/renderer/src/components/ui/button.tsx (shadcn new-york-v4
-// button with Orca's cursor-pointer and outline tweaks), unchanged.
+// button with Orca's cursor-pointer), restyled for Civet v3 (outline/ghost hovers, `md` size).
 import * as React from 'react'
 import { cva, type VariantProps } from 'class-variance-authority'
 import * as Slot from 'radix-ui/slot'
@@ -13,15 +13,16 @@ const buttonVariants = cva(
       variant: {
         default: 'bg-primary text-primary-foreground hover:bg-primary/90',
         destructive:
-          'bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40',
-        outline:
-          'border border-border bg-background text-foreground shadow-xs hover:border-muted-foreground/35 hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50',
+          'bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40',
+        outline: 'border border-border bg-transparent text-foreground hover:bg-hover-strong',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-        ghost: 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
+        ghost: 'hover:bg-hover-strong hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 hover:underline'
       },
       size: {
         default: 'h-9 px-4 py-2 has-[>svg]:px-3',
+        /** v3 dialog buttons: 30px, 12.5px text, 5px radius. */
+        md: 'h-[30px] rounded-[5px] px-3.5 text-[12.5px] has-[>svg]:px-3',
         xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: 'h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5',
         lg: 'h-10 rounded-md px-6 has-[>svg]:px-4',

@@ -1,7 +1,7 @@
 // Adapted from Orca: src/renderer/src/components/ui/sonner.tsx (shadcn sonner
 // with popover-token colours). Civet changes: the theme is fixed to dark (the
-// app has no theme setting; <html class="dark">), toasts sit 12px from the
-// corner (no status bar below), stay expanded like the old toast column, and
+// app has no theme setting; <html class="dark">), toasts sit 16px from the
+// right edge, just above the 24px status bar (v3), stay expanded like the old toast column, and
 // Sonner's Alt+T "focus toasts" hotkey is disabled so it never steals focus
 // (and the keystroke) from a terminal.
 import {
@@ -21,8 +21,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme="dark"
       position="bottom-right"
-      offset={12}
-      mobileOffset={12}
+      offset={{ right: 16, bottom: 34 }}
+      mobileOffset={{ right: 16, bottom: 34 }}
       expand
       visibleToasts={5}
       gap={8}
@@ -41,7 +41,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           '--normal-text': 'var(--popover-foreground)',
           '--normal-border': 'var(--border)',
           '--border-radius': 'var(--radius)',
-          '--width': '20rem'
+          '--width': '25rem'
         } as React.CSSProperties
       }
       {...props}

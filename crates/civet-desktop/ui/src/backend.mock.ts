@@ -5,7 +5,8 @@
 // all run for real against it.
 //
 // Fake host: repos "civet" and "orca" with a few worktrees, an agent pane
-// that finishes after a while, and an echo shell per pane. Shell commands:
+// that finishes after a while, agents waiting for input / stopped with an
+// error (to show every v3 status dot), and an echo shell per pane. Shell commands:
 // help, seq N, status <running|needs|done|idle>, title T, drop, exit.
 
 import { CivetError, type CivetBackend, type PaneOutputHandler, type Unlisten } from './backend'
@@ -296,7 +297,9 @@ class MockHost {
     this.worktrees.set('civet', [
       wt('civet', 'main', true),
       wt('civet', 'quic-resume'),
-      wt('civet', 'scrollback-paging')
+      wt('civet', 'scrollback-paging'),
+      wt('civet', 'NO-TICKET/workspace-v3'),
+      wt('civet', 'fix-flaky-e2e')
     ])
     this.worktrees.set('orca', [wt('orca', 'main', true), wt('orca', 'fix-wake-reconnect')])
 
@@ -304,6 +307,22 @@ class MockHost {
     this.addPane({ worktree: qr.id, cwd: qr.path, title: 'Implement QUIC resume', agent: 'claude' })
     const sp = this.worktrees.get('civet')![2]!
     this.addPane({ worktree: sp.id, cwd: sp.path, title: 'shell', agent: null })
+    // An agent waiting for permission, a second idle one and a shell.
+    const v3 = this.worktrees.get('civet')![3]!
+    this.addPane({
+      worktree: v3.id,
+      cwd: v3.path,
+      title: '✳ Redesign the workspace chrome',
+      agent: 'claude',
+      status: 'needsInput'
+    })
+    this.addPane({ worktree: v3.id, cwd: v3.path, title: 'Draft the PR description', agent: 'claude', status: 'idle' })
+    this.addPane({ worktree: v3.id, cwd: v3.path, title: 'zsh', agent: null })
+    // An agent that stopped with an error.
+    const fl = this.worktrees.get('civet')![4]!
+    const failed = this.addPane({ worktree: fl.id, cwd: fl.path, title: 'Fix the flaky reconnect e2e', agent: 'claude', status: 'idle' })
+    failed.shell.output('\x1b[31m● Stopped after 3 consecutive test failures.\x1b[0m\r\n')
+    failed.info = { ...failed.info, exited: true, exitCode: 1 }
   }
 
   addPane(p: {
@@ -313,6 +332,8 @@ class MockHost {
     agent: string | null
     command?: string[]
     size?: TermSize
+    /** Initial agent status; only a `running` agent fakes work and finishes. */
+    status?: AgentStatus
   }): MockPane {
     const id = this.nextPaneId++
     const info: PaneInfo = {
@@ -323,7 +344,7 @@ class MockHost {
       title: p.title,
       size: p.size ?? { cols: 100, rows: 30, pixelWidth: 0, pixelHeight: 0 },
       agent: p.agent,
-      status: p.agent ? 'running' : 'unknown',
+      status: p.agent ? (p.status ?? 'running') : 'unknown',
       exitCode: null,
       exited: false,
       createdAtMs: Date.now(),
@@ -331,7 +352,7 @@ class MockHost {
     }
     const pane = new MockPane(this, info)
     this.panes.set(id, pane)
-    if (p.agent) {
+    if (p.agent && info.status === 'running') {
       // Fake agent run: some output, then done.
       const tick = setInterval(() => {
         if (!this.panes.has(id) || pane.info.status !== 'running') return clearInterval(tick)

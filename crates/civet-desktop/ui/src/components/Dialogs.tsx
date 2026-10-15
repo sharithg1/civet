@@ -41,7 +41,7 @@ export function AddRepoDialog() {
     <Dialog open={hostId !== null} onOpenChange={(open) => !open && close()}>
       <DialogContent onCloseAutoFocus={restoreTerminalFocus}>
         <DialogHeader className="gap-1.5">
-          <DialogTitle className="text-base leading-none">Add repository</DialogTitle>
+          <DialogTitle className="text-[14px] leading-normal">Add repository</DialogTitle>
           <DialogDescription>A git repository on {shownHost}.</DialogDescription>
         </DialogHeader>
         {shownHost && <AddRepoForm hostId={shownHost} onDone={close} />}
@@ -80,7 +80,7 @@ function AddRepoForm({ hostId, onDone }: { hostId: string; onDone: () => void })
         </Label>
         <Input
           id="repo-path"
-          className="font-mono"
+          className="h-8 rounded-[5px] border-border bg-field font-mono text-[12.5px] shadow-none md:text-[12.5px] dark:bg-field"
           placeholder="~/src/project"
           value={path}
           spellCheck={false}
@@ -89,10 +89,10 @@ function AddRepoForm({ hostId, onDone }: { hostId: string; onDone: () => void })
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
       <DialogFooter>
-        <Button type="button" variant="ghost" onClick={onDone}>
+        <Button type="button" variant="outline" size="md" onClick={onDone}>
           Cancel
         </Button>
-        <Button type="submit" disabled={busy || !path.trim()}>
+        <Button type="submit" size="md" disabled={busy || !path.trim()}>
           Add
         </Button>
       </DialogFooter>
@@ -116,14 +116,17 @@ export function ConfirmDialog() {
         onCloseAutoFocus={restoreTerminalFocus}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle className="text-base leading-none">{shown?.title}</AlertDialogTitle>
+          <AlertDialogTitle className="text-[14px] leading-normal">{shown?.title}</AlertDialogTitle>
           <AlertDialogDescription>{shown?.body}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel variant="ghost">Cancel</AlertDialogCancel>
+          <AlertDialogCancel variant="outline" size="md">
+            Cancel
+          </AlertDialogCancel>
           <AlertDialogAction
             ref={confirmRef}
             variant="destructive"
+            size="md"
             onClick={() => {
               close()
               req?.onConfirm()

@@ -114,8 +114,8 @@ export function HistoryView({ controller, gaps, onClose }: Props) {
   }
 
   return (
-    <div className="flex h-[45%] min-h-24 flex-col border-b border-border bg-card">
-      <div className="flex h-7 shrink-0 items-center gap-2 px-2 text-xs text-muted-foreground">
+    <div className="flex h-[45%] min-h-24 flex-col border-b border-border bg-chrome">
+      <div className="flex h-7 shrink-0 items-center gap-2 px-3 font-mono text-[11px] text-faint">
         <History className="size-3.5" aria-hidden />
         {gapView ? (
           <span>
@@ -177,7 +177,7 @@ export function HistoryView({ controller, gaps, onClose }: Props) {
           </IconButton>
         </div>
       </div>
-      <div ref={hostRef} className="terminal-host relative min-h-0 flex-1 px-1" />
+      <div ref={hostRef} className="terminal-host history-host relative min-h-0 flex-1" />
     </div>
   )
 }

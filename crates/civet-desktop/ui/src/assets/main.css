@@ -1,10 +1,10 @@
-/* Theme tokens ported from Orca: src/renderer/src/assets/main.css (light/dark
-   colour variables, @theme inline mapping, agent spinner keyframes) and
-   src/renderer/src/assets/terminal.css (xterm container rules, pane divider).
-   Chat/markdown/editor/git-graph tokens and the Geist webfont were dropped.
-   The full shadcn/ui token set (new-york-v4, neutral, css variables; see
-   ../../components.json) is defined here, so `shadcn add` components work
-   unchanged; values are Orca's. */
+/* Theme tokens. Values follow the "Civet Workspace v3" design (neutral dark
+   chrome around a near-black terminal area, Geist / Geist Mono, oklch status
+   colours); structure, terminal rules and the full shadcn/ui token set
+   (new-york-v4, neutral, css variables; see ../../components.json) were
+   ported from Orca's main.css + terminal.css, so `shadcn add` components work
+   unchanged. Fonts are bundled (@fontsource-variable, imported in main.tsx)
+   so the Tauri app renders them offline. */
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
@@ -56,7 +56,32 @@
   );
   --color-tab-group-split-divider: var(--tab-group-split-divider);
   --color-tab-group-split-divider-strong: var(--tab-group-split-divider-strong);
-  --shadow-floating: 0 10px 24px rgb(0 0 0 / 0.18);
+  /* v3 design tokens */
+  --color-chrome: var(--chrome);
+  --color-field: var(--field);
+  --color-hover: var(--hover);
+  --color-hover-strong: var(--hover-strong);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-body: var(--body);
+  --color-soft: var(--soft);
+  --color-quiet: var(--quiet);
+  --color-faint: var(--faint);
+  --color-dim: var(--dim);
+  --color-ghost: var(--ghost);
+  --color-status-run: var(--status-run);
+  --color-status-wait: var(--status-wait);
+  --color-status-err: var(--status-err);
+  --color-status-ok: var(--status-ok);
+  --color-status-err-text: var(--status-err-text);
+  --color-prompt-user: var(--prompt-user);
+  --color-prompt-path: var(--prompt-path);
+  --color-link: var(--link);
+  --color-scrim: var(--scrim);
+  --shadow-floating: 0 12px 40px rgb(0 0 0 / 0.45);
+  --shadow-menu: 0 12px 40px rgb(0 0 0 / 0.5);
+  --shadow-dialog: 0 24px 70px rgb(0 0 0 / 0.6);
+  --shadow-palette: 0 16px 60px rgb(0 0 0 / 0.6);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -65,11 +90,15 @@
 
 /* ── Light ─────────────────────────────────────────────── */
 :root {
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: 'Geist Variable', 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono:
-    'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
+    'Geist Mono Variable', 'Geist Mono', 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Consolas,
     monospace;
-  --radius: 0.625rem;
+  /* sm ≈ 4px (chips), md ≈ 6px (rows, buttons), lg ≈ 7px (menus), xl ≈ 10px (dialogs). */
+  --radius: 0.45rem;
+  /* Project tiles: oklch(var(--tile-l) var(--tile-c) <hue per project>). */
+  --tile-l: 0.76;
+  --tile-c: 0.09;
   --background: #fff;
   --foreground: #0a0a0a;
   --card: #fff;
@@ -115,6 +144,27 @@
   --tab-group-split-divider-strong: #71717a;
   --orca-terminal-divider-color: rgb(255 255 255 / 0.08);
   --orca-terminal-divider-color-strong: rgb(255 255 255 / 0.25);
+  --chrome: #f5f5f5;
+  --field: #fff;
+  --hover: rgb(0 0 0 / 0.04);
+  --hover-strong: rgb(0 0 0 / 0.07);
+  --border-subtle: rgb(0 0 0 / 0.05);
+  --border-strong: rgb(0 0 0 / 0.18);
+  --body: #171717;
+  --soft: #262626;
+  --quiet: #525252;
+  --faint: #737373;
+  --dim: #a1a1a1;
+  --ghost: #d4d4d4;
+  --status-run: oklch(0.6 0.15 250);
+  --status-wait: oklch(0.7 0.15 75);
+  --status-err: oklch(0.6 0.19 25);
+  --status-ok: oklch(0.62 0.14 155);
+  --status-err-text: oklch(0.55 0.17 25);
+  --prompt-user: oklch(0.55 0.12 110);
+  --prompt-path: oklch(0.5 0.12 250);
+  --link: #2563eb;
+  --scrim: rgb(0 0 0 / 0.3);
 }
 
 /* ── Dark (default) ────────────────────────────────────── */
@@ -125,17 +175,17 @@
   --card-foreground: #fafafa;
   --popover: #171717;
   --popover-foreground: #fafafa;
-  --primary: #e5e5e5;
+  --primary: #fafafa;
   --primary-foreground: #171717;
   --secondary: #262626;
   --secondary-foreground: #fafafa;
   --muted: #262626;
   --muted-foreground: #a1a1a1;
-  --accent: #404040;
+  --accent: #262626;
   --accent-foreground: #fafafa;
-  --destructive: #ff6467;
-  --border: rgb(255 255 255 / 0.07);
-  --input: rgb(255 255 255 / 0.15);
+  --destructive: oklch(0.62 0.17 25);
+  --border: rgb(255 255 255 / 0.1);
+  --input: rgb(255 255 255 / 0.1);
   --ring: #737373;
   --chart-1: var(--color-blue-300);
   --chart-2: var(--color-blue-500);
@@ -144,21 +194,48 @@
   --chart-5: var(--color-blue-800);
   --sidebar: #171717;
   --sidebar-foreground: #fafafa;
-  --sidebar-primary: #1447e6;
-  --sidebar-primary-foreground: #fafafa;
+  --sidebar-primary: #fafafa;
+  --sidebar-primary-foreground: #171717;
   --sidebar-accent: #262626;
   --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: rgb(255 255 255 / 0.07);
+  --sidebar-border: rgb(255 255 255 / 0.1);
   --sidebar-ring: #525252;
-  --agent-question: var(--color-orange-500);
-  --agent-question-text: var(--color-orange-300);
-  --worktree-sidebar: #2a2a2a;
+  --agent-question: oklch(0.8 0.14 75);
+  --agent-question-text: oklch(0.86 0.12 75);
+  --worktree-sidebar: #171717;
   --worktree-sidebar-foreground: #fafafa;
-  --worktree-sidebar-accent: #353535;
+  --worktree-sidebar-accent: #262626;
   --worktree-sidebar-accent-foreground: #fafafa;
-  --worktree-sidebar-border: rgb(255 255 255 / 0.07);
+  --worktree-sidebar-border: rgb(255 255 255 / 0.1);
   --tab-group-split-divider: #71717a;
   --tab-group-split-divider-strong: #a1a1aa;
+  --terminal-pane-title-on-dark-fg: #737373;
+  --orca-terminal-divider-color: rgb(255 255 255 / 0.1);
+  --orca-terminal-divider-color-strong: rgb(255 255 255 / 0.25);
+  /* v3 surfaces and text scale */
+  --chrome: #171717;
+  --field: #0a0a0a;
+  --hover: rgb(255 255 255 / 0.04);
+  --hover-strong: rgb(255 255 255 / 0.07);
+  --border-subtle: rgb(255 255 255 / 0.05);
+  --border-strong: rgb(255 255 255 / 0.18);
+  --body: #e5e5e5;
+  --soft: #d4d4d4;
+  --quiet: #8a8a8a;
+  --faint: #737373;
+  --dim: #525252;
+  --ghost: #404040;
+  /* Agent status (dots, toasts). */
+  --status-run: oklch(0.74 0.13 250);
+  --status-wait: oklch(0.8 0.14 75);
+  --status-err: oklch(0.68 0.17 25);
+  --status-ok: oklch(0.76 0.13 155);
+  --status-err-text: oklch(0.78 0.12 25);
+  --prompt-user: oklch(0.8 0.12 110);
+  --prompt-path: oklch(0.76 0.1 250);
+  --link: #9ec2f5;
+  --scrim: rgb(5 6 8 / 0.55);
+  --scrim-palette: rgb(0 0 0 / 0.5);
 }
 
 @layer base {
@@ -173,8 +250,9 @@
     overflow: hidden;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-chrome text-body antialiased;
     font-family: var(--font-sans);
+    font-size: 13px;
     -webkit-user-select: none;
     user-select: none;
   }
@@ -184,6 +262,29 @@
     -webkit-user-select: text;
     user-select: text;
   }
+}
+
+::selection {
+  background: rgb(120 160 255 / 0.3);
+}
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.07);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* Keep rotation on the compositor (Orca #12359). One day per iteration avoids
@@ -212,6 +313,24 @@
 .terminal-host .xterm {
   height: 100%;
   width: 100%;
+  /* v3: terminal content sits inset from the chrome. FitAddon subtracts the
+     .xterm element's padding, so this changes only layout, not sizing logic. */
+  padding: var(--term-pad, 14px 0 8px 22px);
+}
+.pane-multi .terminal-host .xterm {
+  --term-pad: 6px 0 4px 12px;
+}
+.history-host .xterm {
+  --term-pad: 6px 0 4px 22px;
+}
+.pane-multi .history-host .xterm {
+  --term-pad: 4px 0 4px 12px;
+}
+/* overflow: clip (not hidden) so focusing xterm's textarea can never scroll
+   the pane sideways when a terminal is a few pixels wider than its box. */
+.terminal-host,
+[data-pane-id] {
+  overflow: clip;
 }
 .terminal-host .xterm-viewport {
   /* Why (Orca): keep the scrollbar gutter stable; `auto` causes reflow jitter. */

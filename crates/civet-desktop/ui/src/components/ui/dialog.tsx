@@ -1,6 +1,6 @@
 // Adapted from Orca: src/renderer/src/components/ui/dialog.tsx (shadcn
-// new-york-v4 dialog with Orca's deeper scrim, translucent surface and
-// min-width-safe grid). Dropped: i18n (plain English labels), the IME-aware
+// new-york-v4 dialog with a min-width-safe grid); scrim and surface follow
+// the Civet v3 design (flat #171717 card, 10px radius, deep shadow). Dropped: i18n (plain English labels), the IME-aware
 // Escape guard, the "minimize" close variant and the feature-tip surface.
 import * as React from 'react'
 import { XIcon } from 'lucide-react'
@@ -11,10 +11,10 @@ import { Button } from '@/components/ui/button'
 
 /** Shared with alert-dialog.tsx so confirms look like every other dialog. */
 export const DIALOG_OVERLAY_CLASSES =
-  'fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0'
+  'fixed inset-0 z-50 bg-scrim data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0'
 
 export const DIALOG_SURFACE_CLASSES =
-  'fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-black/14 bg-background/96 p-6 text-foreground shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl duration-200 outline-none dark:border-white/14 dark:bg-[rgba(23,23,23,0.96)] dark:shadow-[0_24px_72px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.06)] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg'
+  'fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-3 rounded-xl border border-border bg-popover px-[18px] py-4 text-foreground shadow-dialog duration-150 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg'
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />

@@ -16,6 +16,8 @@ import {
   setRatio
 } from '../layout/pane-tree'
 import { aggregateStatus } from '../lib/agent-status'
+import { splitShellWords } from '../lib/shell-words'
+import { usePrefs, type CreateStep } from './prefs'
 import type {
   AgentAttentionEvent,
   AgentStatus,
@@ -48,7 +50,7 @@ export type HostView = HostSummary & {
 
 export type Toast = {
   id: number
-  kind: 'attention' | 'error'
+  kind: 'attention' | 'error' | 'info'
   title: string
   body?: string
   status?: 'done' | 'needsInput'
@@ -63,6 +65,9 @@ export type ConfirmRequest = {
 }
 
 export type NewWorktreeRequest = { hostId: string; repo?: string }
+
+export type RightTab = 'files' | 'changes' | 'branch'
+export type SettingsPage = 'general' | 'hosts' | 'projects' | 'keyboard'
 
 type State = {
   backend: CivetBackend | null
@@ -82,6 +87,19 @@ type State = {
   addRepoFor: string | null
   confirm: ConfirmRequest | null
   toasts: Toast[]
+  // ── v3 chrome (UI-only) ──
+  sidebarOpen: boolean
+  rightPanelOpen: boolean
+  rightTab: RightTab
+  switcherOpen: boolean
+  settings: SettingsPage | null
+  removeWorktree: { hostId: string; worktree: string } | null
+  /** key: wtKey(hostId, repoId) of collapsed project groups */
+  collapsedRepos: Record<string, true>
+  /** wsKeys, most recently selected first */
+  mru: string[]
+  /** wsKey → when it was last left / selected (ms) */
+  seen: Record<string, number>
 }
 
 export const useStore = create<State>(() => ({
@@ -98,7 +116,16 @@ export const useStore = create<State>(() => ({
   newWorktree: null,
   addRepoFor: null,
   confirm: null,
-  toasts: []
+  toasts: [],
+  sidebarOpen: true,
+  rightPanelOpen: typeof window === 'undefined' || window.innerWidth >= 1100,
+  rightTab: 'branch',
+  switcherOpen: false,
+  settings: null,
+  removeWorktree: null,
+  collapsedRepos: {},
+  mru: [],
+  seen: {}
 }))
 
 const set = useStore.setState
@@ -209,6 +236,9 @@ export function onHostState(e: HostStateEvent): void {
   // panes; re-sync whenever we come back to connected.
   if (e.state === 'connected' && prevState && prevState !== 'connected') {
     void refreshHost(e.hostId)
+    if (prevState === 'reconnecting') {
+      pushToast({ kind: 'info', title: `Reconnected to ${prev?.label ?? e.hostId} · sessions resumed` }, 3200)
+    }
   }
 }
 
@@ -403,7 +433,17 @@ export function selectWorktree(hostId: string, worktree: string): void {
   set((s) => {
     const unread = { ...s.unread }
     delete unread[key]
-    return { active: { hostId, worktree }, unread }
+    const now = Date.now()
+    const prev = s.active ? wsKey(s.active.hostId, s.active.worktree) : null
+    const seen = { ...s.seen, [key]: now }
+    if (prev && prev !== key) seen[prev] = now
+    return {
+      active: { hostId, worktree },
+      unread,
+      seen,
+      mru: [key, ...s.mru.filter((k) => k !== key)].slice(0, 50),
+      switcherOpen: false
+    }
   })
   // First visit: open a tab for every live pane already running there.
   const ws = get().workspaces[key]
@@ -569,7 +609,7 @@ export function closePanes(hostId: string, panes: PaneId[]): void {
     }
   }
   const busy = panes.filter((p) => isBusyAgent(info[p]))
-  if (busy.length === 0) return kill()
+  if (busy.length === 0 || !usePrefs.getState().confirmCloseRunning) return kill()
   set({
     confirm: {
       title: 'Stop running agent?',
@@ -628,4 +668,207 @@ export async function launchAgentInNewWorktree(p: {
   })
   selectWorktree(p.hostId, worktree.id)
   openPaneInTab(p.hostId, worktree.id, pane.id)
+}
+
+// ── v3: agent tabs, on-create steps, removal, navigation ──────────────────
+
+/** Parse a command line typed by the user ("claude --model opus"). */
+export function parseCommand(line: string): CommandSpec | null {
+  const words = splitShellWords(line)
+  return words.length ? { program: words[0]!, args: words.slice(1) } : null
+}
+
+const agentOf = (cmd: CommandSpec) => cmd.program.split('/').pop() || null
+
+/** New tab running an agent (⌥C / "+" → Claude Code) in an existing worktree. */
+export async function newAgentTab(hostId: string, worktree: string, commandLine?: string): Promise<void> {
+  try {
+    const command = parseCommand(commandLine ?? usePrefs.getState().agentCommand)
+    if (!command) throw new Error('No agent command configured')
+    const wt = worktreesOf(hostId).find((w) => w.id === worktree)
+    const pane = await backend().spawnPane(hostId, {
+      worktree,
+      cwd: wt?.path ?? null,
+      command,
+      env: [],
+      size: DEFAULT_SPAWN_SIZE,
+      title: null,
+      agent: agentOf(command)
+    })
+    set((s) => ({ panes: { ...s.panes, [hostId]: { ...s.panes[hostId], [pane.id]: pane } } }))
+    openPaneInTab(hostId, worktree, pane.id)
+  } catch (err) {
+    reportError('Could not start the agent', err)
+  }
+}
+
+/**
+ * "New worktree" with on-create steps (v3): each step opens in its own tab, in
+ * order. The first agent step goes through `launch_agent` (worktree + agent
+ * in one call) and receives the optional first task as its last argument;
+ * terminal steps are login shells that get the command typed into them.
+ * Without an agent step the worktree is created with `create_worktree`.
+ */
+export async function createWorktreeWithSteps(p: {
+  hostId: string
+  repo: string
+  branch: string
+  base: string | null
+  steps: CreateStep[]
+  prompt: string
+}): Promise<void> {
+  const steps = p.steps
+    .map((st) => ({ ...st, cmd: st.cmd.trim() || (st.kind === 'agent' ? usePrefs.getState().agentCommand : '') }))
+    .filter((st) => st.kind === 'agent' || st.cmd)
+  const firstAgent = steps.findIndex((st) => st.kind === 'agent')
+  const prompt = p.prompt.trim()
+  const specs = steps.map((st, i) => {
+    if (st.kind !== 'agent') return null
+    const spec = parseCommand(st.cmd)
+    if (!spec) throw new Error(`Step ${i + 1}: enter a command`)
+    return i === firstAgent && prompt ? { ...spec, args: [...spec.args, prompt] } : spec
+  })
+
+  let worktree: WorktreeInfo
+  const opened: PaneId[] = []
+  if (firstAgent >= 0) {
+    const command = specs[firstAgent]!
+    const res = await backend().launchAgent(p.hostId, {
+      repo: p.repo,
+      branch: p.branch,
+      base: p.base,
+      worktreePath: null,
+      command,
+      env: [],
+      size: DEFAULT_SPAWN_SIZE,
+      title: prompt ? prompt.slice(0, 80) : p.branch,
+      agent: agentOf(command)
+    })
+    worktree = res.worktree
+    set((s) => ({ panes: { ...s.panes, [p.hostId]: { ...s.panes[p.hostId], [res.pane.id]: res.pane } } }))
+    opened[firstAgent] = res.pane.id
+  } else {
+    worktree = await backend().createWorktree(p.hostId, p.repo, p.branch, p.base, null)
+  }
+  set((s) => {
+    const k = wtKey(p.hostId, worktree.repo)
+    const list = s.worktrees[k] ?? []
+    return {
+      worktrees: { ...s.worktrees, [k]: list.some((w) => w.id === worktree.id) ? list : [...list, worktree] }
+    }
+  })
+
+  for (const [i, st] of steps.entries()) {
+    if (i === firstAgent) continue
+    try {
+      const pane = await backend().spawnPane(p.hostId, {
+        worktree: worktree.id,
+        cwd: worktree.path,
+        command: st.kind === 'agent' ? specs[i]! : null,
+        env: [],
+        size: DEFAULT_SPAWN_SIZE,
+        title: null,
+        agent: st.kind === 'agent' ? agentOf(specs[i]!) : null
+      })
+      set((s) => ({ panes: { ...s.panes, [p.hostId]: { ...s.panes[p.hostId], [pane.id]: pane } } }))
+      opened[i] = pane.id
+      if (st.kind === 'terminal') await backend().writeInput(p.hostId, pane.id, `${st.cmd}\r`)
+    } catch (err) {
+      reportError(`On-create step ${i + 1} failed`, err)
+    }
+  }
+  if (opened.filter((x) => x !== undefined).length === 0) {
+    const shell = await spawnShell(p.hostId, worktree.id).catch(() => null)
+    if (shell) opened.push(shell.id)
+  }
+
+  selectWorktree(p.hostId, worktree.id)
+  for (const pane of opened) if (pane !== undefined) openPaneInTab(p.hostId, worktree.id, pane, { activate: false })
+  const focus = opened[firstAgent >= 0 ? firstAgent : 0] ?? opened.find((x) => x !== undefined)
+  if (focus !== undefined) openPaneInTab(p.hostId, worktree.id, focus)
+  const label = steps.length
+    ? steps.map((st) => (st.kind === 'agent' ? `opened ${st.cmd}` : `ran ${st.cmd}`)).join(', ')
+    : 'no on-create steps'
+  pushToast({ kind: 'info', title: `Created ${p.branch} · ${label}` }, 3200)
+}
+
+/** Remove a worktree on the host, then close the panes that ran in it. */
+export async function removeWorktree(hostId: string, worktree: string, force: boolean): Promise<void> {
+  const wt = worktreesOf(hostId).find((w) => w.id === worktree)
+  await backend().removeWorktree(hostId, worktree, force)
+  const panes = panesOfWorktree(get().panes[hostId], worktree)
+  for (const pane of panes) {
+    backend()
+      .killPane(hostId, pane.id, 'hangup')
+      .catch(() => {})
+      .finally(() => removePaneEverywhere(hostId, pane.id))
+  }
+  set((s) => {
+    const workspaces = { ...s.workspaces }
+    delete workspaces[wsKey(hostId, worktree)]
+    const worktrees = { ...s.worktrees }
+    if (wt) {
+      const k = wtKey(hostId, wt.repo)
+      worktrees[k] = (worktrees[k] ?? []).filter((w) => w.id !== worktree)
+    }
+    const key = wsKey(hostId, worktree)
+    return { workspaces, worktrees, mru: s.mru.filter((k) => k !== key) }
+  })
+  if (get().active?.worktree === worktree) {
+    const main = worktreesOf(hostId).find((w) => w.isMain && (!wt || w.repo === wt.repo))
+    if (main) selectWorktree(hostId, main.id)
+    else set({ active: null })
+  }
+  pushToast({ kind: 'info', title: `Removed ${wt?.branch ?? worktree} on ${get().hosts[hostId]?.label ?? hostId}` }, 3200)
+}
+
+/** All worktrees in sidebar order (hosts, then repos), optionally skipping collapsed repos. */
+export function allWorktrees(opts: { visibleOnly?: boolean } = {}): { hostId: string; wt: WorktreeInfo }[] {
+  const s = get()
+  return s.hostOrder.flatMap((hostId) =>
+    (s.repos[hostId] ?? [])
+      .filter((r) => !opts.visibleOnly || !s.collapsedRepos[wtKey(hostId, r.id)])
+      .flatMap((r) => (s.worktrees[wtKey(hostId, r.id)] ?? []).map((wt) => ({ hostId, wt })))
+  )
+}
+
+/** ⌥` : back to the previously selected worktree. */
+export function selectPreviousWorktree(): void {
+  const s = get()
+  const cur = s.active ? wsKey(s.active.hostId, s.active.worktree) : null
+  const all = allWorktrees()
+  for (const key of s.mru) {
+    if (key === cur) continue
+    const hit = all.find((x) => wsKey(x.hostId, x.wt.id) === key)
+    if (hit) return selectWorktree(hit.hostId, hit.wt.id)
+  }
+}
+
+/** ⌥↑ / ⌥↓ : previous / next worktree in the sidebar. */
+export function cycleWorktree(dir: 1 | -1): void {
+  const list = allWorktrees({ visibleOnly: true })
+  if (!list.length) return
+  const a = get().active
+  const i = a ? list.findIndex((x) => x.hostId === a.hostId && x.wt.id === a.worktree) : -1
+  const next = list[(i + dir + list.length) % list.length]!
+  selectWorktree(next.hostId, next.wt.id)
+}
+
+/** ⌥1…⌥9 : activate the n-th tab of the active worktree. */
+export function activateTabIndex(i: number): void {
+  const a = get().active
+  if (!a) return
+  const key = wsKey(a.hostId, a.worktree)
+  const tab = get().workspaces[key]?.tabs[i]
+  if (tab) activateTab(key, tab.id)
+}
+
+export function toggleRepoCollapsed(hostId: string, repo: string): void {
+  const k = wtKey(hostId, repo)
+  set((s) => {
+    const collapsedRepos = { ...s.collapsedRepos }
+    if (collapsedRepos[k]) delete collapsedRepos[k]
+    else collapsedRepos[k] = true
+    return { collapsedRepos }
+  })
 }

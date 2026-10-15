@@ -1,33 +1,40 @@
 // Ported from Orca: src/renderer/src/lib/pane-manager/pane-terminal-options.ts
 // (buildDefaultTerminalOptions) and src/shared/terminal-themes/defaults.ts
 // ("Ghostty Default Style Dark"). Settings plumbing, contrast correction and
-// the scrollback policy module were dropped; Civet has one fixed theme.
+// the scrollback policy module were dropped; Civet has one fixed theme
+// (colours and font from the Civet Workspace v3 design).
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
 
 export const TERMINAL_THEME_DARK: ITheme = {
-  background: '#282c34',
-  foreground: '#ffffff',
-  cursor: '#ffffff',
-  cursorAccent: '#282c34',
-  selectionBackground: '#5a7898',
-  selectionForeground: '#ffffff',
-  black: '#1d1f21',
-  red: '#cc6666',
-  green: '#b5bd68',
-  yellow: '#f0c674',
-  blue: '#81a2be',
-  magenta: '#b294bb',
-  cyan: '#8abeb7',
-  white: '#c5c8c6',
-  brightBlack: '#666666',
-  brightRed: '#d54e53',
-  brightGreen: '#b9ca4a',
-  brightYellow: '#e7c547',
-  brightBlue: '#7aa6da',
-  brightMagenta: '#c397d8',
-  brightCyan: '#70c0b1',
-  brightWhite: '#eaeaea'
+  // Civet v3: near-black content area, neutral text, the design's oklch
+  // prompt/status hues converted to hex (xterm parses hex/rgb only).
+  background: '#0a0a0a',
+  foreground: '#e5e5e5',
+  cursor: '#d4d4d4',
+  cursorAccent: '#0a0a0a',
+  selectionBackground: 'rgba(120, 160, 255, 0.3)',
+  selectionForeground: '#fafafa',
+  black: '#262626',
+  red: '#ef6661',
+  green: '#c2c564',
+  yellow: '#ebb25f',
+  blue: '#7fb6ee',
+  magenta: '#af95df',
+  cyan: '#64c3c3',
+  white: '#d4d4d4',
+  brightBlack: '#737373',
+  brightRed: '#fb9890',
+  brightGreen: '#65c98c',
+  brightYellow: '#f2af48',
+  brightBlue: '#8bbcef',
+  brightMagenta: '#c3acec',
+  brightCyan: '#8fd6d6',
+  brightWhite: '#fafafa'
 }
+
+/** Bundled Geist Mono first (see main.tsx: loaded before any terminal opens). */
+export const TERMINAL_FONT_FAMILY =
+  '"Geist Mono Variable", "SF Mono", "Menlo", "Monaco", "Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Liberation Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", monospace'
 
 /**
  * Local xterm scrollback. The daemon retains 10 000 lines per pane and a Full
@@ -43,10 +50,9 @@ export function buildDefaultTerminalOptions(): ITerminalOptions {
     cursorStyle: 'block',
     cursorInactiveStyle: 'outline',
     fontSize: 13,
-    fontFamily:
-      '"SF Mono", "Menlo", "Monaco", "Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Liberation Mono", "Symbols Nerd Font Mono", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", monospace',
-    fontWeight: '300',
-    fontWeightBold: '500',
+    fontFamily: TERMINAL_FONT_FAMILY,
+    fontWeight: '400',
+    fontWeightBold: '600',
     scrollback: TERMINAL_SCROLLBACK_ROWS,
     scrollSensitivity: 1.15,
     fastScrollSensitivity: 5,

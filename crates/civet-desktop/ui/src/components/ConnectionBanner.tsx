@@ -1,11 +1,8 @@
-// "Reconnecting…" banner, driven only by `civet://host-state`. The Rust core
-// owns the 1 s threshold (INTERFACES §6.3): sub-second resumes never emit
-// "reconnecting", so this banner shows exactly what the backend reports.
-// Styling follows Orca's status-bar/banner tokens (status-warning).
-import { RotateCw, WifiOff } from 'lucide-react'
+// Connection line above the terminal, driven only by `civet://host-state`.
+// The Rust core owns the 1 s threshold (INTERFACES §6.3): sub-second resumes
+// never emit "reconnecting", so this shows exactly what the backend reports.
+// v3 look: one quiet mono line; failed / disconnected keep a Reconnect action.
 import { connectHost, reportError, useStore } from '@/state/store'
-import { Button } from '@/components/ui/button'
-import { Spinner } from '@/components/ui/spinner'
 
 export function ConnectionBanner({ hostId }: { hostId: string }) {
   const host = useStore((s) => s.hosts[hostId])
@@ -14,11 +11,9 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
     return (
       <div
         role="status"
-        className="flex h-7 shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/12 px-3 text-xs text-amber-600 dark:text-amber-300"
+        className="shrink-0 border-b border-border px-[18px] py-1.5 font-mono text-[11.5px] text-muted-foreground"
       >
-        <Spinner className="size-3.5" aria-hidden />
-        Reconnecting to {host.label}…
-        <span className="text-muted-foreground">Your sessions keep running on the host.</span>
+        reconnecting to {host.label}… sessions keep running on the host
       </div>
     )
   }
@@ -34,17 +29,19 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
   return (
     <div
       role="alert"
-      className="flex h-8 shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-3 text-xs text-destructive"
+      className="flex shrink-0 items-center gap-2 border-b border-border px-[18px] py-1 font-mono text-[11.5px] text-status-err-text"
     >
-      <WifiOff className="size-3.5" aria-hidden />
-      {host.state === 'failed'
-        ? `Connection to ${host.label} failed`
-        : `Disconnected from ${host.label}`}
-      {host.message && <span className="truncate text-muted-foreground">— {host.message}</span>}
-      <Button type="button" size="xs" variant="outline" className="ml-auto" onClick={retry}>
-        <RotateCw />
+      <span className="min-w-0 truncate">
+        {host.state === 'failed' ? `connection to ${host.label} failed` : `disconnected from ${host.label}`}
+        {host.message && <span className="text-faint"> · {host.message}</span>}
+      </span>
+      <button
+        type="button"
+        onClick={retry}
+        className="ml-auto h-[22px] shrink-0 cursor-pointer rounded-[5px] border border-border px-2 font-sans text-[11.5px] text-soft hover:bg-hover-strong"
+      >
         Reconnect
-      </Button>
+      </button>
     </div>
   )
 }

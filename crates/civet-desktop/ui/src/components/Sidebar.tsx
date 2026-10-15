@@ -1,181 +1,289 @@
-// Worktree sidebar: hosts → repos → worktree cards.
-// Structure and tokens ported from Orca: src/renderer/src/components/Sidebar.tsx
-// and sidebar/WorktreeList.tsx (group headers per repo, worktree-sidebar
-// colour tokens, hover-revealed header actions). Orca's filters, kanban,
-// virtualised list and SSH target management were dropped.
+// Worktree sidebar (Civet Workspace v3): "Switch worktree…" button, then
+// hosts → projects (repos) → worktree rows with a status dot, task / branch
+// labels and, under the selected worktree, its tabs. Settings link at the
+// bottom. Data is the daemon's (repos, worktrees, panes); the "task" label is
+// the agent pane's title (see lib/worktree-view.ts).
 
-import { FolderPlus, LogOut, Plus, Server, Sparkles } from 'lucide-react'
+import { MoreHorizontal } from 'lucide-react'
 import {
-  useStore,
+  activateTab,
+  activateTabIndex,
   disconnectHost,
+  panesOfWorktree,
   selectWorktree,
-  wtKey,
+  toggleRepoCollapsed,
+  useStore,
   wsKey,
-  panesOfWorktree
+  wtKey
 } from '@/state/store'
 import type { HostView } from '@/state/store'
+import { usePrefs } from '@/state/prefs'
+import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { IconButton } from './IconButton'
-import { WorktreeCard } from './WorktreeCard'
-
-/** Hover colour for sidebar controls (overrides the ghost button's accent in both themes). */
-const SIDEBAR_HOVER = 'hover:bg-worktree-sidebar-accent dark:hover:bg-worktree-sidebar-accent'
+import {
+  splitBranch,
+  worktreeBranch,
+  worktreeDot,
+  worktreeTask
+} from '@/lib/worktree-view'
+import type { WorktreeInfo } from '@/types'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import { Kbd, ProjectTile, RingGlyph, useWorktreeTabs } from './chrome'
+import { StatusDot } from './StatusDot'
 
 export function Sidebar() {
   const hostOrder = useStore((s) => s.hostOrder)
   const hosts = useStore((s) => s.hosts)
-  const backendKind = useStore((s) => s.backend?.kind)
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-worktree-sidebar-border bg-worktree-sidebar text-worktree-sidebar-foreground">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-worktree-sidebar-border px-3">
-        <span className="text-sm font-semibold tracking-tight">Civet</span>
-        {backendKind === 'mock' && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-500">
-                mock
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Not running inside Tauri: using the in-browser mock backend
-            </TooltipContent>
-          </Tooltip>
-        )}
-        <IconButton
-          label="Connect to another host"
-          side="bottom"
-          className={cn('ml-auto rounded', SIDEBAR_HOVER)}
-          onClick={() => useStore.setState({ showConnect: true })}
+    <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-border bg-chrome">
+      <div className="shrink-0 px-2.5 pt-2.5 pb-1.5">
+        <button
+          type="button"
+          onClick={() => useStore.setState({ switcherOpen: true })}
+          className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg border border-border bg-white/[0.045] px-2.5 text-left hover:bg-muted"
         >
-          <Plus className="size-4" />
-        </IconButton>
+          <RingGlyph />
+          <span className="min-w-0 flex-1 truncate text-[13px] text-faint">Switch worktree…</span>
+          <Kbd>⌘K</Kbd>
+        </button>
       </div>
-      <ScrollArea
-        className="min-h-0 flex-1" // Radix wraps content in a display:table div that defeats `truncate`.
-        viewportClassName="px-1.5 py-2 [&>div]:!block"
-      >
+      <div className="min-h-0 flex-1 overflow-y-auto pt-1 pb-3" data-sidebar-scroll>
         {hostOrder.map((id) => hosts[id] && <HostSection key={id} host={hosts[id]} />)}
-      </ScrollArea>
+      </div>
+      <div className="shrink-0 border-t border-border px-2 py-1.5">
+        <button
+          type="button"
+          title="Settings (⌘,)"
+          onClick={() => useStore.setState({ settings: 'general' })}
+          className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          <span className="grid size-3 shrink-0 place-items-center rounded-full border-[1.5px] border-current">
+            <span className="size-1 rounded-full bg-current" />
+          </span>
+          Settings
+          <span className="flex-1" />
+          <span className="font-mono text-[10.5px] text-dim">⌘,</span>
+        </button>
+      </div>
     </aside>
   )
 }
 
-const STATE_DOT: Record<HostView['state'], string> = {
-  connecting: 'bg-yellow-500 animate-pulse',
-  connected: 'bg-emerald-500',
-  reconnecting: 'bg-amber-500 animate-pulse',
-  disconnected: 'bg-neutral-500',
-  failed: 'bg-red-500'
+export function hostMeta(host: HostView): string {
+  switch (host.state) {
+    case 'connected':
+      return host.rttMs != null ? `${host.rttMs} ms` : host.transport === 'stream' ? 'ssh' : 'connected'
+    case 'connecting':
+      return 'connecting'
+    case 'reconnecting':
+      return 'reconnecting'
+    case 'failed':
+      return 'failed'
+    default:
+      return 'offline'
+  }
+}
+
+export function HostStateDot({ host }: { host: HostView }) {
+  const s = host.state
+  return (
+    <span
+      aria-label={s}
+      title={s}
+      data-host-state={s}
+      className={cn(
+        'inline-block size-1.5 shrink-0 rounded-full',
+        s === 'connected' && 'bg-status-ok',
+        (s === 'reconnecting' || s === 'connecting') && 'bg-status-wait',
+        s === 'failed' && 'bg-status-err',
+        s === 'disconnected' && 'border-[1.5px] border-dashed border-dim'
+      )}
+    />
+  )
 }
 
 function HostSection({ host }: { host: HostView }) {
   const repos = useStore((s) => s.repos[host.hostId])
   return (
-    <section className="mb-3">
-      <div className="group flex h-7 items-center gap-1.5 px-1.5 text-xs">
-        <Server className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="min-w-0 flex-1 truncate font-medium" title={host.hostId}>
+    <section className="mb-1.5">
+      <div className="group flex items-center gap-2 px-[18px] pt-2 pb-1.5">
+        <span className="text-[11.5px] text-quiet" title={host.hostId}>
           {host.label}
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className={cn('size-1.5 rounded-full', STATE_DOT[host.state])}
-              data-host-state={host.state}
-              aria-label={hostStateLabel(host)}
-            />
-          </TooltipTrigger>
-          <TooltipContent>{hostStateLabel(host)}</TooltipContent>
-        </Tooltip>
-        <div className="flex items-center opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-          <IconButton
-            label="Add repository"
-            className={cn('size-5 rounded', SIDEBAR_HOVER)}
-            onClick={() => useStore.setState({ addRepoFor: host.hostId })}
+        <HostStateDot host={host} />
+        <span className="flex-1" />
+        <span className="font-mono text-[10.5px] text-dim">{hostMeta(host)}</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={`${host.label} actions`}
+            className="-mr-1.5 grid size-4 cursor-pointer place-items-center rounded-sm text-faint opacity-0 group-hover:opacity-100 hover:bg-hover-strong hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
           >
-            <FolderPlus className="size-3.5" />
-          </IconButton>
-          <IconButton
-            label="Disconnect"
-            className={cn('size-5 rounded', SIDEBAR_HOVER)}
-            onClick={() => void disconnectHost(host.hostId)}
-          >
-            <LogOut className="size-3.5" />
-          </IconButton>
-        </div>
+            <MoreHorizontal className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48" onCloseAutoFocus={restoreTerminalFocus}>
+            <DropdownMenuItem onSelect={() => useStore.setState({ addRepoFor: host.hostId })}>
+              Add repository…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => useStore.setState({ showConnect: true })}>
+              Connect another host…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void disconnectHost(host.hostId)}>Disconnect</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       {host.transport === 'stream' && (
-        <div className="px-1.5 pb-1 text-[10px] text-muted-foreground">
-          via SSH tunnel (UDP unavailable)
-        </div>
+        <div className="px-[18px] pb-1 text-[10.5px] text-dim">via SSH tunnel (UDP unavailable)</div>
       )}
       {(repos ?? []).map((repo) => (
-        <RepoGroup key={repo.id} hostId={host.hostId} repoId={repo.id} name={repo.name} />
+        <ProjectGroup key={repo.id} host={host} repoId={repo.id} name={repo.name} />
       ))}
       {repos && repos.length === 0 && (
-        <Button
+        <button
           type="button"
-          variant="link"
-          className="mx-1.5 mt-1 h-auto p-0 text-xs font-normal text-muted-foreground underline hover:text-foreground"
+          className="mx-[18px] cursor-pointer text-[12px] text-faint underline hover:text-foreground"
           onClick={() => useStore.setState({ addRepoFor: host.hostId })}
         >
           Add a repository…
-        </Button>
+        </button>
       )}
     </section>
   )
 }
 
-function RepoGroup({ hostId, repoId, name }: { hostId: string; repoId: string; name: string }) {
+function ProjectGroup({ host, repoId, name }: { host: HostView; repoId: string; name: string }) {
+  const hostId = host.hostId
   const worktrees = useStore((s) => s.worktrees[wtKey(hostId, repoId)])
-  const panes = useStore((s) => s.panes[hostId])
-  const active = useStore((s) => s.active)
-  const unread = useStore((s) => s.unread)
+  const collapsed = useStore((s) => !!s.collapsedRepos[wtKey(hostId, repoId)])
   return (
-    <div className="mb-1.5">
-      <div className="group flex h-6 items-center px-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate">{name}</span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className={cn(
-                'h-5 gap-1 rounded px-1 text-[11px] font-medium normal-case tracking-normal text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:text-foreground has-[>svg]:px-1',
-                SIDEBAR_HOVER
-              )}
-              onClick={() => useStore.setState({ newWorktree: { hostId, repo: repoId } })}
-            >
-              <Sparkles className="size-3" />
-              New
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>New worktree + launch agent</TooltipContent>
-        </Tooltip>
+    <div>
+      <div
+        role="button"
+        tabIndex={-1}
+        aria-expanded={!collapsed}
+        onClick={() => toggleRepoCollapsed(hostId, repoId)}
+        className="mx-2 flex cursor-default items-center gap-[9px] rounded-md px-2.5 py-[7px] hover:bg-hover"
+      >
+        <ProjectTile name={name} />
+        <span className="truncate text-[13.5px] font-semibold text-foreground">{name}</span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          title={`New worktree in ${name} (⌥N)`}
+          aria-label={`New worktree in ${name}`}
+          disabled={host.state !== 'connected'}
+          onClick={(e) => {
+            e.stopPropagation()
+            useStore.setState({ newWorktree: { hostId, repo: repoId } })
+          }}
+          className="-mr-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-sm text-[15px] leading-none text-quiet hover:bg-white/[0.08] hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        >
+          +
+        </button>
       </div>
-      <div className="flex flex-col gap-0.5">
-        {(worktrees ?? []).map((wt) => (
-          <WorktreeCard
-            key={wt.id}
-            worktree={wt}
-            panes={panesOfWorktree(panes, wt.id)}
-            active={active?.hostId === hostId && active.worktree === wt.id}
-            unread={unread[wsKey(hostId, wt.id)]}
-            onSelect={() => selectWorktree(hostId, wt.id)}
-          />
-        ))}
-      </div>
+      {!collapsed && (
+        <div className="mt-0.5 mr-2 mb-2.5 ml-[18px] flex flex-col gap-px">
+          {(worktrees ?? []).map((wt) => (
+            <WorktreeRow key={wt.id} host={host} wt={wt} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-function hostStateLabel(host: HostView): string {
-  const transport = host.transport ? ` · ${host.transport === 'quic' ? 'QUIC' : 'SSH tunnel'}` : ''
-  const rtt = host.rttMs != null ? ` · ${host.rttMs} ms` : ''
-  return `${host.state}${transport}${rtt}`
+function WorktreeRow({ host, wt }: { host: HostView; wt: WorktreeInfo }) {
+  const hostId = host.hostId
+  const key = wsKey(hostId, wt.id)
+  const selected = useStore((s) => s.active?.hostId === hostId && s.active.worktree === wt.id)
+  const unread = useStore((s) => s.unread[key])
+  const paneMap = useStore((s) => s.panes[hostId])
+  const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
+  const labelPref = usePrefs((s) => s.worktreeLabel)
+  const tabsPref = usePrefs((s) => s.sidebarTabs)
+  const tabs = useWorktreeTabs(hostId, wt.id)
+  const panes = panesOfWorktree(paneMap, wt.id)
+  const dot = worktreeDot(panes, host.state === 'connected', unread)
+  const branch = worktreeBranch(wt)
+  const { prefix } = splitBranch(branch)
+  const task = wt.isMain ? null : worktreeTask(wt, panes)
+  const useTask = labelPref === 'task' && !!task
+  const title = wt.isMain ? branch : useTask ? task! : branch
+  const sub = useTask ? branch.slice(prefix.length) : task
+  const showTabs = tabs.length > 0 && (tabsPref === 'all' || (tabsPref === 'selected' && selected))
+  return (
+    <div
+      role="button"
+      tabIndex={-1}
+      data-wt={wt.id}
+      data-active={selected ? 'true' : 'false'}
+      title={`${host.label}:${wt.path}`}
+      onClick={() => selectWorktree(hostId, wt.id)}
+      className={cn(
+        'relative flex cursor-default gap-[9px] rounded-md px-2',
+        wt.isMain ? 'py-[5px]' : 'pt-[5px] pb-1.5',
+        selected ? 'bg-accent' : 'hover:bg-hover'
+      )}
+    >
+      <StatusDot kind={dot} showIdle={dot !== 'idle'} className="mt-1.5" />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-h-[19px] items-center gap-2">
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate',
+              useTask ? 'text-[13px]' : 'font-mono text-[12px]',
+              selected || unread ? 'text-foreground' : 'text-soft',
+              selected && 'font-medium'
+            )}
+          >
+            {title}
+          </span>
+          {wt.isMain && <span className="shrink-0 text-[11px] text-faint">default</span>}
+          {wt.locked && <span className="shrink-0 text-[11px] text-faint">locked</span>}
+        </div>
+        {selected && !wt.isMain && sub && (
+          <div className={cn('truncate text-[11px] leading-4 text-faint', useTask && 'font-mono')}>
+            {useTask && <span className="text-dim">{prefix}</span>}
+            {sub}
+          </div>
+        )}
+        {showTabs && (
+          <div className="mt-1 flex flex-col">
+            {tabs.map((t, i) => {
+              const isActive = selected && (t.id ? t.id === activeTab : i === 0)
+              return (
+                <div
+                  key={t.id ?? `p${t.focused}`}
+                  title={`${t.label} · ${t.what.text}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    selectWorktree(hostId, wt.id)
+                    if (t.id) activateTab(key, t.id)
+                    else activateTabIndex(i)
+                  }}
+                  className="flex h-[21px] cursor-default items-center gap-2 text-[12px] hover:opacity-80"
+                >
+                  <span className={cn('shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')}>
+                    {t.label}
+                  </span>
+                  <span
+                    className={cn(
+                      'min-w-0 flex-1 truncate text-faint',
+                      t.what.mono ? 'font-mono text-[11px]' : 'text-[12px]'
+                    )}
+                  >
+                    {t.what.text}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }

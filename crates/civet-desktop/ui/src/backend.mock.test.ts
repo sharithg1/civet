@@ -23,8 +23,11 @@ describe('MockBackend', () => {
     expect(states.map((s) => s.state)).toEqual(['connecting', 'connected'])
     const repos = await b.listRepos('devbox')
     expect(repos.map((r) => r.id)).toEqual(['civet', 'orca'])
-    expect((await b.listWorktrees('devbox', 'civet')).length).toBe(3)
-    expect((await b.listPanes('devbox')).length).toBe(2)
+    expect((await b.listWorktrees('devbox', 'civet')).length).toBe(5)
+    const panes = await b.listPanes('devbox')
+    expect(panes.length).toBe(6)
+    expect(panes.map((p) => p.status)).toContain('needsInput')
+    expect(panes.some((p) => p.exited && p.exitCode === 1)).toBe(true)
   })
 
   it('streams a Full then echo diffs through valid binary records', async () => {

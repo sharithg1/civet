@@ -3,17 +3,28 @@ import { getBackend } from './backend'
 import { ConnectScreen } from './components/ConnectScreen'
 import { AddRepoDialog, ConfirmDialog } from './components/Dialogs'
 import { NewWorktreeDialog } from './components/NewWorktreeDialog'
+import { RemoveWorktreeDialog } from './components/RemoveWorktreeDialog'
+import { RightPanel } from './components/RightPanel'
+import { SettingsView } from './components/SettingsView'
 import { Sidebar } from './components/Sidebar'
+import { StatusBar } from './components/StatusBar'
+import { TitleBar } from './components/TitleBar'
 import { Toasts } from './components/Toasts'
 import { Workspace } from './components/Workspace'
+import { WorktreeSwitcher } from './components/WorktreeSwitcher'
 import { leaves } from './layout/pane-tree'
 import {
+  activateTabIndex,
   closePanes,
+  cycleWorktree,
   initApp,
+  newAgentTab,
   newTerminalTab,
   reportError,
+  selectPreviousWorktree,
   splitFocused,
   useStore,
+  worktreesOf,
   wsKey
 } from './state/store'
 
@@ -22,6 +33,8 @@ export function App() {
   const showConnect = useStore((s) => s.showConnect)
   const hasHosts = useStore((s) => s.hostOrder.length > 0)
   const newWorktree = useStore((s) => s.newWorktree)
+  const sidebarOpen = useStore((s) => s.sidebarOpen)
+  const rightPanelOpen = useStore((s) => s.rightPanelOpen)
 
   useEffect(() => {
     let cleanup: (() => void) | undefined
@@ -48,11 +61,19 @@ export function App() {
   if (!ready) return null
   if (showConnect && !hasHosts) return <ConnectScreen />
   return (
-    <div className="flex h-full w-full overflow-hidden">
-      <Sidebar />
-      <Workspace />
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-chrome">
+      <TitleBar />
+      <div className="flex min-h-0 flex-1">
+        {sidebarOpen && <Sidebar />}
+        <Workspace />
+        {rightPanelOpen && <RightPanel />}
+      </div>
+      <StatusBar />
+      <SettingsView />
+      <WorktreeSwitcher />
       {showConnect && <ConnectScreen onCancel={() => useStore.setState({ showConnect: false })} />}
       {newWorktree && <NewWorktreeDialog key={`${newWorktree.hostId}:${newWorktree.repo ?? ''}`} />}
+      <RemoveWorktreeDialog />
       <AddRepoDialog />
       <ConfirmDialog />
       <Toasts />
@@ -60,32 +81,81 @@ export function App() {
   )
 }
 
-/** Cmd/Ctrl+T new terminal, +D split right, +Shift+D split down, +W close focused pane. */
+const isMac = () => navigator.platform.toLowerCase().includes('mac')
+
+/**
+ * ⌥-shortcuts must not eat characters a keyboard layout composes with Option
+ * (German ⌥5 = "[", ⌥L = "@"…), which terminals need. On US-style layouts
+ * ⌥ produces non-ASCII symbols or dead keys, so only those are taken.
+ * Elsewhere Alt does not compose, so Alt+key is always a shortcut.
+ */
+function isOptionShortcut(e: KeyboardEvent): boolean {
+  if (!e.altKey || e.metaKey || e.ctrlKey) return false
+  if (!isMac() || e.key === 'Dead' || e.key.startsWith('Arrow')) return true
+  return !(e.key.length === 1 && e.key >= ' ' && e.key <= '~')
+}
+
+/**
+ * Cmd/Ctrl+T new terminal, +D split right, +Shift+D split down, +W close
+ * focused pane, +K / +P switcher, +, settings; ⌥` previous worktree, ⌥↑↓
+ * next/previous worktree, ⌥1-9 tab, ⌥C Claude tab, ⌥T terminal tab, ⌥N new
+ * worktree, ⌥B sidebar, ⌥E right panel.
+ */
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = navigator.platform.toLowerCase().includes('mac')
-        ? e.metaKey
-        : e.ctrlKey && e.shiftKey
-      if (!mod) return
-      const { active, workspaces } = useStore.getState()
-      if (!active) return
-      const key = e.key.toLowerCase()
-      if (key === 't') {
+      const state = useStore.getState()
+      const mod = isMac() ? e.metaKey : e.ctrlKey && e.shiftKey
+      const overlay = !!document.querySelector('[role=dialog],[role=alertdialog]')
+      if (mod && (e.code === 'KeyK' || e.code === 'KeyP')) {
+        if (!state.hostOrder.length) return
         e.preventDefault()
-        void newTerminalTab(active.hostId, active.worktree)
-      } else if (key === 'd') {
-        e.preventDefault()
-        void splitFocused(
-          e.shiftKey && navigator.platform.toLowerCase().includes('mac') ? 'column' : 'row'
-        )
-      } else if (key === 'w') {
-        const ws = workspaces[wsKey(active.hostId, active.worktree)]
-        const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
-        if (!tab) return
-        e.preventDefault()
-        closePanes(active.hostId, leaves(tab.root).includes(tab.focused) ? [tab.focused] : [])
+        useStore.setState({ switcherOpen: !state.switcherOpen, settings: null })
+        return
       }
+      if (mod && e.key === ',') {
+        e.preventDefault()
+        useStore.setState({ settings: state.settings ? null : 'general' })
+        return
+      }
+      if (overlay || state.settings) return
+      const { active, workspaces } = state
+      if (mod) {
+        if (!active) return
+        const key = e.key.toLowerCase()
+        if (key === 't') {
+          e.preventDefault()
+          void newTerminalTab(active.hostId, active.worktree)
+        } else if (key === 'd') {
+          e.preventDefault()
+          void splitFocused(e.shiftKey && isMac() ? 'column' : 'row')
+        } else if (key === 'w') {
+          const ws = workspaces[wsKey(active.hostId, active.worktree)]
+          const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
+          if (!tab) return
+          e.preventDefault()
+          closePanes(active.hostId, leaves(tab.root).includes(tab.focused) ? [tab.focused] : [])
+        }
+        return
+      }
+      if (!isOptionShortcut(e)) return
+      const c = e.code
+      const connected = !!active && state.hosts[active.hostId]?.state === 'connected'
+      let action: (() => void) | null = null
+      if (c === 'Backquote') action = selectPreviousWorktree
+      else if (c === 'ArrowDown' || c === 'ArrowUp') action = () => cycleWorktree(c === 'ArrowDown' ? 1 : -1)
+      else if (c === 'KeyB') action = () => useStore.setState({ sidebarOpen: !state.sidebarOpen })
+      else if (c === 'KeyE') action = () => useStore.setState({ rightPanelOpen: !state.rightPanelOpen })
+      else if (active && /^Digit[1-9]$/.test(c)) action = () => activateTabIndex(Number(c.slice(5)) - 1)
+      else if (active && connected && c === 'KeyN') {
+        const repo = worktreesOf(active.hostId).find((w) => w.id === active.worktree)?.repo
+        action = () => useStore.setState({ newWorktree: { hostId: active.hostId, repo } })
+      } else if (active && connected && c === 'KeyT') action = () => void newTerminalTab(active.hostId, active.worktree)
+      else if (active && connected && c === 'KeyC') action = () => void newAgentTab(active.hostId, active.worktree)
+      if (!action) return
+      e.preventDefault()
+      e.stopPropagation()
+      action()
     }
     // Capture phase: xterm's textarea would otherwise swallow the keystroke.
     window.addEventListener('keydown', onKey, true)

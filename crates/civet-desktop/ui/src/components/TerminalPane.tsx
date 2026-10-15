@@ -1,7 +1,7 @@
-// One terminal leaf in a split layout. Pane chrome (focus rim, exited state,
-// title strip) follows Orca's src/renderer/src/components/terminal-pane/
-// (TerminalPane.tsx + assets/terminal.css); the PTY/IPC plumbing is replaced
-// by PaneController (attach_pane binary channel).
+// One terminal leaf in a split layout. Pane chrome (focus dimming, exited
+// state) follows Orca's terminal-pane; the PTY/IPC plumbing is PaneController
+// (attach_pane binary channel). v3: a lone pane has no title strip (its
+// actions float top-right on hover); split panes get a slim 22px strip.
 
 import { useEffect, useRef, useState } from 'react'
 import { Columns2, History, Rows2, X } from 'lucide-react'
@@ -10,10 +10,10 @@ import { PaneController } from '@/terminal/pane-controller'
 import type { LineRange } from '@/terminal/pane-stream'
 import type { PaneId } from '@/types'
 import { cn } from '@/lib/utils'
-import { indicatorFor } from '@/lib/agent-status'
+import { paneDot } from '@/lib/worktree-view'
 import { HistoryView } from './HistoryView'
-import { AgentStateDot } from './AgentStateDot'
 import { IconButton } from './IconButton'
+import { StatusDot } from './StatusDot'
 
 type Props = {
   hostId: string
@@ -68,52 +68,72 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
 
   const exited = closed || info?.exited === true
 
+  const title = info?.title || info?.command.join(' ') || `pane ${pane}`
+  const actions = (
+    <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/pane:opacity-100 focus-within:opacity-100">
+      <PaneButton label="Show older history" onClick={() => setHistoryOpen((v) => !v)}>
+        <History className="size-3" />
+      </PaneButton>
+      <PaneButton label="Split right" onClick={() => void splitFocusedFrom(hostId, pane, 'row')}>
+        <Columns2 className="size-3" />
+      </PaneButton>
+      <PaneButton label="Split down" onClick={() => void splitFocusedFrom(hostId, pane, 'column')}>
+        <Rows2 className="size-3" />
+      </PaneButton>
+      <PaneButton label="Close pane" onClick={() => closePanes(hostId, [pane])}>
+        <X className="size-3" />
+      </PaneButton>
+    </div>
+  )
+
   return (
     <div
       className={cn(
-        'group/pane relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-[#282c34]',
+        'group/pane relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-background',
+        multiPane && 'pane-multi',
         multiPane && (focused ? 'pane-focused' : 'pane-unfocused')
       )}
       onMouseDown={() => focusPane(hostId, pane)}
       data-pane-id={pane}
     >
-      <div className="flex h-6 shrink-0 items-center gap-1.5 px-2 text-[11px] text-terminal-pane-title-on-dark-fg">
-        {info?.agent && <AgentStateDot state={indicatorFor(info.status)} />}
-        <span className="min-w-0 flex-1 truncate">
-          {info?.title || info?.command.join(' ') || `pane ${pane}`}
+      {multiPane ? (
+        <div className="flex h-[22px] shrink-0 items-center gap-1.5 px-3 font-mono text-[11px] text-faint">
+          {info?.agent && <StatusDot kind={paneDot(info, hostState === 'connected')} />}
+          <span className={cn('min-w-0 flex-1 truncate', focused && 'text-muted-foreground')}>
+            {title}
+            {renderer?.kind === 'dom' && (
+              <span className="ml-2 opacity-60" title={renderer.reason}>
+                (DOM renderer)
+              </span>
+            )}
+          </span>
+          {actions}
+        </div>
+      ) : (
+        <div
+          className={cn(
+            'absolute right-3 z-10 flex items-center rounded-md bg-background/80',
+            // Below the history view (h-[45%]) when it is open, so the two headers don't collide.
+            historyOpen && controller ? 'top-[calc(45%+6px)]' : 'top-1.5'
+          )}
+        >
           {renderer?.kind === 'dom' && (
-            <span className="ml-2 opacity-60" title={renderer.reason}>
-              (DOM renderer)
+            <span
+              className="mr-1 font-mono text-[10.5px] text-dim opacity-0 group-hover/pane:opacity-100"
+              title={renderer.reason}
+            >
+              DOM renderer
             </span>
           )}
-        </span>
-        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/pane:opacity-100">
-          <PaneButton label="Show older history" onClick={() => setHistoryOpen((v) => !v)}>
-            <History className="size-3" />
-          </PaneButton>
-          <PaneButton
-            label="Split right"
-            onClick={() => void splitFocusedFrom(hostId, pane, 'row')}
-          >
-            <Columns2 className="size-3" />
-          </PaneButton>
-          <PaneButton
-            label="Split down"
-            onClick={() => void splitFocusedFrom(hostId, pane, 'column')}
-          >
-            <Rows2 className="size-3" />
-          </PaneButton>
-          <PaneButton label="Close pane" onClick={() => closePanes(hostId, [pane])}>
-            <X className="size-3" />
-          </PaneButton>
+          {actions}
         </div>
-      </div>
+      )}
       {historyOpen && controller && (
         <HistoryView controller={controller} gaps={gaps} onClose={() => setHistoryOpen(false)} />
       )}
-      <div ref={containerRef} className="terminal-host relative min-h-0 flex-1 pl-1" />
+      <div ref={containerRef} className="terminal-host relative min-h-0 flex-1" />
       {exited && (
-        <div className="pointer-events-none absolute bottom-2 right-3 rounded bg-black/60 px-2 py-0.5 text-[11px] text-white/80">
+        <div className="pointer-events-none absolute right-3 bottom-2 rounded-[5px] border border-border bg-chrome px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
           [process exited{info?.exitCode != null ? ` with code ${info.exitCode}` : ''}]
         </div>
       )}
@@ -139,7 +159,7 @@ function PaneButton({
     <IconButton
       label={label}
       side="bottom"
-      className="size-5 rounded-sm text-terminal-pane-title-on-dark-button-fg/70 hover:bg-white/10 hover:text-terminal-pane-title-on-dark-button-hover-fg dark:hover:bg-white/10"
+      className="size-5 rounded-sm text-faint hover:bg-white/10 hover:text-foreground dark:hover:bg-white/10"
       // Keep the click from refocusing the pane (and its xterm) first.
       onMouseDown={(e) => e.stopPropagation()}
       onClick={onClick}
