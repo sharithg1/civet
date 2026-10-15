@@ -15,11 +15,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::git::{
-    Git, branch_dir_name, canonical_or_same, parse_worktree_porcelain, path_string, repo_id_for,
+    Git, branch_dir_name, canonical_lenient, canonical_or_same, parse_worktree_porcelain,
+    path_string, repo_id_for,
 };
 use crate::hooks::{self, HookFiles, ShellKind, basename};
 use crate::pane::{Pane, SpawnParams, lock};
 use crate::subscription::Subscription;
+use crate::watch::WorktreeWatch;
 use crate::{ENV_WORKTREE, InputOutcome, KNOWN_AGENTS, SessionConfig, SessionError};
 
 /// Event broadcast capacity.
@@ -151,6 +153,10 @@ impl SessionManager {
         std::thread::Builder::new()
             .name("civet-status-ticker".into())
             .spawn(move || ticker(weak))?;
+        let weak = Arc::downgrade(&inner);
+        std::thread::Builder::new()
+            .name("civet-worktree-watch".into())
+            .spawn(move || worktree_watcher(weak))?;
         Ok(Self { inner })
     }
 
@@ -296,7 +302,14 @@ impl SessionManager {
         Ok(())
     }
 
-    async fn worktrees_of(&self, r: &StoredRepo) -> Result<Vec<WorktreeInfo>, SessionError> {
+    /// `prunable`: include worktrees whose directory is gone (git reports
+    /// them as "prunable"). Why: clients never see those (selecting one
+    /// could only fail), but removal must still find them by id.
+    async fn worktrees_of(
+        &self,
+        r: &StoredRepo,
+        prunable: bool,
+    ) -> Result<Vec<WorktreeInfo>, SessionError> {
         let out = self
             .inner
             .git
@@ -305,9 +318,9 @@ impl SessionManager {
         Ok(parse_worktree_porcelain(&out)
             .into_iter()
             .enumerate()
-            .filter(|(_, w)| !w.bare)
+            .filter(|(_, w)| !w.bare && (prunable || !w.prunable))
             .map(|(i, w)| {
-                let path = path_string(&canonical_or_same(Path::new(&w.path)));
+                let path = path_string(&canonical_lenient(Path::new(&w.path)));
                 WorktreeInfo {
                     id: WorktreeId(path.clone()),
                     repo: RepoId(r.id.clone()),
@@ -321,19 +334,23 @@ impl SessionManager {
             .collect())
     }
 
-    /// `git worktree list --porcelain` (bare entries omitted).
+    /// `git worktree list --porcelain`, without bare entries and without
+    /// "prunable" ones whose directory was deleted (removable by id until
+    /// git prunes them; `create_worktree` does).
     pub async fn list_worktrees(&self, repo: &RepoId) -> Result<Vec<WorktreeInfo>, SessionError> {
         let r = self.find_repo(repo).await?;
-        self.worktrees_of(&r).await
+        self.worktrees_of(&r, false).await
     }
 
     /// `git worktree add [-b branch] -- <path> [base]`. Default path:
     /// `<parent of main worktree>/<repo name>-worktrees/<branch, '/' -> '-'>`.
     /// With `base` (must resolve to a commit: `git rev-parse --verify
     /// --end-of-options <base>^{commit}`, else InvalidArgument): create
-    /// `branch` from it (AlreadyExists if the branch exists; the new branch
-    /// does not track `base`). Without: check out `branch` if it exists, else
-    /// create it from HEAD. A newly created branch gets
+    /// `branch` from it (the new branch does not track `base`); an existing
+    /// `branch` is checked out only if it points at `base` and no worktree
+    /// has it, else AlreadyExists. Without: check out `branch` if it exists,
+    /// else create it from HEAD. Stale registrations of deleted worktree
+    /// directories are pruned first. A newly created branch gets
     /// `branch.<b>.remote=origin` / `branch.<b>.merge=refs/heads/<b>` when
     /// an `origin` remote exists (no repo-wide config). Emits
     /// WorktreesChanged.
@@ -376,22 +393,39 @@ impl SessionManager {
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
+        // Why: git records the path it is given; registering the canonical
+        // one keeps the worktree's id equal to what `git worktree list`
+        // reports, even after a symlinked parent changes or disappears.
+        let target = canonical_lenient(&target);
         let target_s = path_string(&target);
+        // Why: a worktree whose directory was deleted without `git worktree
+        // remove` still holds its path and branch, and `worktree add` then
+        // refuses both ("missing but already registered", "already used by
+        // worktree"). Prune only drops registrations whose directory is gone
+        // and that are not locked.
+        if let Err(e) = git.run(&main, &["worktree", "prune"]).await {
+            tracing::debug!("git worktree prune: {e}");
+        }
         let exists = git.branch_exists(&main, branch).await?;
         // `base` is user input: it must name a commit, never an option.
         let base = match base.map(str::trim) {
-            Some(b) => {
-                git.verify_commit(&main, b).await?;
-                Some(b.to_owned())
-            }
+            Some(b) => Some((b.to_owned(), git.verify_commit(&main, b).await?)),
             None => None,
         };
         let mut args: Vec<&str> = vec!["worktree", "add"];
         let created_branch = match &base {
-            Some(b) => {
-                if exists {
+            Some((_, sha)) if exists => {
+                // Why: removing a worktree keeps its branch, so re-creating
+                // the same name right after would always fail. A branch that
+                // still points at the base and is not checked out anywhere
+                // holds no work of its own: check it out instead.
+                if !self.can_adopt_branch(&r, branch, sha).await? {
                     return Err(SessionError::AlreadyExists(format!("branch {branch}")));
                 }
+                args.extend(["--", &target_s, branch]);
+                false
+            }
+            Some((b, _)) => {
                 args.extend(["--no-track", "-b", branch, "--", &target_s, b]);
                 true
             }
@@ -417,7 +451,7 @@ impl SessionManager {
         }
         let canonical = path_string(&canonical_or_same(&target));
         let wt = self
-            .worktrees_of(&r)
+            .worktrees_of(&r, false)
             .await?
             .into_iter()
             .find(|w| w.path == canonical)
@@ -433,14 +467,35 @@ impl SessionManager {
         Ok(wt)
     }
 
+    /// True if local `branch` points at `sha` and no worktree has it checked
+    /// out.
+    async fn can_adopt_branch(
+        &self,
+        r: &StoredRepo,
+        branch: &str,
+        sha: &str,
+    ) -> Result<bool, SessionError> {
+        let main = Path::new(&r.path);
+        let tip = self
+            .inner
+            .git
+            .verify_commit(main, &format!("refs/heads/{branch}"))
+            .await?;
+        if tip != sha {
+            return Ok(false);
+        }
+        let list = self.worktrees_of(r, true).await?;
+        Ok(!list.iter().any(|w| w.branch.as_deref() == Some(branch)))
+    }
+
     async fn find_worktree(
         &self,
         worktree: &WorktreeId,
     ) -> Result<(StoredRepo, WorktreeInfo), SessionError> {
-        let wanted = path_string(&canonical_or_same(Path::new(&worktree.0)));
+        let wanted = path_string(&canonical_lenient(Path::new(&worktree.0)));
         let repos = self.inner.repos.lock().await.clone();
         for r in repos {
-            let Ok(list) = self.worktrees_of(&r).await else {
+            let Ok(list) = self.worktrees_of(&r, true).await else {
                 continue;
             };
             if let Some(w) = list
@@ -453,7 +508,12 @@ impl SessionManager {
         Err(SessionError::NotFound(format!("worktree {worktree}")))
     }
 
-    /// `git worktree remove [--force]`. Refuses the main worktree.
+    /// `git worktree remove [--force]`. Refuses the main worktree. With
+    /// `force`, a locked worktree is removed too (`-f -f`). A worktree whose
+    /// directory is already gone is unregistered with `git worktree prune`
+    /// when `remove` fails (older git refuses a missing directory). Fails
+    /// unless git no longer lists the worktree afterwards. Emits
+    /// WorktreesChanged whenever git was asked to change something.
     pub async fn remove_worktree(
         &self,
         worktree: &WorktreeId,
@@ -466,16 +526,51 @@ impl SessionManager {
                 w.path, r.name
             )));
         }
+        let git = &self.inner.git;
+        let main = Path::new(&r.path);
         let mut args = vec!["worktree", "remove"];
         if force {
             args.push("--force");
+            if w.locked {
+                // Why: git wants `-f` twice for a locked worktree; "Remove
+                // anyway" in the UI means exactly that.
+                args.push("--force");
+            }
         }
         args.push(&w.path);
-        self.inner.git.run(Path::new(&r.path), &args).await?;
-        tracing::info!(repo = %r.id, path = %w.path, "worktree removed");
+        if let Err(e) = git.run(main, &args).await {
+            if Path::new(&w.path).exists() {
+                return Err(e);
+            }
+            // Why: the directory was deleted behind git's back (or an earlier
+            // remove died half way): only the registration is left, and
+            // prune clears it. A locked one stays unless the user forces it.
+            if w.locked {
+                if !force {
+                    return Err(e);
+                }
+                let _ = git.run(main, &["worktree", "unlock", &w.path]).await;
+            }
+            tracing::info!(path = %w.path, "worktree directory missing, pruning: {e}");
+            git.run(main, &["worktree", "prune"]).await?;
+        }
+        // Why: tell clients to re-list either way; they may have hidden the
+        // row optimistically and must see it again if git kept it.
         self.emit(Event::WorktreesChanged {
             repo: RepoId(r.id.clone()),
         });
+        if self
+            .worktrees_of(&r, true)
+            .await?
+            .iter()
+            .any(|x| x.id == w.id)
+        {
+            return Err(SessionError::Git(format!(
+                "{} is still registered after git worktree remove",
+                w.path
+            )));
+        }
+        tracing::info!(repo = %r.id, path = %w.path, "worktree removed");
         Ok(())
     }
 
@@ -668,12 +763,7 @@ impl SessionManager {
         let main = PathBuf::from(&r.path);
         let git = &self.inner.git;
         git.check_branch_name(&main, &req.branch).await?;
-        if git.branch_exists(&main, &req.branch).await? {
-            return Err(SessionError::AlreadyExists(format!(
-                "branch {}",
-                req.branch
-            )));
-        }
+        // An existing branch is refused (or adopted) by create_worktree.
         let base = match req.base.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
             Some(b) => b.to_owned(),
             None => self.default_base(&main).await,
@@ -810,6 +900,43 @@ impl SessionManager {
         for p in panes {
             p.kill(KillSignal::Hangup);
             self.emit(Event::PaneClosed { pane: p.id });
+        }
+    }
+}
+
+/// Emits WorktreesChanged for repos whose worktrees changed outside Civet
+/// (see [`crate::watch`]), every `worktree_poll`. Exits when the manager is
+/// dropped or shut down.
+fn worktree_watcher(weak: Weak<Inner>) {
+    let mut watch = WorktreeWatch::default();
+    loop {
+        let Some(inner) = weak.upgrade() else { return };
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        let period = inner.config.worktree_poll;
+        // Why: blocking_lock is fine on this plain thread; a repo being
+        // added right now is simply picked up on the next round.
+        let repos: Vec<(String, PathBuf)> = inner
+            .repos
+            .blocking_lock()
+            .iter()
+            .map(|r| (r.id.clone(), PathBuf::from(&r.path)))
+            .collect();
+        for repo in watch.changed(&repos) {
+            tracing::debug!(%repo, "worktrees changed on disk");
+            let _ = inner
+                .events
+                .send(Event::WorktreesChanged { repo: RepoId(repo) });
+        }
+        drop(inner);
+        // Sleep in short steps so a dropped manager's thread ends promptly.
+        let until = Instant::now() + period;
+        while Instant::now() < until {
+            std::thread::sleep(TICK.min(period));
+            if weak.strong_count() == 0 {
+                return;
+            }
         }
     }
 }

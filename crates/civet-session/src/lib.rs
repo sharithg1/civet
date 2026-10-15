@@ -29,6 +29,7 @@ mod pane;
 mod status;
 mod subscription;
 mod sys;
+mod watch;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -68,6 +69,9 @@ pub struct SessionConfig {
     pub idle_after: Duration,
     /// Path of the git binary. Default `"git"`.
     pub git: PathBuf,
+    /// How often worktree metadata is checked for changes made outside
+    /// Civet (then [`civet_proto::Event::WorktreesChanged`]). Default 2 s.
+    pub worktree_poll: Duration,
 }
 
 impl SessionConfig {
@@ -79,6 +83,7 @@ impl SessionConfig {
             scrollback_limit: 10_000,
             idle_after: Duration::from_secs(8),
             git: PathBuf::from("git"),
+            worktree_poll: Duration::from_secs(2),
         }
     }
 

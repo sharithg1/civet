@@ -680,6 +680,141 @@ async fn repos_and_worktrees() {
     ));
 }
 
+/// Worktrees changed behind the daemon's back: a deleted directory (still
+/// registered, "prunable") and a locked one.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktrees_changed_outside_civet() {
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+
+    // `rm -rf` of a worktree: no longer listed, still removable by its id.
+    let wt = f
+        .mgr
+        .create_worktree(&repo.id, "gone", None, None)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&wt.path).unwrap();
+    let listed = f.mgr.list_worktrees(&repo.id).await.unwrap();
+    assert!(!listed.iter().any(|w| w.id == wt.id), "{listed:?}");
+    let mut events = f.mgr.subscribe_events();
+    f.mgr.remove_worktree(&wt.id, false).await.unwrap();
+    assert_eq!(
+        next_event(&mut events, |e| matches!(e, Event::WorktreesChanged { .. })).await,
+        Event::WorktreesChanged {
+            repo: repo.id.clone()
+        }
+    );
+    assert_eq!(f.mgr.list_worktrees(&repo.id).await.unwrap().len(), 1);
+
+    // A deleted directory no longer blocks re-creating its path or branch.
+    let again = f
+        .mgr
+        .create_worktree(&repo.id, "stale", None, None)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&again.path).unwrap();
+    let again2 = f
+        .mgr
+        .create_worktree(&repo.id, "stale", None, None)
+        .await
+        .unwrap();
+    assert_eq!(again2.id, again.id);
+    assert!(Path::new(&again2.path).join("README").exists());
+
+    // Locked: a plain remove is refused, "Remove anyway" (force) works.
+    git(&repo_dir, &["worktree", "lock", &again2.path]);
+    let listed = f.mgr.list_worktrees(&repo.id).await.unwrap();
+    assert!(listed.iter().any(|w| w.id == again2.id && w.locked));
+    assert!(matches!(
+        f.mgr.remove_worktree(&again2.id, false).await,
+        Err(SessionError::Git(_))
+    ));
+    f.mgr.remove_worktree(&again2.id, true).await.unwrap();
+    assert!(!Path::new(&again2.path).exists());
+    assert_eq!(f.mgr.list_worktrees(&repo.id).await.unwrap().len(), 1);
+}
+
+/// Removing a worktree keeps its branch; creating the same name again from
+/// the same base reuses the untouched branch, but never one with commits.
+#[tokio::test(flavor = "multi_thread")]
+async fn recreate_after_remove_reuses_untouched_branch() {
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f
+        .mgr
+        .create_worktree(&repo.id, "task", Some("main"), None)
+        .await
+        .unwrap();
+    f.mgr.remove_worktree(&wt.id, false).await.unwrap();
+    let again = f
+        .mgr
+        .create_worktree(&repo.id, "task", Some("main"), None)
+        .await
+        .unwrap();
+    assert_eq!(again.branch.as_deref(), Some("task"));
+    // Checked out in `again`: refused.
+    assert!(matches!(
+        f.mgr
+            .create_worktree(&repo.id, "task", Some("main"), Some("other"))
+            .await,
+        Err(SessionError::AlreadyExists(_))
+    ));
+    // With a commit of its own: refused even when not checked out.
+    git(
+        Path::new(&again.path),
+        &["commit", "-q", "--allow-empty", "-m", "work"],
+    );
+    f.mgr.remove_worktree(&again.id, false).await.unwrap();
+    assert!(matches!(
+        f.mgr
+            .create_worktree(&repo.id, "task", Some("main"), None)
+            .await,
+        Err(SessionError::AlreadyExists(_))
+    ));
+}
+
+/// `git worktree add` in a terminal reaches clients as WorktreesChanged.
+#[tokio::test(flavor = "multi_thread")]
+async fn external_worktree_changes_emit_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let mut cfg = SessionConfig::new(root.join("state"));
+    cfg.shell = Some("/bin/sh".into());
+    cfg.worktree_poll = Duration::from_millis(100);
+    let mgr = SessionManager::new(cfg).unwrap();
+    let repo_dir = make_repo(&root);
+    let repo = mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    // Let the watcher take its first look at the new repo.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let mut events = mgr.subscribe_events();
+    let wt = root.join("by-hand");
+    git(
+        &repo_dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "by-hand",
+            &wt.to_string_lossy(),
+        ],
+    );
+    assert_eq!(
+        next_event(&mut events, |e| matches!(e, Event::WorktreesChanged { .. })).await,
+        Event::WorktreesChanged {
+            repo: repo.id.clone()
+        }
+    );
+    let listed = mgr.list_worktrees(&repo.id).await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|w| w.branch.as_deref() == Some("by-hand"))
+    );
+}
+
 fn write_script(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
     use std::os::unix::fs::PermissionsExt;

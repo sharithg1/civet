@@ -287,6 +287,30 @@ pub(crate) fn canonical_or_same(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
+/// Canonicalize the longest existing prefix of `p` and append the rest.
+/// Why: a worktree's id is its canonical path; once its directory is deleted
+/// behind git's back, plain canonicalization falls back to the raw path git
+/// recorded (e.g. `/var/...` instead of `/private/var/...`), so the id would
+/// change and the client could no longer remove it by the id it holds.
+pub(crate) fn canonical_lenient(p: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return c;
+    }
+    let mut rest = Vec::new();
+    let mut cur = p;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            rest.push(name.to_owned());
+        }
+        if let Ok(mut c) = std::fs::canonicalize(parent) {
+            c.extend(rest.iter().rev());
+            return c;
+        }
+        cur = parent;
+    }
+    p.to_path_buf()
+}
+
 /// Lossy path → string.
 pub(crate) fn path_string(p: &Path) -> String {
     p.to_string_lossy().into_owned()
@@ -332,5 +356,22 @@ mod tests {
         assert_eq!(id, repo_id_for(Path::new("/tmp/x/.git")));
         assert_ne!(id, repo_id_for(Path::new("/tmp/y/.git")));
         assert_eq!(branch_dir_name("feat/a/b"), "feat-a-b");
+    }
+
+    #[test]
+    fn lenient_canonical_path_of_a_missing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let canon_real = std::fs::canonicalize(&real).unwrap();
+        // Existing: same as canonicalize.
+        assert_eq!(canonical_lenient(&link), canon_real);
+        // Missing below a symlink: the existing prefix is still resolved.
+        assert_eq!(
+            canonical_lenient(&link.join("gone/deeper")),
+            canon_real.join("gone/deeper")
+        );
     }
 }
