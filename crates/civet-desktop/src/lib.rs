@@ -165,11 +165,16 @@ pub fn run() {
             let ui = Arc::new(TauriUi {
                 app: app.handle().clone(),
             });
-            let connector = Arc::new(SshConnector {
-                client_id,
-                local_civetd: None,
-                local_state_dir: None,
-            });
+            // Bundled daemons (`<Resources>/civet-dist`, see tauri.conf.json):
+            // Linux musl builds for remotes and this Mac's civetd for Local.
+            // In dev the dir is empty and the search falls through to
+            // $CIVET_DIST_DIR, ~/.civet/dist and the workspace civetd.
+            let resource_dir = app.path().resource_dir().ok();
+            let connector = Arc::new(SshConnector::new(client_id, resource_dir.as_deref()));
+            tracing::info!(
+                bundled = ?connector.bundled_dist,
+                "daemon binaries: bundled dir, then $CIVET_DIST_DIR, ~/.civet/dist"
+            );
             let hosts = HostManager::new(ManagerConfig::default(), ui, connector, handle.clone());
             let wake_hosts = hosts.clone();
             wake::spawn(move |reason| {

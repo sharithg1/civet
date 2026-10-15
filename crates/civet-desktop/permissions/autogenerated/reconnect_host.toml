@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reconnect-host"
+description = "Enables the reconnect_host command without any pre-configured scope."
+commands.allow = ["reconnect_host"]
+
+[[permission]]
+identifier = "deny-reconnect-host"
+description = "Denies the reconnect_host command without any pre-configured scope."
+commands.deny = ["reconnect_host"]

@@ -47,7 +47,8 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
         void c.loadOlderHistory()
       },
       onGap: (gap) => setGaps((g) => [...g.slice(-9), gap]),
-      onError: (message) => reportError(`Pane ${pane}`, message)
+      onError: (message) => reportError(`Pane ${pane}`, message),
+      canReportInputError: () => useStore.getState().hosts[hostId]?.state === 'connected'
     })
     c.mount(el)
     setController(c)

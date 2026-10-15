@@ -15,6 +15,7 @@ import { PaneStream, type LineRange } from './pane-stream'
 import { RecordParseError, parseRecords, type TermRecord } from './records'
 import { ScrollbackPager } from './scrollback-pager'
 import { handleClipboardKey, isMacPlatform } from './clipboard-keys'
+import { InputQueue } from './input-queue'
 import { buildDefaultTerminalOptions } from './terminal-options'
 import { attachWebgl, type WebglHandle } from './webgl'
 
@@ -26,6 +27,8 @@ export type PaneControllerCallbacks = {
   onScrollTop: () => void
   onGap: (gap: LineRange) => void
   onError: (message: string) => void
+  /** False while the host is not connected: input errors are expected then (no toast). */
+  canReportInputError?: () => boolean
 }
 
 export class PaneController {
@@ -43,6 +46,8 @@ export class PaneController {
   private container: HTMLElement | null = null
   private sawRecord = false
   private readonly cleanups: (() => void)[] = []
+  /** Keeps this pane's keystrokes in order (one input invoke in flight). */
+  private readonly input: InputQueue
 
   constructor(
     private readonly backend: CivetBackend,
@@ -65,6 +70,14 @@ export class PaneController {
     this.pager = new ScrollbackPager((query) =>
       this.backend.fetchScrollback(this.hostId, this.pane, query)
     )
+    this.input = new InputQueue({
+      send: (c) =>
+        c.kind === 'text'
+          ? this.backend.writeInput(this.hostId, this.pane, c.data)
+          : this.backend.writeInputBinary(this.hostId, this.pane, c.data),
+      onError: (err) => this.cb.onError(`input: ${String((err as Error).message ?? err)}`),
+      shouldReport: () => !this.disposed && (this.cb.canReportInputError?.() ?? true)
+    })
   }
 
   mount(container: HTMLElement): void {
@@ -80,15 +93,11 @@ export class PaneController {
 
     const d1 = this.term.onData((data) => {
       if (this.stream.closed) return
-      this.backend
-        .writeInput(this.hostId, this.pane, data)
-        .catch((err: unknown) => this.cb.onError(`input: ${String((err as Error).message ?? err)}`))
+      this.input.push('text', data)
     })
     const d2 = this.term.onBinary((data) => {
       if (this.stream.closed) return
-      this.backend
-        .writeInputBinary(this.hostId, this.pane, data)
-        .catch((err: unknown) => this.cb.onError(`input: ${String((err as Error).message ?? err)}`))
+      this.input.push('binary', data)
     })
     const d3 = this.term.onScroll((y) => {
       const buf = this.term.buffer.active
@@ -218,6 +227,7 @@ export class PaneController {
     if (this.resizeTimer) clearTimeout(this.resizeTimer)
     this.resizeObserver?.disconnect()
     this.cleanups.forEach((fn) => fn())
+    this.input.close()
     this.batcher.dispose()
     void this.attachment?.detach().catch(() => {})
     this.webgl?.dispose()

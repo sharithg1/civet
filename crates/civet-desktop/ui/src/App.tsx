@@ -59,7 +59,15 @@ export function App() {
   useShortcuts()
 
   if (!ready) return null
-  if (showConnect && !hasHosts) return <ConnectScreen />
+  if (showConnect && !hasHosts) {
+    return (
+      <div className="relative h-full w-full">
+        <ConnectScreen />
+        {/* Overlay title bar: keep the window draggable above the card. */}
+        <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
+      </div>
+    )
+  }
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-chrome">
       <TitleBar />

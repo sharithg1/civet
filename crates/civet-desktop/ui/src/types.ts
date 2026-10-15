@@ -15,6 +15,17 @@ export type HostTarget =
   | { kind: 'ssh'; destination: string; port?: number | null; extraArgs?: string[] }
   | { kind: 'local' }
 
+/**
+ * An older civetd kept running because it has live panes, although this app's
+ * newer one is installed. `restart_daemon` upgrades it (closing the panes).
+ */
+export type DaemonUpgrade = {
+  runningVersion: string
+  availableVersion: string
+  /** Live panes when the host was bootstrapped. */
+  livePanes: number
+}
+
 export type HostSummary = {
   hostId: string
   label: string
@@ -22,6 +33,7 @@ export type HostSummary = {
   transport: HostTransport | null
   daemonVersion: string | null
   instanceId: string | null
+  upgrade: DaemonUpgrade | null
 }
 
 export type TermSize = {
@@ -103,7 +115,8 @@ export type DaemonInfo = {
   daemonVersion: string
   protoVersion: number
   pid: number
-  instanceId: number
+  /** u64 as a decimal string. */
+  instanceId: string
   startedAtMs: number
   hostname: string
 }
@@ -147,6 +160,7 @@ export type HostStateEvent = {
   transport: HostTransport | null
   rttMs: number | null
   message: string | null
+  upgrade: DaemonUpgrade | null
 }
 
 export type BootstrapStep = 'probe' | 'upload' | 'start' | 'resolve' | 'dial' | 'fallback'

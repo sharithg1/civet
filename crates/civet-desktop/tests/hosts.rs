@@ -118,6 +118,7 @@ impl Connector for DirConnector {
         &'a self,
         _target: &'a HostTarget,
         choice: TransportChoice,
+        _replace: bool,
         progress: Progress,
     ) -> BoxFuture<'a, Result<Established, CmdError>> {
         Box::pin(async move {
@@ -138,6 +139,7 @@ impl Connector for DirConnector {
                 Some((addr, info.cert_fingerprint)),
                 tunnel,
                 info.daemon_version.clone(),
+                None,
                 &progress,
             )
             .await
@@ -284,6 +286,13 @@ fn shell_pane(script: &str) -> SpawnPaneRequest {
     }
 }
 
+fn agent_pane(script: &str) -> SpawnPaneRequest {
+    SpawnPaneRequest {
+        agent: Some("test-agent".into()),
+        ..shell_pane(script)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -408,8 +417,24 @@ async fn commands_over_quic_against_real_daemon() {
         })
         .await;
 
-    // Agent status → attention event + native notification (unfocused),
-    // rate-limited per pane.
+    // A plain shell pane never asks for attention (typing `exit` in a
+    // shell must not notify).
+    m.set_agent_status(h, pane.id, AgentStatus::Done)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(rig.ui.attention.lock().unwrap().is_empty(), "shell pane");
+    assert!(rig.ui.notes.lock().unwrap().is_empty(), "shell pane");
+    m.kill_pane(h, pane.id, Some(KillSignal::Kill))
+        .await
+        .unwrap();
+
+    // An agent pane: attention event + native notification (unfocused),
+    // rate-limited per (pane, status).
+    let pane = m.spawn_pane(h, agent_pane("exec cat")).await.unwrap();
+    let (sink2, mut screen2) = Screen::new();
+    m.attach_pane(h, pane.id, sink2).await.unwrap();
+    screen2.until("agent full", |s| !s.records.is_empty()).await;
     m.set_agent_status(h, pane.id, AgentStatus::Running)
         .await
         .unwrap();
@@ -431,8 +456,22 @@ async fn commands_over_quic_against_real_daemon() {
         rig.ui.attention.lock().unwrap().len() == 2
     })
     .await;
+    // A different status of the same pane is news: not throttled.
+    eventually("needs-input notification", || {
+        rig.ui.notes.lock().unwrap().len() == 2
+    })
+    .await;
+    assert_eq!(rig.ui.notes.lock().unwrap()[1].1, "Agent needs input");
+    // Done again within the interval: the event, but no second notification.
+    m.set_agent_status(h, pane.id, AgentStatus::Done)
+        .await
+        .unwrap();
+    eventually("third attention", || {
+        rig.ui.attention.lock().unwrap().len() == 3
+    })
+    .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(rig.ui.notes.lock().unwrap().len(), 1, "rate limited");
+    assert_eq!(rig.ui.notes.lock().unwrap().len(), 2, "rate limited");
 
     // Daemon events are forwarded.
     assert!(
@@ -603,6 +642,18 @@ async fn daemon_restart_rebootstraps_with_reconnecting_only_after_1s() {
         })
         .await;
 
+    // The new session's RTT is published again (prediction needs it).
+    eventually("rtt after re-bootstrap", || {
+        let st = rig.ui.states.lock().unwrap();
+        st[before..]
+            .iter()
+            .rev()
+            .find(|e| e.state == HostState::Connected)
+            .is_some_and(|e| e.rtt_ms.is_some())
+            && st.last().is_some_and(|e| e.rtt_ms.is_some())
+    })
+    .await;
+
     // Slow restart (1.5 s): connected → reconnecting (after 1 s) → connected.
     let before = rig.ui.states().len();
     rig.restart_daemon(Duration::from_millis(1500)).await;
@@ -672,6 +723,7 @@ async fn connect_failure_is_reported_as_failed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn osc52_clipboard_write_reaches_the_ui() {
     let rig = Rig::new(fast()).await;
+    *rig.ui.focused.lock().unwrap() = true;
     let m = &rig.mgr;
     let h = "local";
     m.connect_host(HostTarget::Local, TransportChoice::Auto)
@@ -723,5 +775,135 @@ async fn osc52_clipboard_write_reaches_the_ui() {
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(rig.ui.clipboard.lock().unwrap().len(), 1);
+    m.shutdown().await;
+}
+
+/// OSC 52 policy: applied only while the window is focused and the pane is
+/// attached in the UI, at most once per second per pane; everything else is
+/// dropped silently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn osc52_needs_focus_visibility_and_is_rate_limited() {
+    let rig = Rig::new(ManagerConfig {
+        detach_linger: Duration::from_secs(10),
+        ..ManagerConfig::default()
+    })
+    .await;
+    let m = &rig.mgr;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Auto)
+        .await
+        .unwrap();
+    // Each line read prints one OSC 52 write of the line, then "ok <line>".
+    let script = "while read x; do printf '\\033]52;c;%s\\007ok %s\\n' \"$(printf %s \"$x\" | base64)\" \"$x\"; done";
+    let pane = m.spawn_pane(h, shell_pane(script)).await.unwrap();
+    let (sink, mut screen) = Screen::new();
+    m.attach_pane(h, pane.id, sink).await.unwrap();
+    screen
+        .until("first record", |s| !s.records.is_empty())
+        .await;
+    let writes = || {
+        rig.ui
+            .clipboard
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|w| w.text.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Window not focused: dropped.
+    m.write_input(h, pane.id, b"one\r".to_vec()).unwrap();
+    screen
+        .until("ok one", |s| s.text().contains("ok one"))
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(writes().is_empty(), "unfocused window");
+
+    // Focused and attached: applied once; a second write within 1 s is
+    // rate limited.
+    *rig.ui.focused.lock().unwrap() = true;
+    m.write_input(h, pane.id, b"two\r".to_vec()).unwrap();
+    screen
+        .until("ok two", |s| s.text().contains("ok two"))
+        .await;
+    m.write_input(h, pane.id, b"three\r".to_vec()).unwrap();
+    screen
+        .until("ok three", |s| s.text().contains("ok three"))
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(writes(), vec!["two".to_string()], "rate limited");
+
+    // After the interval it works again.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    m.write_input(h, pane.id, b"four\r".to_vec()).unwrap();
+    eventually("four", || writes().len() == 2).await;
+    assert_eq!(writes()[1], "four");
+
+    // Detached (not visible in the UI) but still mirrored during the
+    // linger: dropped.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    m.detach_pane(h, pane.id).unwrap();
+    m.write_input(h, pane.id, b"five\r".to_vec()).unwrap();
+    eventually("five mirrored", || {
+        m.with_view(h, pane.id, |v| {
+            v.predictor()
+                .mirror()
+                .screen_text()
+                .join("\n")
+                .contains("ok five")
+        })
+        .unwrap_or(false)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(writes().len(), 2, "detached pane");
+    m.shutdown().await;
+}
+
+/// Detach, then re-attach right around the moment the detach linger expires:
+/// the linger's unsubscribe must never cancel the new attach's subscription.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reattach_racing_the_linger_expiry_keeps_streaming() {
+    let linger = Duration::from_millis(150);
+    let rig = Rig::new(ManagerConfig {
+        detach_linger: linger,
+        ..ManagerConfig::default()
+    })
+    .await;
+    let m = &rig.mgr;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Auto)
+        .await
+        .unwrap();
+    let pane = m.spawn_pane(h, shell_pane("exec cat")).await.unwrap();
+    let (sink, mut screen) = Screen::new();
+    m.attach_pane(h, pane.id, sink).await.unwrap();
+    screen
+        .until("first record", |s| !s.records.is_empty())
+        .await;
+    for (i, offset_ms) in [-6i64, -3, -1, 0, 1, 2, 3, 5, 8, 12]
+        .into_iter()
+        .enumerate()
+    {
+        m.detach_pane(h, pane.id).unwrap();
+        let wait = linger.as_millis() as i64 + offset_ms;
+        tokio::time::sleep(Duration::from_millis(wait.max(0) as u64)).await;
+        let (sink, mut screen) = Screen::new();
+        m.attach_pane(h, pane.id, sink).await.unwrap();
+        let marker = format!("race-{i}");
+        m.write_input(h, pane.id, format!("{marker}\r").into_bytes())
+            .unwrap();
+        screen
+            .until(&marker, |s| s.text().matches(&marker).count() >= 2)
+            .await;
+        // Still subscribed a while later (a late unsubscribe would stop it).
+        tokio::time::sleep(linger).await;
+        let later = format!("later-{i}");
+        m.write_input(h, pane.id, format!("{later}\r").into_bytes())
+            .unwrap();
+        screen
+            .until(&later, |s| s.text().matches(&later).count() >= 2)
+            .await;
+    }
     m.shutdown().await;
 }

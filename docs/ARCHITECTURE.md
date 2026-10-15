@@ -156,6 +156,13 @@ PTY ─► PaneTerminal state N  ──►  Subscription.next():                
   `InputAck`) covers it. `acked_input_seq` follows mosh's echo-ack rule: input
   counts as acknowledged once it was written at least 50 ms before the
   snapshot, so the screen likely shows its echo. This feeds prediction.
+- Seqs are assigned in the order `write_input` reaches the client core. The
+  desktop UI keeps one input invoke per pane in flight (Tauri runs async
+  commands concurrently, so two invokes could otherwise race) and coalesces
+  what is typed meanwhile, so seq order is keystroke order.
+- A reconnect that does not resume (`Connected { resumed: false }`) restarts
+  numbering at 1: the desktop zeroes each view's acked seq and drops pending
+  predictions.
 
 ### Reconnect cases
 
@@ -254,7 +261,12 @@ user's agent config); terminal escape codes (OSC 9 / OSC 777 notifications,
 OSC 133 prompt marks); and heuristics for known agent CLIs (output activity,
 BEL followed by quiet, idle timeout). Changes are pushed as
 `Event::AgentStatus`; the desktop turns transitions into Done/NeedsInput
-into a sidebar badge and, when unfocused, a native notification.
+into a sidebar badge and, when unfocused, a native notification. Only agent
+panes ask for attention: panes launched as an agent (`PaneInfo::agent`) or
+whose agent reports through its hook (`claude` typed in a shell); a plain
+shell exiting (`exit`) never notifies. Native notifications are limited to
+one per (pane, status) per 10 s, so "needs input" right after "done" still
+shows.
 
 ## Security notes
 
@@ -267,6 +279,11 @@ into a sidebar badge and, when unfocused, a native notification.
   per connection and bound to the `ClientId`.
 - Any holder of the session key has full shell access as the daemon's user,
   same as SSH. Keys are never logged; input bytes are never logged.
+- OSC 52 (a remote program setting the Mac's clipboard) is applied only
+  while a Civet window is focused and the pane is attached (visible) in the
+  UI, at most once per second per pane; otherwise it is dropped (debug log).
+  A background or detached pane cannot silently replace what the user is
+  about to paste. Success is silent; a failed write shows an error toast.
 
 ## Failure modes
 
@@ -279,7 +296,8 @@ into a sidebar badge and, when unfocused, a native notification.
 | Daemon crash / host reboot | Panes lost; bootstrap starts a new daemon |
 | UDP blocked | SSH stdio tunnel, same features, more latency under loss |
 | Huge output burst | Coalesced to ≤ 1 update / 8 ms per pane; history replay capped, rest fetchable |
-| Daemon upgrade | New binary installed side by side (version-checked locally and on the remote); running compatible daemon with panes is reattached and the bootstrap line reports `upgrade_available` + `live_panes` so the UI can offer "Restart daemon" (`replace`); idle older or incompatible daemons are replaced only when they have no panes (or `--replace`) |
+| Daemon upgrade | New binary installed side by side (version-checked locally and on the remote). An older daemon with no panes is replaced at once; a compatible older daemon with live panes is kept and reattached, and the bootstrap line reports `upgrade_available` + `live_panes`: the desktop shows "civetd vN running · vM available · K live panes" (banner, host popover, one toast) with "Restart daemon (closes K panes)", which confirms and re-bootstraps with `replace` (`restart_daemon`). An incompatible daemon with live panes fails the connect with `daemonBusy`, which offers the same restart |
+| Another client took the connection over | A second "replaced" close within 30 s ends the session (`failed`, "another Civet window or client took over this host's connection"); Reconnect takes it back |
 
 ## Open questions carried from the plan
 

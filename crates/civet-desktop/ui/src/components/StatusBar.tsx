@@ -1,6 +1,6 @@
 // 24px status bar (v3): active host + latency (click for the host popover),
 // navigation hints, and the focused session on the right.
-import { useStore, wsKey } from '@/state/store'
+import { reconnectHost, requestRestartDaemon, upgradeSummary, useStore, wsKey } from '@/state/store'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { DOT_LABEL, agentName, duration, paneDot } from '@/lib/worktree-view'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -38,6 +38,8 @@ function HostPopover({ hostId }: { hostId: string }) {
   const backend = useStore((s) => s.backend)
   const panes = useStore((s) => s.panes[hostId])
   const live = Object.values(panes ?? {}).filter((p) => !p.exited)
+  // Every pane the daemon holds (exited ones too) closes on a restart.
+  const paneCount = panes ? Object.keys(panes).length : (host.upgrade?.livePanes ?? 0)
   const agents = live.filter((p) => p.agent).length
   const shells = live.length - agents
   const transport = host.transport === 'quic' ? 'QUIC' : host.transport === 'stream' ? 'SSH tunnel' : 'no transport'
@@ -49,6 +51,11 @@ function HostPopover({ hostId }: { hostId: string }) {
       <PopoverTrigger className="flex cursor-pointer items-center gap-1.5 outline-none hover:text-foreground">
         <HostStateDot host={host} />
         {host.label} · {hostMeta(host)}
+        {host.upgrade && (
+          <span className="text-status-wait" data-upgrade-hint>
+            · civetd v{host.upgrade.availableVersion} available
+          </span>
+        )}
       </PopoverTrigger>
       <PopoverContent
         side="top"
@@ -68,6 +75,26 @@ function HostPopover({ hostId }: { hostId: string }) {
           {agents} agent{agents === 1 ? '' : 's'} and {shells} shell{shells === 1 ? '' : 's'} running under civetd.
           Closing Civet detaches; nothing stops.
         </div>
+        {host.upgrade && (
+          <div className="rounded-[5px] border border-border px-2.5 py-2 leading-[1.5]">
+            <div className="font-mono text-[11.5px] text-status-wait">{upgradeSummary(hostId)}</div>
+            <div className="mt-1 text-muted-foreground">
+              The older daemon keeps running so your sessions survive. Restarting upgrades it and closes them.
+            </div>
+            <button
+              type="button"
+              className={`${btn} mt-2 w-full`}
+              onClick={() => requestRestartDaemon(hostId)}
+            >
+              Restart daemon (closes {paneCount} pane{paneCount === 1 ? '' : 's'})
+            </button>
+          </div>
+        )}
+        {(host.state === 'failed' || host.state === 'disconnected') && (
+          <button type="button" className={btn} onClick={() => void reconnectHost(hostId)}>
+            Reconnect
+          </button>
+        )}
         <div className="grid grid-cols-2 gap-1.5">
           <button type="button" className={btn} onClick={() => useStore.setState({ addRepoFor: hostId })}>
             Add repository…

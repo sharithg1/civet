@@ -17,7 +17,7 @@ import {
 } from '../layout/pane-tree'
 import { aggregateStatus } from '../lib/agent-status'
 import { splitShellWords } from '../lib/shell-words'
-import { usePrefs, type CreateStep } from './prefs'
+import { onPrefsChange, usePrefs, type CreateStep } from './prefs'
 import type {
   AgentAttentionEvent,
   AgentStatus,
@@ -46,6 +46,8 @@ export type HostView = HostSummary & {
   rttMs: number | null
   message: string | null
   bootstrap: { step: BootstrapStep; message: string | null } | null
+  /** Error code of the last failed connect (`daemonBusy` offers a daemon restart). */
+  errorCode: string | null
 }
 
 export type Toast = {
@@ -62,6 +64,8 @@ export type ConfirmRequest = {
   body: string
   confirmLabel: string
   onConfirm: () => void
+  /** Focus Cancel instead of the (destructive) confirm button. */
+  focusCancel?: boolean
 }
 
 export type NewWorktreeRequest = { hostId: string; repo?: string }
@@ -100,6 +104,8 @@ type State = {
   mru: string[]
   /** wsKey → when it was last left / selected (ms) */
   seen: Record<string, number>
+  /** hostId → "running>available" upgrade the user postponed ("Later") */
+  dismissedUpgrades: Record<string, string>
 }
 
 export const useStore = create<State>(() => ({
@@ -125,7 +131,8 @@ export const useStore = create<State>(() => ({
   removeWorktree: null,
   collapsedRepos: {},
   mru: [],
-  seen: {}
+  seen: {},
+  dismissedUpgrades: {}
 }))
 
 const set = useStore.setState
@@ -175,6 +182,16 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
   window.addEventListener('online', nudge)
   document.addEventListener('visibilitychange', onVisibility)
 
+  // Local echo prediction preference (Settings → General); Rust defaults to on.
+  const pushPrediction = () =>
+    void b.setPrediction(usePrefs.getState().prediction !== 'off').catch((err: unknown) =>
+      reportError('Could not change local echo prediction', err)
+    )
+  pushPrediction()
+  const unPrefs = onPrefsChange((next, prev) => {
+    if (next.prediction !== prev.prediction) pushPrediction()
+  })
+
   try {
     const hosts = await b.listHosts()
     for (const h of hosts) upsertHost(h)
@@ -186,6 +203,7 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
   }
 
   return () => {
+    unPrefs()
     unlisten.forEach((u) => u())
     window.removeEventListener('online', nudge)
     document.removeEventListener('visibilitychange', onVisibility)
@@ -202,6 +220,7 @@ function upsertHost(h: HostSummary, extra: Partial<HostView> = {}): void {
           rttMs: null,
           message: null,
           bootstrap: null,
+          errorCode: null,
           ...prev,
           ...h,
           ...extra
@@ -217,21 +236,25 @@ function upsertHost(h: HostSummary, extra: Partial<HostView> = {}): void {
 export function onHostState(e: HostStateEvent): void {
   const prev = get().hosts[e.hostId]
   const prevState: HostState | undefined = prev?.state
+  const upgrade = e.upgrade ?? null
   upsertHost(
     {
       hostId: e.hostId,
       label: prev?.label ?? e.hostId,
       state: e.state,
       transport: e.transport,
-      daemonVersion: prev?.daemonVersion ?? null,
-      instanceId: prev?.instanceId ?? null
+      daemonVersion: upgrade?.runningVersion ?? prev?.daemonVersion ?? null,
+      instanceId: prev?.instanceId ?? null,
+      upgrade
     },
     {
       rttMs: e.rttMs,
       message: e.message,
-      bootstrap: e.state === 'connected' ? null : (prev?.bootstrap ?? null)
+      bootstrap: e.state === 'connected' ? null : (prev?.bootstrap ?? null),
+      errorCode: e.state === 'connected' ? null : (prev?.errorCode ?? null)
     }
   )
+  if (upgrade) announceUpgrade(e.hostId)
   // After a re-bootstrap the daemon may be a new instance with different
   // panes; re-sync whenever we come back to connected.
   if (e.state === 'connected' && prevState && prevState !== 'connected') {
@@ -246,6 +269,19 @@ export function onBootstrapProgress(e: BootstrapProgressEvent): void {
   const prev = get().hosts[e.hostId]
   if (!prev) return
   upsertHost(prev, { bootstrap: { step: e.step, message: e.message } })
+}
+
+/**
+ * Add a pane from a command reply (spawn / launch). An entry that already
+ * exists came from daemon events (paneCreated, agentStatus…) that are at least
+ * as new as the reply's snapshot, so it is kept.
+ */
+export function addPaneSnapshot(hostId: string, pane: PaneInfo): void {
+  set((s) => {
+    const panes = s.panes[hostId] ?? {}
+    if (panes[pane.id]) return {}
+    return { panes: { ...s.panes, [hostId]: { ...panes, [pane.id]: pane } } }
+  })
 }
 
 function patchPane(hostId: string, pane: PaneId, patch: Partial<PaneInfo>): void {
@@ -352,33 +388,136 @@ async function refreshPanes(hostId: string): Promise<void> {
 
 // ── Hosts ─────────────────────────────────────────────────────────────────
 
-export async function connectHost(target: HostTarget, transport: TransportChoice): Promise<void> {
-  const hostId = target.kind === 'local' ? 'local' : target.destination.trim()
-  upsertHost({
-    hostId,
-    label: target.kind === 'local' ? 'This Mac' : hostId,
-    state: 'connecting',
-    transport: null,
-    daemonVersion: null,
-    instanceId: null
-  })
+/** Live panes of a host as the UI knows them (falls back to the bootstrap count). */
+export function livePaneCount(hostId: string): number {
+  const s = get()
+  const panes = s.panes[hostId]
+  if (panes) return Object.keys(panes).length
+  return s.hosts[hostId]?.upgrade?.livePanes ?? 0
+}
+
+/** "civetd v0.1.1 running · v0.1.2 available · 3 live panes" */
+export function upgradeSummary(hostId: string): string | null {
+  const u = get().hosts[hostId]?.upgrade
+  if (!u) return null
+  const n = livePaneCount(hostId)
+  return `civetd v${u.runningVersion} running · v${u.availableVersion} available · ${n} live pane${n === 1 ? '' : 's'}`
+}
+
+const announcedUpgrades = new Set<string>()
+
+/** One toast per host and version pair: the banner and host popover keep the action. */
+function announceUpgrade(hostId: string): void {
+  const h = get().hosts[hostId]
+  const u = h?.upgrade
+  if (!h || !u) return
+  const key = `${hostId}\u0000${u.runningVersion}\u0000${u.availableVersion}`
+  if (announcedUpgrades.has(key)) return
+  announcedUpgrades.add(key)
+  pushToast(
+    {
+      kind: 'info',
+      title: `civetd v${u.availableVersion} is available on ${h.label}`,
+      body: `v${u.runningVersion} keeps running because it has live panes. Restart the daemon when convenient (from the banner or the host menu).`
+    },
+    9000
+  )
+}
+
+/** Shared tail of connect / reconnect / restart: track state, adopt the summary, load the host. */
+async function runConnect(
+  hostId: string,
+  label: string,
+  connect: () => Promise<HostSummary>
+): Promise<HostSummary> {
+  const prev = get().hosts[hostId]
+  upsertHost(
+    prev ?? {
+      hostId,
+      label,
+      state: 'connecting',
+      transport: null,
+      daemonVersion: null,
+      instanceId: null,
+      upgrade: null
+    },
+    { state: 'connecting', message: null, errorCode: null }
+  )
   let summary: HostSummary
   try {
-    summary = await backend().connectHost(target, transport)
+    summary = await connect()
   } catch (err) {
     const cur = get().hosts[hostId]
+    const e = CivetError.from(err)
     if (cur && cur.state === 'connecting') {
-      upsertHost(cur, { state: 'failed', message: CivetError.from(err).message, bootstrap: null })
+      upsertHost(cur, { state: 'failed', message: e.message, bootstrap: null, errorCode: e.code })
+    } else if (cur) {
+      upsertHost(cur, { errorCode: e.code })
     }
     throw err
   }
-  upsertHost(summary, { bootstrap: null })
+  upsertHost(summary, { bootstrap: null, errorCode: null })
+  if (summary.upgrade) announceUpgrade(summary.hostId)
   await refreshHost(summary.hostId)
+  return summary
+}
+
+export async function connectHost(target: HostTarget, transport: TransportChoice): Promise<void> {
+  const hostId = target.kind === 'local' ? 'local' : target.destination.trim()
+  const summary = await runConnect(hostId, target.kind === 'local' ? 'This Mac' : hostId, () =>
+    backend().connectHost(target, transport)
+  )
   set({ showConnect: false })
   // Focus the first worktree that has panes, else the first main worktree.
   if (!get().active) {
     const first = worktreesOf(summary.hostId)[0]
     if (first) selectWorktree(summary.hostId, first.id)
+  }
+}
+
+/**
+ * Reconnect a failed / disconnected host with the target and transport it was
+ * connected with (ssh port and extra args included; Rust keeps them).
+ */
+export async function reconnectHost(hostId: string): Promise<void> {
+  const label = get().hosts[hostId]?.label ?? hostId
+  try {
+    await runConnect(hostId, label, () => backend().reconnectHost(hostId))
+  } catch (err) {
+    reportError(`Could not reconnect to ${label}`, err)
+  }
+}
+
+/** Ask, then restart the host's daemon on this app's version (its panes close). */
+export function requestRestartDaemon(hostId: string): void {
+  const h = get().hosts[hostId]
+  if (!h) return
+  const n = livePaneCount(hostId)
+  const u = h.upgrade
+  const what = u ? `civetd v${u.runningVersion} on ${h.label} with v${u.availableVersion}` : `civetd on ${h.label}`
+  set({
+    confirm: {
+      title: `Restart daemon on ${h.label}?`,
+      body:
+        `This replaces ${what}. ${n} live pane${n === 1 ? '' : 's'} (agents and shells) will be closed ` +
+        'and their processes stop. Worktrees and files are not touched.',
+      confirmLabel: `Restart daemon (closes ${n} pane${n === 1 ? '' : 's'})`,
+      onConfirm: () => void restartDaemon(hostId),
+      focusCancel: true
+    }
+  })
+}
+
+export async function restartDaemon(hostId: string): Promise<void> {
+  const label = get().hosts[hostId]?.label ?? hostId
+  try {
+    const summary = await runConnect(hostId, label, () => backend().restartDaemon(hostId))
+    pushToast(
+      { kind: 'info', title: `Restarted civetd on ${label}${summary.daemonVersion ? ` · v${summary.daemonVersion}` : ''}` },
+      4000
+    )
+  } catch (err) {
+    reportError(`Could not restart the daemon on ${label}`, err)
   }
 }
 
@@ -554,7 +693,7 @@ async function spawnShell(hostId: string, worktree: string): Promise<PaneInfo> {
     title: null,
     agent: null
   })
-  set((s) => ({ panes: { ...s.panes, [hostId]: { ...s.panes[hostId], [pane.id]: pane } } }))
+  addPaneSnapshot(hostId, pane)
   return pane
 }
 
@@ -655,11 +794,11 @@ export async function launchAgentInNewWorktree(p: {
     title: p.title,
     agent: p.agent === 'custom' ? p.command.program.split('/').pop() || null : p.agent
   })
+  addPaneSnapshot(p.hostId, pane)
   set((s) => {
     const k = wtKey(p.hostId, worktree.repo)
     const list = s.worktrees[k] ?? []
     return {
-      panes: { ...s.panes, [p.hostId]: { ...s.panes[p.hostId], [pane.id]: pane } },
       worktrees: {
         ...s.worktrees,
         [k]: list.some((w) => w.id === worktree.id) ? list : [...list, worktree]
@@ -695,7 +834,7 @@ export async function newAgentTab(hostId: string, worktree: string, commandLine?
       title: null,
       agent: agentOf(command)
     })
-    set((s) => ({ panes: { ...s.panes, [hostId]: { ...s.panes[hostId], [pane.id]: pane } } }))
+    addPaneSnapshot(hostId, pane)
     openPaneInTab(hostId, worktree, pane.id)
   } catch (err) {
     reportError('Could not start the agent', err)
@@ -745,7 +884,7 @@ export async function createWorktreeWithSteps(p: {
       agent: agentOf(command)
     })
     worktree = res.worktree
-    set((s) => ({ panes: { ...s.panes, [p.hostId]: { ...s.panes[p.hostId], [res.pane.id]: res.pane } } }))
+    addPaneSnapshot(p.hostId, res.pane)
     opened[firstAgent] = res.pane.id
   } else {
     worktree = await backend().createWorktree(p.hostId, p.repo, p.branch, p.base, null)
@@ -770,7 +909,7 @@ export async function createWorktreeWithSteps(p: {
         title: null,
         agent: st.kind === 'agent' ? agentOf(specs[i]!) : null
       })
-      set((s) => ({ panes: { ...s.panes, [p.hostId]: { ...s.panes[p.hostId], [pane.id]: pane } } }))
+      addPaneSnapshot(p.hostId, pane)
       opened[i] = pane.id
       if (st.kind === 'terminal') await backend().writeInput(p.hostId, pane.id, `${st.cmd}\r`)
     } catch (err) {

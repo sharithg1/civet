@@ -1,3 +1,5 @@
 target/
 node_modules/
 dist/
+# Daemon binaries bundled into the app (scripts/build-remote.sh --bundle).
+crates/civet-desktop/civet-dist/

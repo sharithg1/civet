@@ -5,13 +5,28 @@
 
 use std::time::Duration;
 
-use civet_transport::{LinkState, TransportKind};
+use civet_transport::{LinkState, REPLACED_REASON, TransportKind};
 use tokio::time::Instant;
 
 use crate::events::HostState;
 
 /// Delay before the UI shows "reconnecting".
 pub const RECONNECTING_AFTER: Duration = Duration::from_secs(1);
+
+/// `failed` message when another client with this app's client id (a second
+/// Civet instance, or a copied `~/.civet/client-id-desktop`) took the
+/// daemon connection over twice in a row.
+pub const REPLACED_MESSAGE: &str = "another Civet window or client took over this host's connection; \
+     reconnect here to take it back";
+
+/// The UI text for a `LinkState::Failed` reason.
+pub fn failure_message(reason: &str) -> String {
+    if reason == REPLACED_REASON {
+        REPLACED_MESSAGE.to_string()
+    } else {
+        reason.to_string()
+    }
+}
 
 /// A state to publish (host id added by the caller).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +142,7 @@ impl LinkMapper {
                         reason: reason.clone(),
                     })
                 } else {
-                    Some(LinkAction::Publish(self.fail(reason.clone())))
+                    Some(LinkAction::Publish(self.fail(failure_message(reason))))
                 }
             }
             LinkState::Closed => {
@@ -154,10 +169,12 @@ impl LinkMapper {
         self.show(HostState::Failed)
     }
 
-    /// Back to connected after a re-bootstrap.
+    /// Back to connected after a re-bootstrap. The RTT is forgotten (the
+    /// new session measures its own) so its first sample is published.
     pub fn reconnected(&mut self, transport: TransportKind) -> HostStateUpdate {
         self.recovering_since = None;
         self.reason = None;
+        self.rtt_ms = None;
         self.transport = Some(transport);
         self.show(HostState::Connected)
     }
@@ -286,5 +303,44 @@ mod tests {
             HostState::Disconnected
         );
         assert_eq!(m.on_link(&LinkState::Closed, t0), None);
+    }
+
+    #[test]
+    fn rtt_is_republished_after_a_rebootstrap() {
+        let t0 = Instant::now();
+        let mut m = LinkMapper::connected(RECONNECTING_AFTER, TransportKind::Quic);
+        assert_eq!(
+            published(m.on_link(&connected(80), t0)),
+            HostState::Connected
+        );
+        // The re-bootstrap installs a new session (published with no RTT);
+        // the new session's first sample (the same 80 ms) must be published
+        // again or the host keeps rtt None and prediction stays off.
+        m.begin_recovery("restart".into(), t0);
+        let u = m.reconnected(TransportKind::Quic);
+        assert_eq!(u.rtt_ms, None);
+        match m.on_link(&connected(80), t0) {
+            Some(LinkAction::Publish(u)) => assert_eq!(u.rtt_ms, Some(80)),
+            other => panic!("expected an RTT publish, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn replaced_has_a_clear_message() {
+        let mut m = LinkMapper::connected(RECONNECTING_AFTER, TransportKind::Quic);
+        let a = m.on_link(
+            &LinkState::Failed {
+                reason: REPLACED_REASON.into(),
+                needs_bootstrap: false,
+            },
+            Instant::now(),
+        );
+        match a {
+            Some(LinkAction::Publish(u)) => {
+                assert_eq!(u.state, HostState::Failed);
+                assert_eq!(u.message.as_deref(), Some(REPLACED_MESSAGE));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

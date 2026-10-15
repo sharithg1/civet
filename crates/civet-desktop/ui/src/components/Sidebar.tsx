@@ -10,6 +10,8 @@ import {
   activateTabIndex,
   disconnectHost,
   panesOfWorktree,
+  reconnectHost,
+  requestRestartDaemon,
   selectWorktree,
   toggleRepoCollapsed,
   useStore,
@@ -116,6 +118,14 @@ function HostSection({ host }: { host: HostView }) {
           {host.label}
         </span>
         <HostStateDot host={host} />
+        {host.upgrade && (
+          <span
+            className="font-mono text-[10.5px] text-status-wait"
+            title={`civetd v${host.upgrade.runningVersion} running, v${host.upgrade.availableVersion} available: restart the daemon to upgrade`}
+          >
+            ↑ v{host.upgrade.availableVersion}
+          </span>
+        )}
         <span className="flex-1" />
         <span className="font-mono text-[10.5px] text-dim">{hostMeta(host)}</span>
         <DropdownMenu>
@@ -132,6 +142,14 @@ function HostSection({ host }: { host: HostView }) {
             <DropdownMenuItem onSelect={() => useStore.setState({ showConnect: true })}>
               Connect another host…
             </DropdownMenuItem>
+            {(host.state === 'failed' || host.state === 'disconnected') && (
+              <DropdownMenuItem onSelect={() => void reconnectHost(host.hostId)}>Reconnect</DropdownMenuItem>
+            )}
+            {(host.state === 'connected' || host.upgrade || host.errorCode === 'daemonBusy') && (
+              <DropdownMenuItem onSelect={() => requestRestartDaemon(host.hostId)}>
+                {host.upgrade ? `Restart daemon (v${host.upgrade.availableVersion})…` : 'Restart daemon…'}
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={() => void disconnectHost(host.hostId)}>Disconnect</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use civet_proto::{
-    AgentStatus, AgentStatusEvent, Event, KillSignal, LaunchAgentRequest, PaneId, PaneInfo,
-    Request, Response, ScrollbackQuery, SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId,
+    AgentStatus, AgentStatusEvent, AgentStatusSource, Event, KillSignal, LaunchAgentRequest,
+    PaneId, PaneInfo, Request, Response, ScrollbackQuery, SpawnPaneRequest, SubscribeInfo,
+    TermSize, WorktreeId,
 };
 use civet_transport::{ClientSession, LinkState, SessionEvent, TransportKind};
 use futures::future::BoxFuture;
@@ -25,9 +26,9 @@ use tokio::time::Instant;
 use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
-    AgentAttentionEvent, BootstrapProgressEvent, ClipboardWrite, DaemonEventPayload, HostState,
-    HostStateEvent, HostSummary, HostTarget, LaunchedAgent, PingResult, ProgressStep,
-    ScrollbackPageView, TransportChoice, UiEvents,
+    AgentAttentionEvent, BootstrapProgressEvent, ClipboardWrite, DaemonEventPayload,
+    DaemonInfoView, DaemonUpgrade, HostState, HostStateEvent, HostSummary, HostTarget,
+    LaunchedAgent, PingResult, ProgressStep, ScrollbackPageView, TransportChoice, UiEvents,
 };
 use crate::linkstate::{HostStateUpdate, LinkAction, LinkMapper, RECONNECTING_AFTER};
 use crate::pane::PaneView;
@@ -50,16 +51,22 @@ pub struct Established {
     /// Transport to use for the next (re-)bootstrap of this host (remembers
     /// an `auto` fallback for the app session).
     pub choice: TransportChoice,
+    /// The bootstrap kept an older daemon with live panes although a newer
+    /// one is installed ([`DaemonUpgrade::from_bootstrap`]).
+    pub upgrade: Option<DaemonUpgrade>,
 }
 
 /// Bootstraps the daemon and dials the first connection (ssh + QUIC with
 /// stdio-tunnel fallback in the app; an in-process daemon in tests).
 pub trait Connector: Send + Sync + 'static {
-    /// Connect; report steps through `progress`.
+    /// Connect; report steps through `progress`. `replace`: restart a
+    /// running daemon even if it has live panes (`civetd bootstrap
+    /// --replace`, the "Restart daemon" action).
     fn connect<'a>(
         &'a self,
         target: &'a HostTarget,
         choice: TransportChoice,
+        replace: bool,
         progress: Progress,
     ) -> BoxFuture<'a, Result<Established, CmdError>>;
 }
@@ -74,8 +81,11 @@ pub struct ManagerConfig {
     pub detach_linger: Duration,
     /// Predict only above this RTT.
     pub predict_min_rtt: Duration,
-    /// At most one native notification per pane per this interval.
+    /// At most one native notification per (pane, status) per this
+    /// interval.
     pub notify_interval: Duration,
+    /// At most one OSC 52 clipboard write per pane per this interval.
+    pub clipboard_interval: Duration,
 }
 
 impl Default for ManagerConfig {
@@ -85,6 +95,7 @@ impl Default for ManagerConfig {
             detach_linger: Duration::from_secs(30),
             predict_min_rtt: DEFAULT_MIN_RTT,
             notify_interval: Duration::from_secs(10),
+            clipboard_interval: Duration::from_secs(1),
         }
     }
 }
@@ -102,6 +113,7 @@ struct Status {
     rtt_ms: Option<u32>,
     daemon_version: Option<String>,
     instance_id: Option<u64>,
+    upgrade: Option<DaemonUpgrade>,
 }
 
 struct Host {
@@ -113,7 +125,13 @@ struct Host {
     status: Mutex<Status>,
     views: Mutex<HashMap<PaneId, ViewRef>>,
     panes: Mutex<HashMap<PaneId, PaneInfo>>,
-    notified: Mutex<HashMap<PaneId, Instant>>,
+    /// Last native notification per (pane, status).
+    notified: Mutex<HashMap<(PaneId, AgentStatus), Instant>>,
+    /// Last applied OSC 52 clipboard write per pane.
+    clipboard_at: Mutex<HashMap<PaneId, Instant>>,
+    /// Per-pane lock serializing subscribe (attach) and the linger
+    /// unsubscribe, so an expiring linger never cancels a new attach.
+    sub_locks: Mutex<HashMap<PaneId, Arc<tokio::sync::Mutex<()>>>>,
     task: Mutex<Option<JoinHandle<()>>>,
     /// Events of a freshly installed session, until the host task takes them.
     pending_events: Mutex<Option<UnboundedReceiver<SessionEvent>>>,
@@ -138,7 +156,12 @@ impl Host {
             transport: st.transport,
             daemon_version: st.daemon_version.clone(),
             instance_id: st.instance_id.map(|i| i.to_string()),
+            upgrade: st.upgrade.clone(),
         }
+    }
+
+    fn sub_lock(&self, pane: PaneId) -> Arc<tokio::sync::Mutex<()>> {
+        lock(&self.sub_locks).entry(pane).or_default().clone()
     }
 
     fn session(&self) -> Result<ClientSession, CmdError> {
@@ -235,7 +258,7 @@ impl HostManager {
     }
 
     fn publish(&self, host: &Host, u: HostStateUpdate) {
-        {
+        let upgrade = {
             let mut st = lock(&host.status);
             st.state = u.state;
             st.transport = u.transport.or(match u.state {
@@ -243,13 +266,15 @@ impl HostManager {
                 _ => st.transport,
             });
             st.rtt_ms = u.rtt_ms;
-        }
+            st.upgrade.clone()
+        };
         self.inner.ui.host_state(HostStateEvent {
             host_id: host.id.clone(),
             state: u.state,
             transport: u.transport,
             rtt_ms: u.rtt_ms,
             message: u.message,
+            upgrade,
         });
     }
 
@@ -273,6 +298,45 @@ impl HostManager {
         &self,
         target: HostTarget,
         choice: TransportChoice,
+    ) -> Result<HostSummary, CmdError> {
+        self.connect_inner(target, choice, false).await
+    }
+
+    /// `reconnect_host`: connect again with the host's stored target (ssh
+    /// port, extra args) and transport choice. Idempotent while connected.
+    /// `"local"` works even if the host was never connected.
+    pub async fn reconnect_host(&self, host_id: &str) -> Result<HostSummary, CmdError> {
+        let (target, choice) = match self.host(host_id) {
+            Ok(h) => (h.target.clone(), *lock(&h.choice)),
+            Err(_) if host_id == "local" => (HostTarget::Local, TransportChoice::Auto),
+            Err(e) => return Err(e),
+        };
+        self.connect_inner(target, choice, false).await
+    }
+
+    /// `restart_daemon`: re-bootstrap the host with `replace`, restarting
+    /// its daemon on this client's version even though it has live panes
+    /// (they are closed). Used for [`HostSummary::upgrade`] and for an
+    /// incompatible busy daemon (`daemonBusy`).
+    pub async fn restart_daemon(&self, host_id: &str) -> Result<HostSummary, CmdError> {
+        let (target, choice) = match self.host(host_id) {
+            Ok(h) => {
+                let t = (h.target.clone(), *lock(&h.choice));
+                self.shutdown_host(&h).await;
+                t
+            }
+            Err(_) if host_id == "local" => (HostTarget::Local, TransportChoice::Auto),
+            Err(e) => return Err(e),
+        };
+        tracing::info!(host = %host_id, "restarting the daemon (replace)");
+        self.connect_inner(target, choice, true).await
+    }
+
+    async fn connect_inner(
+        &self,
+        target: HostTarget,
+        choice: TransportChoice,
+        replace: bool,
     ) -> Result<HostSummary, CmdError> {
         let id = target.host_id();
         if id.is_empty() {
@@ -304,10 +368,13 @@ impl HostManager {
                 rtt_ms: None,
                 daemon_version: None,
                 instance_id: None,
+                upgrade: None,
             }),
             views: Mutex::new(HashMap::new()),
             panes: Mutex::new(HashMap::new()),
             notified: Mutex::new(HashMap::new()),
+            clipboard_at: Mutex::new(HashMap::new()),
+            sub_locks: Mutex::new(HashMap::new()),
             task: Mutex::new(None),
             pending_events: Mutex::new(None),
             closed: AtomicBool::new(false),
@@ -325,7 +392,7 @@ impl HostManager {
         let res = self
             .inner
             .connector
-            .connect(&target, choice, self.progress_for(&id))
+            .connect(&target, choice, replace, self.progress_for(&id))
             .await;
         let still_ours = lock(&self.inner.hosts)
             .get(&id)
@@ -364,6 +431,16 @@ impl HostManager {
             st.daemon_version = Some(est.daemon_version.clone());
             st.instance_id = Some(hello.instance_id);
             st.transport = Some(est.transport);
+            st.upgrade = est.upgrade.clone();
+            if let Some(u) = &est.upgrade {
+                tracing::info!(
+                    host = %host.id,
+                    running = %u.running_version,
+                    available = %u.available_version,
+                    live_panes = u.live_panes,
+                    "older daemon kept (live panes); restart_daemon upgrades it"
+                );
+            }
         }
         *lock(&host.session) = Some(est.session.clone());
         *lock(&host.pending_events) = Some(est.events);
@@ -449,10 +526,10 @@ impl HostManager {
             s.close().await;
         }
         let choice = *lock(&host.choice);
-        let fut = self
-            .inner
-            .connector
-            .connect(&host.target, choice, self.progress_for(&host.id));
+        let fut =
+            self.inner
+                .connector
+                .connect(&host.target, choice, false, self.progress_for(&host.id));
         tokio::pin!(fut);
         let res = loop {
             let deadline = sm.deadline();
@@ -484,6 +561,8 @@ impl HostManager {
                 let new_instance = session.server_hello().instance_id;
                 self.install(host, est);
                 let events = lock(&host.pending_events).take();
+                // Forgets the old RTT so the new session's first RTT sample
+                // is published (and prediction turns back on).
                 sm.reconnected(transport);
                 if old_instance != Some(new_instance) {
                     host.close_all_views();
@@ -505,11 +584,16 @@ impl HostManager {
             let session = session.clone();
             let host = host.clone();
             self.inner.rt.spawn(async move {
+                let sub = host.sub_lock(pane);
+                let _guard = sub.lock().await;
                 match session.subscribe(pane).await {
                     Ok(_) => lock(&view).set_subscribed(true),
                     Err(_) => {
                         lock(&view).close();
-                        lock(&host.views).remove(&pane);
+                        let mut views = lock(&host.views);
+                        if views.get(&pane).is_some_and(|v| Arc::ptr_eq(v, &view)) {
+                            views.remove(&pane);
+                        }
                     }
                 }
             });
@@ -538,6 +622,13 @@ impl HostManager {
                 lock(&host.status).instance_id = Some(server_hello.instance_id);
                 if instance_changed {
                     host.close_all_views();
+                } else if !resumed {
+                    // Fresh session: input numbering restarted at 1 and old
+                    // guesses can never be acked.
+                    let views: Vec<ViewRef> = lock(&host.views).values().cloned().collect();
+                    for v in views {
+                        lock(&v).reset_input();
+                    }
                 }
                 if let Ok(s) = host.session() {
                     self.refresh_panes(host, s);
@@ -556,6 +647,9 @@ impl HostManager {
         if let Event::Clipboard { pane, text } = event {
             if text.len() > civet_proto::MAX_CLIPBOARD_BYTES {
                 tracing::warn!(%pane, len = text.len(), "oversized clipboard write ignored");
+                return;
+            }
+            if !self.clipboard_allowed(host, pane) {
                 return;
             }
             self.inner.ui.clipboard(ClipboardWrite {
@@ -587,7 +681,8 @@ impl HostManager {
             }
             Event::PaneClosed { pane } => {
                 lock(&host.panes).remove(pane);
-                lock(&host.notified).remove(pane);
+                lock(&host.notified).retain(|(p, _), _| p != pane);
+                lock(&host.clipboard_at).remove(pane);
                 if let Some(v) = lock(&host.views).remove(pane) {
                     lock(&v).close();
                 }
@@ -609,6 +704,33 @@ impl HostManager {
         });
     }
 
+    /// OSC 52 policy (security): a program may set the clipboard only while
+    /// a Civet window is focused and its pane is attached (visible) in the
+    /// UI, at most once per [`ManagerConfig::clipboard_interval`]. Anything
+    /// else is dropped (a background pane cannot silently replace what the
+    /// user is about to paste).
+    fn clipboard_allowed(&self, host: &Host, pane: PaneId) -> bool {
+        if !host.view(pane).is_some_and(|v| lock(&v).is_attached()) {
+            tracing::debug!(host = %host.id, %pane, "OSC 52 dropped: pane not visible");
+            return false;
+        }
+        if !self.inner.ui.window_focused() {
+            tracing::debug!(host = %host.id, %pane, "OSC 52 dropped: window not focused");
+            return false;
+        }
+        let now = Instant::now();
+        let mut last = lock(&host.clipboard_at);
+        if last
+            .get(&pane)
+            .is_some_and(|t| now.duration_since(*t) < self.inner.cfg.clipboard_interval)
+        {
+            tracing::debug!(host = %host.id, %pane, "OSC 52 dropped: rate limited");
+            return false;
+        }
+        last.insert(pane, now);
+        true
+    }
+
     fn agent_attention(&self, host: &Arc<Host>, e: &AgentStatusEvent) {
         if !matches!(e.status, AgentStatus::Done | AgentStatus::NeedsInput)
             || e.previous == e.status
@@ -618,6 +740,14 @@ impl HostManager {
         let (title, worktree) = {
             let panes = lock(&host.panes);
             let info = panes.get(&e.pane);
+            // Only agents ask for attention: a pane launched as an agent, or
+            // one whose agent reports through its hook (`claude` started by
+            // hand in a shell). A plain shell exiting is not news.
+            let is_agent =
+                info.is_some_and(|p| p.agent.is_some()) || e.source == AgentStatusSource::Hook;
+            if !is_agent {
+                return;
+            }
             let worktree = info.and_then(|p| p.worktree.as_ref()).map(|w| w.0.clone());
             let title = info
                 .map(|p| p.title.trim().to_string())
@@ -647,12 +777,13 @@ impl HostManager {
         let now = Instant::now();
         {
             let mut n = lock(&host.notified);
-            if n.get(&e.pane)
+            let key = (e.pane, e.status);
+            if n.get(&key)
                 .is_some_and(|t| now.duration_since(*t) < self.inner.cfg.notify_interval)
             {
                 return;
             }
-            n.insert(e.pane, now);
+            n.insert(key, now);
         }
         let body = e
             .message
@@ -731,8 +862,8 @@ impl HostManager {
     // ----- daemon RPCs -----
 
     /// `daemon_info`
-    pub async fn daemon_info(&self, host_id: &str) -> Result<civet_proto::DaemonInfo, CmdError> {
-        expect_response!(self.request(host_id, Request::GetDaemonInfo).await?, Response::DaemonInfo(i) => i)
+    pub async fn daemon_info(&self, host_id: &str) -> Result<DaemonInfoView, CmdError> {
+        expect_response!(self.request(host_id, Request::GetDaemonInfo).await?, Response::DaemonInfo(i) => i.into())
     }
 
     /// `ping`
@@ -853,6 +984,9 @@ impl HostManager {
     ) -> Result<SubscribeInfo, CmdError> {
         let host = self.host(host_id)?;
         let session = host.session()?;
+        // Serialized with a lingering detach's unsubscribe of this pane.
+        let sub = host.sub_lock(pane);
+        let _guard = sub.lock().await;
         let view = {
             let size = lock(&host.panes)
                 .get(&pane)
@@ -898,16 +1032,20 @@ impl HostManager {
         let linger = self.inner.cfg.detach_linger;
         self.inner.rt.spawn(async move {
             tokio::time::sleep(linger).await;
-            let expired = {
-                let v = lock(&view);
-                !v.is_attached() && v.attach_gen() == generation
-            };
-            if !expired {
-                return;
-            }
+            // Holding the pane's subscription lock: an attach that starts
+            // now waits for the unsubscribe below and then subscribes again
+            // (instead of having its fresh subscription cancelled by it).
+            let sub = host.sub_lock(pane);
+            let _guard = sub.lock().await;
             {
+                // Re-checked under the view map lock: still this view, and
+                // nobody attached it since the detach.
                 let mut views = lock(&host.views);
-                if !views.get(&pane).is_some_and(|v| Arc::ptr_eq(v, &view)) {
+                let expired = views.get(&pane).is_some_and(|v| Arc::ptr_eq(v, &view)) && {
+                    let v = lock(&view);
+                    !v.is_attached() && v.attach_gen() == generation
+                };
+                if !expired {
                     return;
                 }
                 views.remove(&pane);

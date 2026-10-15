@@ -4,10 +4,18 @@
 // restore, auto-reconnect, worktree location, idle-stop, permission mode and
 // updates need backend support (see the follow-up list in the report).
 import { useEffect, useRef, useState } from 'react'
-import { disconnectHost, useStore, type SettingsPage } from '@/state/store'
+import {
+  disconnectHost,
+  reconnectHost,
+  requestRestartDaemon,
+  upgradeSummary,
+  useStore,
+  type SettingsPage
+} from '@/state/store'
 import { resetPrefs, setPrefs, usePrefs, type Prefs } from '@/state/prefs'
 import { focusActiveTerminal } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
+import { useTitleBarInset } from '@/lib/window-chrome'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -78,6 +86,21 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
       },
       { id: 'confirmCloseRunning', kind: 'switch', label: 'Confirm before closing a running agent' }
     ]
+  },
+  {
+    title: 'Terminal',
+    rows: [
+      {
+        id: 'prediction',
+        kind: 'seg',
+        label: 'Local echo prediction',
+        desc: 'Auto shows what you type right away (underlined until the host confirms it) on connections slower than ~30 ms, like mosh. Off always waits for the host to echo.',
+        options: [
+          ['auto', 'Auto'],
+          ['off', 'Off']
+        ]
+      }
+    ]
   }
 ]
 
@@ -104,6 +127,7 @@ export function SettingsView() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prefs = usePrefs()
   const searchRef = useRef<HTMLInputElement>(null)
+  const inset = useTitleBarInset()
   const close = () => {
     useStore.setState({ settings: null })
     setTimeout(focusActiveTerminal, 0)
@@ -138,7 +162,11 @@ export function SettingsView() {
   const showGeneral = page === 'general' || !!query
   return (
     <div className="absolute inset-0 z-40 flex flex-col bg-chrome" role="region" aria-label="Settings">
-      <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-3.5">
+      <div
+        data-tauri-drag-region="deep"
+        className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-3.5 select-none"
+        style={inset ? { paddingLeft: inset } : undefined}
+      >
         <span className="text-[13px] font-semibold text-foreground">Civet</span>
         <span className="text-dim">/</span>
         <span className="text-[13px] text-muted-foreground">Settings</span>
@@ -329,7 +357,20 @@ function HostsPage() {
                   {h.transport ? ` · ${h.transport === 'quic' ? 'QUIC' : 'SSH tunnel'}` : ''}
                   {h.daemonVersion ? ` · civetd ${h.daemonVersion}` : ''}
                 </div>
+                {h.upgrade && (
+                  <div className="mt-0.5 font-mono text-[11.5px] text-status-wait">{upgradeSummary(id)}</div>
+                )}
               </div>
+              {(h.state === 'failed' || h.state === 'disconnected') && (
+                <button type="button" className={btn} onClick={() => void reconnectHost(id)}>
+                  Reconnect
+                </button>
+              )}
+              {(h.state === 'connected' || h.upgrade || h.errorCode === 'daemonBusy') && (
+                <button type="button" className={btn} onClick={() => requestRestartDaemon(id)}>
+                  Restart daemon…
+                </button>
+              )}
               <button type="button" className={btn} onClick={() => useStore.setState({ addRepoFor: id })}>
                 Add repository…
               </button>

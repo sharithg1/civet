@@ -81,6 +81,10 @@ export interface CivetBackend {
   readonly kind: 'tauri' | 'mock'
 
   connectHost(target: HostTarget, transport?: TransportChoice): Promise<HostSummary>
+  /** Connect again with the host's stored target (ssh port/args) and transport choice. */
+  reconnectHost(hostId: string): Promise<HostSummary>
+  /** Restart the host's daemon on this app's version (closes its panes). */
+  restartDaemon(hostId: string): Promise<HostSummary>
   disconnectHost(hostId: string): Promise<void>
   listHosts(): Promise<HostSummary[]>
   notifyNetworkChange(): Promise<void>
@@ -161,6 +165,12 @@ export class TauriBackend implements CivetBackend {
 
   connectHost(target: HostTarget, transport: TransportChoice = 'auto') {
     return this.call<HostSummary>('connect_host', { target, transport })
+  }
+  reconnectHost(hostId: string) {
+    return this.call<HostSummary>('reconnect_host', { hostId })
+  }
+  restartDaemon(hostId: string) {
+    return this.call<HostSummary>('restart_daemon', { hostId })
   }
   disconnectHost(hostId: string) {
     return this.callVoid('disconnect_host', { hostId })

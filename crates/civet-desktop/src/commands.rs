@@ -4,7 +4,7 @@
 //! Keep the list in sync with `build.rs` (ACL) and the capability file.
 
 use civet_proto::{
-    AgentStatus, DaemonInfo, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, RepoInfo,
+    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, RepoInfo,
     ScrollbackQuery, SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
 };
 use std::sync::Arc;
@@ -14,7 +14,8 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
-    HostSummary, HostTarget, LaunchedAgent, PingResult, ScrollbackPageView, TransportChoice,
+    DaemonInfoView, HostSummary, HostTarget, LaunchedAgent, PingResult, ScrollbackPageView,
+    TransportChoice,
 };
 use crate::hosts::HostManager;
 
@@ -55,6 +56,20 @@ pub async fn connect_host(
         .await
 }
 
+/// Connect again with the host's stored target (ssh port / extra args) and
+/// transport choice (the Reconnect actions).
+#[tauri::command]
+pub async fn reconnect_host(state: State<'_, AppState>, host_id: String) -> Res<HostSummary> {
+    state.hosts.reconnect_host(&host_id).await
+}
+
+/// Restart the host's daemon on this app's version (`--replace`; closes its
+/// panes). The UI confirms first.
+#[tauri::command]
+pub async fn restart_daemon(state: State<'_, AppState>, host_id: String) -> Res<HostSummary> {
+    state.hosts.restart_daemon(&host_id).await
+}
+
 #[tauri::command]
 pub async fn disconnect_host(state: State<'_, AppState>, host_id: String) -> Res<()> {
     state.hosts.disconnect_host(&host_id).await
@@ -72,7 +87,7 @@ pub async fn notify_network_change(state: State<'_, AppState>) -> Res<()> {
 }
 
 #[tauri::command]
-pub async fn daemon_info(state: State<'_, AppState>, host_id: String) -> Res<DaemonInfo> {
+pub async fn daemon_info(state: State<'_, AppState>, host_id: String) -> Res<DaemonInfoView> {
     state.hosts.daemon_info(&host_id).await
 }
 
@@ -260,6 +275,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
 {
     tauri::generate_handler![
         connect_host,
+        reconnect_host,
+        restart_daemon,
         disconnect_host,
         list_hosts,
         notify_network_change,

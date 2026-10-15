@@ -77,6 +77,43 @@ describe('MockBackend', () => {
     expect(kinds).toContain(RecordKind.PaneClosed)
   })
 
+  it('offers a daemon upgrade on an "old" host; restart_daemon replaces it', async () => {
+    const b = new MockBackend()
+    const states: HostStateEvent[] = []
+    await b.onHostState((e) => states.push(e))
+    const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
+    await vi.runAllTimersAsync()
+    const s = await p
+    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.2', livePanes: 6 })
+    expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
+    // Reconnect keeps the stored target and transport.
+    b.simulateFailure('old-box', 'lost')
+    await vi.advanceTimersByTimeAsync(400)
+    expect(states.at(-1)!.state).toBe('failed')
+    const r = b.reconnectHost('old-box')
+    await vi.runAllTimersAsync()
+    expect((await r).transport).toBe('stream')
+    expect(b.targets.get('old-box')!.target).toMatchObject({ port: 2222 })
+    const restarted = b.restartDaemon('old-box')
+    await vi.runAllTimersAsync()
+    const after = await restarted
+    expect(after.upgrade).toBeNull()
+    expect(after.daemonVersion).toBe('0.1.2')
+    expect(after.instanceId).not.toBe(s.instanceId)
+    expect(await b.listPanes('old-box')).toEqual([])
+    await expect(b.reconnectHost('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
+  })
+
+  it('only agent panes ask for attention', async () => {
+    const { b } = await connected()
+    const seen: number[] = []
+    await b.onAgentAttention((e) => seen.push(e.pane))
+    const shell = (await b.listPanes('devbox')).find((p) => !p.agent && !p.exited)!
+    await b.writeInput('devbox', shell.id, 'exit\r')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(seen).toEqual([])
+  })
+
   it('rejects unknown hosts with a CivetError code', async () => {
     const b = new MockBackend()
     await expect(b.listRepos('nope')).rejects.toMatchObject({ code: 'noSuchHost' })

@@ -109,7 +109,9 @@ export function ConfirmDialog() {
     <AlertDialog open={req !== null} onOpenChange={(open) => !open && close()}>
       <AlertDialogContent
         onOpenAutoFocus={(e) => {
-          // Enter confirms, as before (Radix would focus Cancel).
+          // Enter confirms, as before (Radix would focus Cancel), unless the
+          // request asks for the safer default.
+          if (req?.focusCancel) return
           e.preventDefault()
           confirmRef.current?.focus()
         }}

@@ -1626,15 +1626,19 @@ Rust module layout (suggested): `main.rs` (builder, plugins, commands),
 Argument keys are camelCase (Tauri's default). Return values are the proto
 JSON forms unless shown. Errors reject the promise with
 `{ code: string, message: string }` where `code` is an `ErrorCode` name
-(`"notFound"`, …) or one of `"transport"`, `"bootstrap"`, `"noSuchHost"`.
+(`"notFound"`, …) or one of `"transport"`, `"bootstrap"`, `"noSuchHost"`,
+`"daemonBusy"` (an incompatible daemon with live panes is running: offer
+`restart_daemon`).
 
 | Command | Args | Returns |
 |---|---|---|
 | `connect_host` | `{ target: HostTarget, transport?: "auto" \| "quic" \| "ssh" }` | `HostSummary` (resolves once the first connection is up; progress via events) |
+| `reconnect_host` | `{ hostId }` | `HostSummary` (connect again with the stored target, incl. ssh port / extra args, and transport choice; `"local"` works without a previous connect) |
+| `restart_daemon` | `{ hostId }` | `HostSummary` (re-bootstrap with `replace`: restarts the daemon on this app's version and closes its panes; the UI confirms first) |
 | `disconnect_host` | `{ hostId }` | `null` |
 | `list_hosts` | `{}` | `HostSummary[]` |
 | `notify_network_change` | `{}` | `null` (UI calls it on `window` `online` and `visibilitychange`→visible) |
-| `daemon_info` | `{ hostId }` | `DaemonInfo` |
+| `daemon_info` | `{ hostId }` | `DaemonInfo` with `instanceId` as a decimal string |
 | `ping` | `{ hostId }` | `{ rttMs: number }` |
 | `list_repos` | `{ hostId }` | `RepoInfo[]` |
 | `add_repo` | `{ hostId, path }` | `RepoInfo` |
@@ -1647,13 +1651,13 @@ JSON forms unless shown. Errors reject the promise with
 | `launch_agent` | `{ hostId, request: LaunchAgentRequest }` | `{ worktree: WorktreeInfo, pane: PaneInfo }` |
 | `attach_pane` | `{ hostId, pane, onOutput: Channel<ArrayBuffer> }` | `SubscribeInfo` (first record on the channel is a Full) |
 | `detach_pane` | `{ hostId, pane }` | `null` |
-| `write_input` | `{ hostId, pane, data: string }` | `null` (`data` = xterm `onData` string, sent as UTF-8) |
+| `write_input` | `{ hostId, pane, data: string }` | `null` (`data` = xterm `onData` string, sent as UTF-8). Seqs follow arrival order: the UI keeps one input invoke per pane in flight |
 | `write_input_binary` | `{ hostId, pane, data: string }` | `null` (`onBinary` string: each char code 0–255 is one byte) |
 | `resize_pane` | `{ hostId, pane, size: TermSize }` | `null` |
 | `kill_pane` | `{ hostId, pane, signal?: "hangup" \| "terminate" \| "kill" }` | `null` |
 | `fetch_scrollback` | `{ hostId, pane, query: ScrollbackQuery }` | `ScrollbackPageView` |
 | `set_agent_status` | `{ hostId, pane, status: AgentStatus }` | `null` |
-| `set_prediction` | `{ enabled: boolean }` | `null` (phase 2) |
+| `set_prediction` | `{ enabled: boolean }` | `null` (Settings → "Local echo prediction": Auto = true, Off = false; persisted by the UI and sent at startup) |
 | `write_clipboard` | `{ text: string }` | `null` (Cmd+C on an xterm selection; sync command, runs on the main thread for NSPasteboard) |
 
 ```ts
@@ -1668,7 +1672,12 @@ type HostSummary = {
   transport: "quic" | "stream" | null;
   daemonVersion: string | null;
   instanceId: string | null; // u64 as decimal string (JS number would lose precision)
+  upgrade: DaemonUpgrade | null;
 };
+
+// An older daemon kept because it has live panes although this app's newer
+// civetd is installed (BootstrapInfo.upgrade_available).
+type DaemonUpgrade = { runningVersion: string; availableVersion: string; livePanes: number };
 
 type ScrollbackPageView = {
   start: number; oldestAvailable: number; endAvailable: number;
@@ -1679,7 +1688,7 @@ type ScrollbackPageView = {
 
 Numbers: pane ids, state numbers and line numbers are u64 but stay far below
 2^53 in practice; JSON numbers are acceptable for them. `instanceId` is a
-string.
+string (`HostSummary.instanceId`, `DaemonInfo.instanceId`).
 
 ### 6.2 Binary channel framing (`attach_pane` → `onOutput`)
 
@@ -1721,11 +1730,11 @@ visible latency for keystroke echoes).
 
 | Event | Payload |
 |---|---|
-| `civet://host-state` | `{ hostId, state: HostState, transport: "quic" \| "stream" \| null, rttMs: number \| null, message: string \| null }` |
+| `civet://host-state` | `{ hostId, state: HostState, transport: "quic" \| "stream" \| null, rttMs: number \| null, message: string \| null, upgrade: DaemonUpgrade \| null }` |
 | `civet://bootstrap-progress` | `{ hostId, step: "probe" \| "upload" \| "start" \| "resolve" \| "dial" \| "fallback", message: string \| null }` |
 | `civet://daemon-event` | `{ hostId, event: Event }` (proto JSON, e.g. `{ "paneTitle": { "pane": 3, "title": "vim" } }`) |
 | `civet://agent-attention` | `{ hostId, pane, status: "done" \| "needsInput", previous, title, worktree: string \| null, message: string \| null }` |
-| `civet://clipboard` | `{ hostId, pane, chars: number, ok: boolean }`: a pane's program set the clipboard (OSC 52). Rust already wrote the system clipboard (NSPasteboard, no user gesture needed); the UI only shows a "Copied" toast. `Event::Clipboard` is not forwarded as a `civet://daemon-event` |
+| `civet://clipboard` | `{ hostId, pane, chars: number, ok: boolean }`: a pane's program set the clipboard (OSC 52). Rust already wrote the system clipboard (NSPasteboard, no user gesture needed); success is silent, the UI shows an error toast when `ok` is false. Applied only while a Civet window is focused and the pane is attached in the UI, at most once per second per pane; otherwise dropped (debug log, no event). `Event::Clipboard` is not forwarded as a `civet://daemon-event` |
 
 ```ts
 type HostState = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
@@ -1738,15 +1747,20 @@ Mapping from transport `LinkState` (in Rust, `hosts.rs`):
 - `Recovering { since_ms }` → start a 1 s timer; emit `"reconnecting"` only
   if still not `Connected` when it fires. Sub-second resumes are invisible.
 - `Failed { needs_bootstrap: true }` → run bootstrap again automatically
-  once (progress events); if that fails, `"failed"`.
+  once (progress events); if that fails, `"failed"`. The new session's RTT
+  is published again (prediction needs it).
+- `Failed { reason: REPLACED_REASON }` → `"failed"` with the message
+  "another Civet window or client took over this host's connection;
+  reconnect here to take it back".
 - `Closed` → `"disconnected"`.
 
 Desktop notifications: on `Event::AgentStatus` with `status` in
-{`done`, `needsInput`} and `previous != status`, emit
+{`done`, `needsInput`} and `previous != status`, for an agent pane
+(`PaneInfo.agent` set, or the event's source is `hook`), emit
 `civet://agent-attention` and, if no app window is focused, show a native
 notification via `tauri-plugin-notification` (title = pane title or branch,
 body = message or "Agent finished" / "Agent needs input"). At most one
-notification per pane per 10 s.
+notification per (pane, status) per 10 s. Shell panes never notify.
 
 ### 6.4 Wake / network detection (`wake.rs`)
 
@@ -1767,6 +1781,21 @@ when UDP gets blocked mid-session and back to QUIC when it works again
 (probe every 10 s), so "auto" is kept for re-bootstraps. `"quic"` = QUIC
 only, `"ssh"` = tunnel only. The desktop's client id is persisted in
 `~/.civet/client-id-desktop` (not shared with civet-cli).
+
+Daemon binaries: the packaged app bundles `civetd-<triple>` files in
+`Civet.app/Contents/Resources/civet-dist/` (x86_64 / aarch64 Linux musl for
+remotes, this Mac's triple for the Local host), built by
+`scripts/build-remote.sh --bundle` as `tauri build`'s `beforeBuildCommand`.
+Upload search order: the bundled dir, `$CIVET_DIST_DIR`, `~/.civet/dist`,
+the `civetd` next to the executable (`BinarySource::with_bundled`). Local:
+`$CIVET_CIVETD`, the bundled `civetd-<this triple>` (version-checked), the
+`civetd` next to the executable (dev: the workspace target dir), `$PATH`,
+`~/.civet/bin/civetd`. Dev builds (`tauri dev`) bundle nothing.
+
+Daemon upgrades: when the bootstrap keeps an older daemon with live panes,
+`HostSummary.upgrade` / `host-state.upgrade` are set; the UI shows the
+upgrade (banner above the terminal, host popover, sidebar, one toast) with
+"Restart daemon (closes K panes)" → confirm → `restart_daemon`.
 
 ### 6.6 Local-echo prediction (phase 2, week 5+)
 

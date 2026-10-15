@@ -212,6 +212,22 @@ impl PaneView {
         }
     }
 
+    /// The session reconnected without resuming (`Connected { resumed:
+    /// false }`): the daemon numbers this client's input from 1 again, so
+    /// pending guesses (keyed by old seqs) can never be confirmed and the
+    /// acked seq must restart at 0.
+    pub fn reset_input(&mut self) {
+        self.acked_input_seq = 0;
+        if let Some(undo) = self.predictor.clear() {
+            self.send_overlay(undo);
+        }
+    }
+
+    /// Highest input seq the daemon acknowledged for this view.
+    pub fn acked_input_seq(&self) -> u64 {
+        self.acked_input_seq
+    }
+
     /// Prediction was switched off: undo visible guesses.
     pub fn clear_predictions(&mut self) {
         if let Some(undo) = self.predictor.clear() {
@@ -355,5 +371,34 @@ mod tests {
         v.close();
         let r = drain(&mut rx2).await;
         assert_eq!(r[0].0.kind, RecordKind::PaneClosed);
+    }
+
+    #[tokio::test]
+    async fn reset_input_after_a_fresh_session() {
+        let size = TermSize::new(20, 4);
+        let mut srv = Server::new(size);
+        let mut v = PaneView::new(PaneId(7), size, &Handle::current());
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        v.attach(Arc::new(tx));
+        v.set_subscribed(true);
+        srv.term.feed(b"$ ");
+        v.on_screen(&srv.update(0));
+        v.on_input_ack(41);
+        assert_eq!(v.acked_input_seq(), 41);
+        // A guess drawn for seq 42 (shown: RTT is high).
+        v.on_input(42, b"x", true);
+        assert_eq!(v.predictor().pending(), 1);
+        drain(&mut rx).await;
+
+        v.reset_input();
+        assert_eq!(v.acked_input_seq(), 0);
+        assert_eq!(v.predictor().pending(), 0);
+        let r = drain(&mut rx).await;
+        assert_eq!(r.len(), 1, "undo of the visible guess");
+        assert_eq!(r[0].0.kind, RecordKind::Predict);
+        assert_eq!(r[0].0.acked_input_seq, 0);
+        // New numbering from 1 is acked normally.
+        v.on_input_ack(1);
+        assert_eq!(v.acked_input_seq(), 1);
     }
 }

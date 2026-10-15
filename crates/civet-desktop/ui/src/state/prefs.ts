@@ -8,6 +8,17 @@ export type WorktreeLabel = 'task' | 'branch'
 export type SidebarTabs = 'selected' | 'all' | 'none'
 export type StepKind = 'agent' | 'terminal'
 export type CreateStep = { kind: StepKind; cmd: string }
+/** Local echo prediction: `auto` = mosh-style, only on links slower than ~30 ms. */
+export type Prediction = 'auto' | 'off'
+
+type PrefsListener = (next: Prefs, prev: Prefs) => void
+const listeners = new Set<PrefsListener>()
+
+/** Called after every `setPrefs` / `resetPrefs` (e.g. to push `set_prediction`). */
+export function onPrefsChange(cb: PrefsListener): () => void {
+  listeners.add(cb)
+  return () => listeners.delete(cb)
+}
 
 export type Prefs = {
   /** Primary worktree label: the agent's task title (pane title) or the branch. */
@@ -22,6 +33,8 @@ export type Prefs = {
   confirmCloseRunning: boolean
   /** Saved on-create steps per `${hostId}\0${repoId}` ("Save as default for …"). */
   createSteps: Record<string, CreateStep[]>
+  /** Local echo prediction (sent to the core with `set_prediction`). */
+  prediction: Prediction
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -30,7 +43,8 @@ export const DEFAULT_PREFS: Prefs = {
   recentCount: 5,
   agentCommand: 'claude',
   confirmCloseRunning: true,
-  createSteps: {}
+  createSteps: {},
+  prediction: 'auto'
 }
 
 const KEY = 'civet.prefs.v1'
@@ -48,12 +62,15 @@ function load(): Prefs {
 export const usePrefs = create<Prefs>(load)
 
 export function setPrefs(patch: Partial<Prefs>): void {
+  const prev = usePrefs.getState()
   usePrefs.setState(patch)
+  const next = usePrefs.getState()
   try {
-    localStorage.setItem(KEY, JSON.stringify(usePrefs.getState()))
+    localStorage.setItem(KEY, JSON.stringify(next))
   } catch {
     // Storage unavailable (private mode): keep the in-memory value.
   }
+  for (const cb of listeners) cb(next, prev)
 }
 
 export function resetPrefs(): void {

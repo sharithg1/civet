@@ -48,6 +48,8 @@ describe('TauriBackend commands', () => {
     await backend.setPrediction(true)
     await backend.ping('h')
     await backend.daemonInfo('h')
+    await backend.reconnectHost('dev@box')
+    await backend.restartDaemon('local')
     expect(invoke.mock.calls).toEqual([
       ['connect_host', { target: { kind: 'ssh', destination: 'dev@box' }, transport: 'ssh' }],
       ['disconnect_host', { hostId: 'dev@box' }],
@@ -72,7 +74,9 @@ describe('TauriBackend commands', () => {
       ['set_agent_status', { hostId: 'h', pane: 3, status: 'done' }],
       ['set_prediction', { enabled: true }],
       ['ping', { hostId: 'h' }],
-      ['daemon_info', { hostId: 'h' }]
+      ['daemon_info', { hostId: 'h' }],
+      ['reconnect_host', { hostId: 'dev@box' }],
+      ['restart_daemon', { hostId: 'local' }]
     ])
   })
 

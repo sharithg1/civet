@@ -102,6 +102,69 @@ pub struct HostSummary {
     pub daemon_version: Option<String>,
     /// Daemon instance id (u64 as a decimal string).
     pub instance_id: Option<String>,
+    /// A newer `civetd` is installed but the running (older) one was kept
+    /// because it has live panes; `restart_daemon` upgrades it.
+    pub upgrade: Option<DaemonUpgrade>,
+}
+
+/// An older daemon kept running (it has live panes) although a newer
+/// `civetd` is installed (`BootstrapInfo::upgrade_available`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonUpgrade {
+    /// Version of the running daemon.
+    pub running_version: String,
+    /// Version a restart would run (this client's).
+    pub available_version: String,
+    /// Live panes of the running daemon at bootstrap time (a restart
+    /// closes them).
+    pub live_panes: u32,
+}
+
+impl DaemonUpgrade {
+    /// From a bootstrap line: Some only if `upgrade_available`.
+    pub fn from_bootstrap(info: &civet_proto::BootstrapInfo) -> Option<Self> {
+        info.upgrade_available.then(|| Self {
+            running_version: info.daemon_version.clone(),
+            available_version: info
+                .available_version
+                .clone()
+                .unwrap_or_else(|| "newer".to_string()),
+            live_panes: info.live_panes.unwrap_or(0),
+        })
+    }
+}
+
+/// `daemon_info` result: the proto `DaemonInfo` with the u64 instance id as
+/// a decimal string (a JSON number would lose precision in JS).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonInfoView {
+    /// `civetd` version.
+    pub daemon_version: String,
+    /// Protocol version.
+    pub proto_version: u32,
+    /// Process id.
+    pub pid: u32,
+    /// Daemon instance id (u64 as a decimal string).
+    pub instance_id: String,
+    /// Start time, ms since epoch.
+    pub started_at_ms: u64,
+    /// Host name.
+    pub hostname: String,
+}
+
+impl From<civet_proto::DaemonInfo> for DaemonInfoView {
+    fn from(i: civet_proto::DaemonInfo) -> Self {
+        Self {
+            daemon_version: i.daemon_version,
+            proto_version: i.proto_version,
+            pid: i.pid,
+            instance_id: i.instance_id.to_string(),
+            started_at_ms: i.started_at_ms,
+            hostname: i.hostname,
+        }
+    }
 }
 
 /// `civet://host-state`
@@ -118,6 +181,8 @@ pub struct HostStateEvent {
     pub rtt_ms: Option<u32>,
     /// Why (failures, reconnect reason).
     pub message: Option<String>,
+    /// See [`HostSummary::upgrade`].
+    pub upgrade: Option<DaemonUpgrade>,
 }
 
 /// `civet://bootstrap-progress` steps.
@@ -297,11 +362,56 @@ mod tests {
             transport: Some(TransportKind::Stream),
             daemon_version: Some("0.1.0".into()),
             instance_id: Some(u64::MAX.to_string()),
+            upgrade: Some(DaemonUpgrade {
+                running_version: "0.1.1".into(),
+                available_version: "0.1.2".into(),
+                live_panes: 3,
+            }),
         };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["hostId"], "local");
         assert_eq!(v["state"], "reconnecting");
         assert_eq!(v["transport"], "stream");
         assert_eq!(v["instanceId"], "18446744073709551615");
+        assert_eq!(v["upgrade"]["runningVersion"], "0.1.1");
+        assert_eq!(v["upgrade"]["availableVersion"], "0.1.2");
+        assert_eq!(v["upgrade"]["livePanes"], 3);
+    }
+
+    #[test]
+    fn daemon_info_instance_id_is_a_string() {
+        let v = serde_json::to_value(DaemonInfoView::from(civet_proto::DaemonInfo {
+            daemon_version: "0.1.2".into(),
+            proto_version: 1,
+            pid: 7,
+            instance_id: u64::MAX,
+            started_at_ms: 1,
+            hostname: "h".into(),
+        }))
+        .unwrap();
+        assert_eq!(v["instanceId"], "18446744073709551615");
+        assert_eq!(v["daemonVersion"], "0.1.2");
+    }
+
+    #[test]
+    fn upgrade_from_bootstrap_line() {
+        let mut info = civet_proto::BootstrapInfo::new(
+            "0.1.1",
+            1,
+            civet_proto::SessionKey([0; 32]),
+            civet_proto::CertFingerprint([0; 32]),
+        );
+        assert_eq!(DaemonUpgrade::from_bootstrap(&info), None);
+        info.upgrade_available = true;
+        info.available_version = Some("0.1.2".into());
+        info.live_panes = Some(4);
+        assert_eq!(
+            DaemonUpgrade::from_bootstrap(&info),
+            Some(DaemonUpgrade {
+                running_version: "0.1.1".into(),
+                available_version: "0.1.2".into(),
+                live_panes: 4
+            })
+        );
     }
 }

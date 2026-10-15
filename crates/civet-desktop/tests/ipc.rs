@@ -3,7 +3,7 @@
 //! exact JSON argument names `ui/src/backend.ts` sends, rejects with
 //! `{ code, message }`, and is permitted for the main window.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use civet_desktop::commands::{AppState, handler};
 use civet_desktop::error::CmdError;
@@ -31,16 +31,25 @@ impl UiEvents for NullUi {
     fn notify(&self, _: &str, _: &str) {}
 }
 
-/// Every connect fails like an unreachable ssh host.
-struct Unreachable;
+/// Every connect fails like an unreachable ssh host; records what it was
+/// asked to connect to.
+#[derive(Default)]
+struct Unreachable {
+    calls: Mutex<Vec<(HostTarget, TransportChoice, bool)>>,
+}
 
 impl Connector for Unreachable {
     fn connect<'a>(
         &'a self,
-        _: &'a HostTarget,
-        _: TransportChoice,
+        target: &'a HostTarget,
+        choice: TransportChoice,
+        replace: bool,
         _: Progress,
     ) -> BoxFuture<'a, Result<Established, CmdError>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((target.clone(), choice, replace));
         Box::pin(async {
             Err(CmdError::bootstrap(
                 "ssh failed (exit Some(255)): unreachable",
@@ -73,10 +82,11 @@ fn every_command_through_ipc() {
         .build()
         .unwrap();
     tauri::async_runtime::set(rt.handle().clone());
+    let connector = Arc::new(Unreachable::default());
     let hosts = HostManager::new(
         ManagerConfig::default(),
         Arc::new(NullUi),
-        Arc::new(Unreachable),
+        connector.clone(),
         rt.handle().clone(),
     );
     let app = mock_builder()
@@ -110,6 +120,35 @@ fn every_command_through_ipc() {
     let hosts = invoke(&w, "list_hosts", json!({})).unwrap();
     assert_eq!(hosts[0]["hostId"], "box");
     assert_eq!(hosts[0]["state"], "failed");
+    assert_eq!(hosts[0]["upgrade"], Value::Null);
+
+    // reconnect_host / restart_daemon reuse the stored target (port and
+    // extra ssh args) and transport choice; restart passes replace.
+    let target = json!({ "kind": "ssh", "destination": "opts", "port": 2222, "extraArgs": ["-J", "bastion"] });
+    let _ = invoke(
+        &w,
+        "connect_host",
+        json!({ "target": target, "transport": "ssh" }),
+    );
+    let err = invoke(&w, "reconnect_host", json!({ "hostId": "opts" })).unwrap_err();
+    assert_eq!(err["code"], "bootstrap", "{err}");
+    let err = invoke(&w, "restart_daemon", json!({ "hostId": "opts" })).unwrap_err();
+    assert_eq!(err["code"], "bootstrap", "{err}");
+    let expected = HostTarget::Ssh {
+        destination: "opts".into(),
+        port: Some(2222),
+        extra_args: vec!["-J".into(), "bastion".into()],
+    };
+    {
+        let calls = connector.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4, "{calls:?}");
+        assert_eq!(calls[2], (expected.clone(), TransportChoice::Ssh, false));
+        assert_eq!(calls[3], (expected, TransportChoice::Ssh, true));
+    }
+    let err = invoke(&w, "reconnect_host", json!({ "hostId": "nope" })).unwrap_err();
+    assert_eq!(err["code"], "noSuchHost", "{err}");
+    let err = invoke(&w, "restart_daemon", json!({ "hostId": "nope" })).unwrap_err();
+    assert_eq!(err["code"], "noSuchHost", "{err}");
 
     // Every host command with the UI's argument names: the arguments
     // deserialize (else Tauri rejects with a string, not { code }) and the

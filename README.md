@@ -51,6 +51,38 @@ Requirements: a stable Rust toolchain (pinned by `rust-toolchain.toml`),
 `git`; for the desktop app Node + pnpm; for remote binaries zig +
 `cargo-zigbuild`.
 
+### First run
+
+1. Put cargo on your `PATH`. rustup installs it in `~/.cargo/bin` but only
+   adds it to the shell rc files it knows about; if `cargo` is not found:
+
+   ```sh
+   source ~/.cargo/env                          # this shell only
+   echo '. "$HOME/.cargo/env"' >> ~/.zshrc      # every new shell
+   ```
+
+2. Build the Linux daemons the app uploads to your dev box (once per
+   version; the app refuses a stale file and says so):
+
+   ```sh
+   brew install zig && cargo install --locked cargo-zigbuild
+   scripts/build-remote.sh --install            # x86_64 + aarch64 musl -> ~/.civet/dist
+   ```
+
+3. Run the app:
+
+   ```sh
+   cd crates/civet-desktop/ui && pnpm install
+   pnpm tauri dev                               # builds the Rust side too
+   ```
+
+   Connect "This Mac" (uses the workspace `target/debug/civetd`; build it
+   with `cargo build -p civetd` first) or an ssh destination (key or agent
+   auth; `~/.ssh/config` aliases work).
+
+A packaged app (`pnpm tauri build`) needs none of steps 1–2 at runtime: it
+bundles the daemons (see [Desktop app](#desktop-app)).
+
 ### Daemon
 
 ```sh
@@ -107,7 +139,55 @@ cd crates/civet-desktop/ui
 pnpm install
 pnpm tauri dev          # the Tauri app (builds the Rust side too)
 pnpm dev                # UI only in a browser, against the in-memory mock backend
+pnpm tauri build --bundles app   # release Civet.app with the daemons bundled
 ```
+
+`tauri build` first runs `scripts/build-remote.sh --bundle`
+(`beforeBuildCommand`): `civetd` for x86_64 and aarch64 Linux (musl, via
+zig) and for this Mac, into `crates/civet-desktop/civet-dist/`, which is
+bundled as `Civet.app/Contents/Resources/civet-dist/`. The app uploads from
+there first (then `$CIVET_DIST_DIR`, `~/.civet/dist`) and runs the bundled
+Mac `civetd` for "This Mac". `tauri dev` stays fast: it bundles nothing and
+uses `~/.civet/dist` plus the workspace `target/debug/civetd`.
+`CIVET_SKIP_DAEMONS=1 pnpm tauri build` skips the daemon builds.
+
+**Daemon upgrades.** Every app version uploads its own `civetd-<version>`
+next to older ones (never overwriting a running binary). On connect the new
+binary's `bootstrap` decides what runs:
+
+* no daemon, or an older daemon with no panes: start / replace it on the new
+  version;
+* an older, protocol-compatible daemon with live panes: keep it (your
+  sessions survive) and report the upgrade. The app shows
+  "civetd v0.1.1 running · v0.1.2 available · 3 live panes" above the
+  terminal, in the host popover (status bar) and the sidebar, with a
+  one-time toast, and offers **Restart daemon (closes 3 panes)**. It asks
+  first, then re-bootstraps with `--replace` (`restart_daemon`): the old
+  daemon stops (its panes' processes get SIGHUP), the new one starts, and the
+  app reconnects. "Later" hides the banner until the next version;
+* an incompatible daemon with live panes: the connect fails with
+  "incompatible … has live panes" and the banner offers the same restart.
+
+The same applies to "This Mac". `civet-cli --replace` / `civetd bootstrap
+--replace` do it by hand.
+
+**Shell integration on the host.** Every pane gets `TERM_PROGRAM=civet`
+(so agents do not emit another terminal's private escape codes),
+`CIVET_PANE_ID`, `CIVET_STATUS_FILE` and a shim dir first on `PATH` with
+`claude` and `codex` wrappers. The wrappers exec the real program with
+Civet's status hooks added (`claude --settings <hooks json>`,
+`codex -c notify=…`) without touching `~/.claude` or `~/.codex`, so `claude`
+typed in any shell pane reports running / needs input / done. zsh panes
+start with `ZDOTDIR` pointing at a small shim that restores your `ZDOTDIR`,
+sources your `.zshenv` and keeps the shim dir first after your startup
+files; bash uses `PROMPT_COMMAND`, fish `-C`. Details and manual wiring:
+[crates/civet-session/HOOKS.md](crates/civet-session/HOOKS.md). Only agent
+panes (launched as an agent, or reporting through a hook) raise attention
+toasts and notifications; a shell exiting does not.
+
+**Settings → General → Terminal → Local echo prediction**: Auto (mosh-style
+underlined guesses on links slower than ~30 ms) or Off; stored with the
+other preferences.
 
 ## Tests
 
@@ -162,10 +242,10 @@ on the client's mirror of the screen (server echo, no local prediction).
 | Plan success metric | Target | Measured | Status |
 |---|---|---|---|
 | Network back → live, typeable terminal | < 200 ms | Client rebind (wake / Wi-Fi switch, `notify_network_change`), 20 runs: p50 7.3 / p95 9.9 ms at 0 ms RTT; p50 109.7 / p95 112.2 ms at 100 ms RTT (= 1 RTT). After a blackout with output running, at 50 ms RTT: 10 s → 118 ms to echo, 60 s → 116 ms, 300 s → 168 ms. Silent NAT rebinding, 20 runs: p95 9.9 ms at 0 ms RTT, **p95 214.9 ms at 100 ms RTT** (2 RTT, see note 1) | Met for wake / network change; NAT rebinding misses at 100 ms RTT by design of QUIC |
-| Keystroke → screen (local echo) | < 10 ms | Server echo at 0 ms RTT: p50 9.0 ms. Local-echo prediction (below 10 ms regardless of RTT) lives in civet-desktop and is not measured here | See desktop build |
+| Keystroke → screen (local echo) | < 10 ms | What is measured: `ClientSession::send_input` → the echoed bytes in the client's mirror of the screen (in-process client, loopback, release), i.e. the server echo with no prediction: p50 9.0 ms at 0 ms RTT. Not measured: xterm.js rendering in the webview, and local-echo prediction (the predicted cells are queued to the pane's channel in the same `write_input` call and flushed by the ≤ 4 ms batcher; on by default above 30 ms RTT, Settings → Local echo prediction) | Server echo met on a LAN-like link; end-to-end on screen not measured |
 | Survives Wi-Fi change, lid close/open, client restart: 100% of runs, no lost output | 100% | 40/40 rebinds at each RTT migrated without reconnect; 10 / 60 / 300 s blackouts with output running: resumed in place, every line present once and in order (300 s: 5084 lines printed while away, 3078-line replay gap fetched); client restart (token or fresh): every line present; 60 s soak at 10% loss with 21 network changes (incl. 7 s blackouts, 2 resumed re-dials): typed text exact. 5% / 20% loss at 100 ms RTT: input exactly once and in order, screen converged, history exact. Real macOS sleep (`scripts/sleep-wake-loop.sh`): not run here | Met (simulated) |
 | Idle daemon memory per session | < 20 MB | +0.27 MiB per idle shell pane (daemon RSS 6.8 → 9.5 MiB for 10 panes); +5.1 MiB per pane after filling the 10 000-line scrollback (was 18.4 MiB with a 64-snapshot ring; note 2) | Met |
-| Installed client size | < 25 MB | Not measured here | See desktop build |
+| Installed client size | < 25 MB | `Civet.app` 0.1.2 (`pnpm tauri build --bundles app`, aarch64 release, 2026-10-15): **20.2 MiB**, of which the app binary is 8.6 MB and the bundled daemons 12.5 MB (`civetd` x86_64 Linux 4.4 MB, aarch64 Linux 4.0 MB, aarch64 macOS 4.1 MB) | Met |
 
 Other numbers (same runs):
 

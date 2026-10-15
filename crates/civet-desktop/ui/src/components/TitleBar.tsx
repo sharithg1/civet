@@ -3,10 +3,15 @@
 // menu (Claude Code / Terminal / splits) and the right-panel toggle.
 // Tabs replace the old TabBar: same activate / close / middle-click-close
 // behaviour; a tab is still a split tree of panes.
+// On macOS the window uses an overlay title bar, so this row is also the
+// window's title bar: the traffic lights sit in its left inset and every
+// non-interactive part of it drags the window (double click zooms); see
+// lib/window-chrome.ts.
 
 import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
+import { useTitleBarInset } from '@/lib/window-chrome'
 import { paneDot, splitBranch, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
 import {
   activateTab,
@@ -34,10 +39,18 @@ export function TitleBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const backendKind = useStore((s) => s.backend?.kind)
   const active = useStore((s) => s.active)
+  const inset = useTitleBarInset()
   return (
-    <header className="flex h-10 shrink-0 items-stretch border-b border-border bg-chrome">
+    <header
+      // "deep": any non-interactive descendant (wordmark, empty tab strip,
+      // spacer) drags the window; buttons and tabs keep their clicks.
+      data-tauri-drag-region="deep"
+      data-titlebar-inset={inset}
+      className="flex h-10 shrink-0 items-stretch border-b border-border bg-chrome select-none"
+    >
       <div
         className={cn('flex shrink-0 items-center gap-3 pr-3 pl-3.5', sidebarOpen && 'w-[260px]')}
+        style={inset ? { paddingLeft: inset } : undefined}
       >
         <span className="text-[13px] font-semibold text-foreground">Civet</span>
         {backendKind === 'mock' && (

@@ -7,7 +7,10 @@
 // Fake host: repos "civet" and "orca" with a few worktrees, an agent pane
 // that finishes after a while, agents waiting for input / stopped with an
 // error (to show every v3 status dot), and an echo shell per pane. Shell commands:
-// help, seq N, status <running|needs|done|idle>, title T, drop, exit.
+// help, seq N, status <running|needs|done|idle>, title T, drop, fail, replaced, exit.
+// A host whose name contains "old" runs an older civetd with live panes (the
+// "upgrade available" flow; Restart daemon starts a fresh one), "fail" never
+// connects, "udp-blocked" falls back to the SSH tunnel.
 
 import { CivetError, type CivetBackend, type PaneOutputHandler, type Unlisten } from './backend'
 import { RecordFlag, RecordKind, encodeRecords, type RecordInit } from './terminal/records'
@@ -34,6 +37,12 @@ import type {
   TransportChoice,
   WorktreeInfo
 } from './types'
+
+/** This app's civetd version and the older one an "old" mock host runs. */
+export const MOCK_VERSION = '0.1.2'
+export const MOCK_OLD_VERSION = '0.1.1'
+export const MOCK_REPLACED_MESSAGE =
+  "another Civet window or client took over this host's connection; reconnect here to take it back"
 
 const SYNTHETIC_HISTORY = 3000
 const FULL_REPLAY_LINES = 1000
@@ -230,6 +239,8 @@ class MockPane {
             '  status S             set agent status: running | needs | done | idle\r\n' +
             '  title T              set the pane title\r\n' +
             '  drop                 simulate a network drop (reconnecting banner)\r\n' +
+            '  fail                 simulate a lost connection (failed banner)\r\n' +
+            '  replaced             simulate another client taking the host over\r\n' +
             '  exit                 exit the pane\r\n'
         )
         break
@@ -261,6 +272,14 @@ class MockPane {
         out('simulating a 2.5 s network outage…\r\n')
         this.host.backend.simulateNetworkDrop(this.host.summary.hostId)
         break
+      case 'fail':
+        out('simulating a failed connection…\r\n')
+        this.host.backend.simulateFailure(this.host.summary.hostId, 'connection lost: no route to host (mock)')
+        break
+      case 'replaced':
+        out('simulating another client taking over…\r\n')
+        this.host.backend.simulateFailure(this.host.summary.hostId, MOCK_REPLACED_MESSAGE)
+        break
       case 'exit':
         this.host.exitPane(this.info.id, 0)
         return
@@ -279,7 +298,8 @@ class MockHost {
 
   constructor(
     readonly backend: MockBackend,
-    public summary: HostSummary
+    public summary: HostSummary,
+    seed = true
   ) {
     this.repos = [
       { id: 'civet', name: 'civet', path: '/home/dev/src/civet', defaultBranch: 'main' },
@@ -302,6 +322,8 @@ class MockHost {
       wt('civet', 'fix-flaky-e2e')
     ])
     this.worktrees.set('orca', [wt('orca', 'main', true), wt('orca', 'fix-wake-reconnect')])
+    // A freshly (re)started daemon has no panes.
+    if (!seed) return
 
     const qr = this.worktrees.get('civet')![1]!
     this.addPane({ worktree: qr.id, cwd: qr.path, title: 'Implement QUIC resume', agent: 'claude' })
@@ -385,7 +407,8 @@ class MockHost {
     this.event({
       agentStatus: { pane: id, status, previous, source: 'client', message, atMs: Date.now() }
     })
-    if (status === 'done' || status === 'needsInput') {
+    // Like the Rust core: only agent panes ask for attention.
+    if ((status === 'done' || status === 'needsInput') && pane.info.agent) {
       const wt = this.allWorktrees().find((w) => w.id === pane.info.worktree)
       this.backend.emitter.emit<AgentAttentionEvent>('civet://agent-attention', {
         hostId: this.summary.hostId,
@@ -442,6 +465,8 @@ export class MockBackend implements CivetBackend {
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
   private hosts = new Map<string, MockHost>()
+  /** What each host was connected with (reconnect_host / restart_daemon reuse it). */
+  readonly targets = new Map<string, { target: HostTarget; transport: TransportChoice }>()
 
   private host(hostId: string): MockHost {
     const h = this.hosts.get(hostId)
@@ -449,10 +474,14 @@ export class MockBackend implements CivetBackend {
     return h
   }
 
-  private hostState(hostId: string, e: Omit<HostStateEvent, 'hostId'>): void {
+  private hostState(hostId: string, e: Omit<HostStateEvent, 'hostId' | 'upgrade'>): void {
     const h = this.hosts.get(hostId)
     if (h) h.summary = { ...h.summary, state: e.state, transport: e.transport }
-    this.emitter.emit<HostStateEvent>('civet://host-state', { hostId, ...e })
+    this.emitter.emit<HostStateEvent>('civet://host-state', {
+      hostId,
+      upgrade: h?.summary.upgrade ?? null,
+      ...e
+    })
   }
 
   private progress(hostId: string, step: BootstrapStep, message: string | null = null): void {
@@ -464,8 +493,30 @@ export class MockBackend implements CivetBackend {
   }
 
   async connectHost(target: HostTarget, transport: TransportChoice = 'auto') {
+    return this.connect(target, transport, false)
+  }
+
+  async reconnectHost(hostId: string) {
+    const t = this.targets.get(hostId) ?? (hostId === 'local' ? { target: { kind: 'local' } as const, transport: 'auto' as const } : null)
+    if (!t) throw new CivetError('noSuchHost', `no host "${hostId}" (connect first)`)
+    return this.connect(t.target, t.transport, false)
+  }
+
+  async restartDaemon(hostId: string) {
+    const t = this.targets.get(hostId) ?? (hostId === 'local' ? { target: { kind: 'local' } as const, transport: 'auto' as const } : null)
+    if (!t) throw new CivetError('noSuchHost', `no host "${hostId}" (connect first)`)
+    const old = this.hosts.get(hostId)
+    if (old) {
+      for (const id of [...old.panes.keys()]) old.killPane(id)
+      this.hosts.delete(hostId)
+    }
+    return this.connect(t.target, t.transport, true)
+  }
+
+  private async connect(target: HostTarget, transport: TransportChoice, replace: boolean) {
     const hostId = target.kind === 'local' ? 'local' : target.destination.trim()
     if (!hostId) throw new CivetError('bootstrap', 'empty ssh destination')
+    this.targets.set(hostId, { target, transport })
     const existing = this.hosts.get(hostId)
     if (existing && existing.summary.state === 'connected') return existing.summary
     const label = target.kind === 'local' ? 'This Mac' : hostId
@@ -475,15 +526,16 @@ export class MockBackend implements CivetBackend {
       state: 'connecting',
       transport: null,
       daemonVersion: null,
-      instanceId: null
+      instanceId: null,
+      upgrade: null
     }
-    const host = existing ?? new MockHost(this, summary)
+    const host = existing ?? new MockHost(this, summary, !replace)
     host.summary = summary
     this.hosts.set(hostId, host)
     this.hostState(hostId, { state: 'connecting', transport: null, rttMs: null, message: null })
     const steps: [BootstrapStep, string][] = [
       ['probe', `ssh ${hostId} civetd version`],
-      ['start', 'starting civetd (reattached: false)'],
+      ['start', replace ? 'restarting civetd (--replace)' : 'starting civetd (reattached: false)'],
       ['resolve', 'udp port 60017'],
       ['dial', 'QUIC handshake']
     ]
@@ -507,12 +559,17 @@ export class MockBackend implements CivetBackend {
       this.progress(hostId, 'fallback', 'using ssh stdio tunnel')
     }
     await sleep(150)
+    // An "old" host kept its older daemon because it has live panes.
+    const old = hostId.includes('old') && !replace && host.panes.size > 0
     host.summary = {
       ...summary,
       state: 'connected',
       transport: stream ? 'stream' : 'quic',
-      daemonVersion: '0.1.0-mock',
-      instanceId: '17179869184'
+      daemonVersion: old ? MOCK_OLD_VERSION : MOCK_VERSION,
+      instanceId: replace ? '17179869185' : '17179869184',
+      upgrade: old
+        ? { runningVersion: MOCK_OLD_VERSION, availableVersion: MOCK_VERSION, livePanes: host.panes.size }
+        : null
     }
     this.hostState(hostId, {
       state: 'connected',
@@ -535,6 +592,12 @@ export class MockBackend implements CivetBackend {
 
   async notifyNetworkChange() {}
 
+  /** Dev helper: the connection failed for good (needs a user Reconnect). */
+  simulateFailure(hostId: string, message: string): void {
+    if (!this.hosts.has(hostId)) return
+    setTimeout(() => this.hostState(hostId, { state: 'failed', transport: null, rttMs: null, message }), 300)
+  }
+
   /** Dev helper: mimic a stall the Rust core would report after its 1 s threshold. */
   simulateNetworkDrop(hostId: string, outageMs = 2500): void {
     const h = this.hosts.get(hostId)
@@ -553,10 +616,10 @@ export class MockBackend implements CivetBackend {
   async daemonInfo(hostId: string): Promise<DaemonInfo> {
     this.host(hostId)
     return {
-      daemonVersion: '0.1.0-mock',
+      daemonVersion: this.host(hostId).summary.daemonVersion ?? MOCK_VERSION,
       protoVersion: 1,
       pid: 4242,
-      instanceId: 17179869184,
+      instanceId: this.host(hostId).summary.instanceId ?? '17179869184',
       startedAtMs: Date.now() - 3_600_000,
       hostname: 'devbox'
     }
