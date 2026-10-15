@@ -136,7 +136,8 @@ function useShortcuts() {
       if (overlay || state.settings) return
       const { active, workspaces } = state
       if (mod) {
-        if (!active) return
+        // Tab actions are off while the worktree is being removed.
+        if (!active || state.removing[wsKey(active.hostId, active.worktree)]) return
         const key = e.key.toLowerCase()
         if (key === 't') {
           e.preventDefault()

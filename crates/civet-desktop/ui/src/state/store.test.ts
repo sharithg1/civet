@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CivetBackend } from '../backend'
-import type { HostSummary, PaneInfo } from '../types'
+import type { HostSummary, PaneInfo, RepoInfo, WorktreeInfo } from '../types'
 import { termSize } from '../types'
 import { setPrefs } from './prefs'
 import type { Tab } from './store'
@@ -143,6 +143,101 @@ describe('store', () => {
     setPrefs({ prediction: 'off' })
     expect(setPrediction).toHaveBeenCalledTimes(3)
     setPrefs({ prediction: 'auto' })
+  })
+
+  describe('removeWorktree', () => {
+    const repo: RepoInfo = { id: 'r', name: 'r', path: '/r', defaultBranch: 'main' }
+    const wt = (id: string, patch: Partial<WorktreeInfo> = {}): WorktreeInfo => ({
+      id,
+      repo: 'r',
+      path: id,
+      branch: id.slice(1),
+      head: null,
+      isMain: false,
+      locked: false,
+      ...patch
+    })
+    const key = store.wsKey('h', '/feat')
+    /** A backend whose remove_worktree waits until the test settles it. */
+    function pendingRemove() {
+      let settle!: { resolve: () => void; reject: (e: unknown) => void }
+      const removeWorktree = vi.fn(
+        () => new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
+      )
+      const killPane = vi.fn(async () => {})
+      useStore.setState({
+        backend: fakeBackend({ removeWorktree, killPane }),
+        repos: { h: [repo] },
+        worktrees: { [store.wtKey('h', 'r')]: [wt('/main', { isMain: true }), wt('/feat'), wt('/other')] },
+        workspaces: {},
+        removing: {},
+        removeRefused: {},
+        mru: []
+      })
+      store.selectWorktree('h', '/feat')
+      return { removeWorktree, killPane, settle: () => settle }
+    }
+    const worktreeIds = () => useStore.getState().worktrees[store.wtKey('h', 'r')]!.map((w) => w.id)
+
+    it('marks the worktree removing until it is gone, then selects the main one', async () => {
+      const b = pendingRemove()
+      const done = store.removeWorktree('h', '/feat', false)
+      expect(useStore.getState().removing[key]).toBe(true)
+      expect(store.isRemoving('h', '/feat')).toBe(true)
+      b.settle().resolve()
+      await done
+      expect(useStore.getState().removing[key]).toBeUndefined()
+      expect(worktreeIds()).toEqual(['/main', '/other'])
+      expect(useStore.getState().active).toEqual({ hostId: 'h', worktree: '/main' })
+    })
+
+    it('a failure clears removing, keeps the worktree and reports the refusal', async () => {
+      const b = pendingRemove()
+      const done = store.removeWorktree('h', '/feat', false)
+      b.settle().reject({ code: 'git', message: 'contains modified files' })
+      await done
+      const s = useStore.getState()
+      expect(s.removing[key]).toBeUndefined()
+      expect(s.removeRefused[key]).toBe('contains modified files')
+      expect(worktreeIds()).toEqual(['/main', '/feat', '/other'])
+      expect(s.active).toEqual({ hostId: 'h', worktree: '/feat' })
+      expect(s.toasts.some((t) => t.kind === 'error' && t.title === 'Could not remove feat')).toBe(true)
+    })
+
+    it('ignores a second removal of the same worktree while one is in flight', async () => {
+      const b = pendingRemove()
+      const first = store.removeWorktree('h', '/feat', false)
+      await store.removeWorktree('h', '/feat', true)
+      expect(b.removeWorktree).toHaveBeenCalledTimes(1)
+      expect(useStore.getState().removing[key]).toBe(true)
+      b.settle().resolve()
+      await first
+      expect(useStore.getState().removing[key]).toBeUndefined()
+    })
+
+    it('leaves the selection alone when the user switched away meanwhile', async () => {
+      const b = pendingRemove()
+      const done = store.removeWorktree('h', '/feat', false)
+      store.selectWorktree('h', '/other')
+      expect(useStore.getState().active).toEqual({ hostId: 'h', worktree: '/other' })
+      b.settle().resolve()
+      await done
+      expect(useStore.getState().active).toEqual({ hostId: 'h', worktree: '/other' })
+      expect(worktreeIds()).toEqual(['/main', '/other'])
+    })
+
+    it('opens no new tabs or panes in a worktree being removed', async () => {
+      const b = pendingRemove()
+      const spawnPane = vi.fn()
+      useStore.setState({ backend: fakeBackend({ removeWorktree: b.removeWorktree, spawnPane }) })
+      const done = store.removeWorktree('h', '/feat', false)
+      await store.newTerminalTab('h', '/feat')
+      await store.newAgentTab('h', '/feat')
+      await store.splitFocused('row')
+      expect(spawnPane).not.toHaveBeenCalled()
+      b.settle().resolve()
+      await done
+    })
   })
 
   it('moveTab reorders tabs within a worktree and clamps the target', () => {

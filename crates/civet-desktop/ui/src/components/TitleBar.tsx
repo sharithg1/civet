@@ -138,6 +138,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const key = wsKey(hostId, worktree)
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
+  const removing = useStore((s) => !!s.removing[key])
   const panes = useStore((s) => s.panes[hostId])
   const tabs = useWorktreeTabs(hostId, worktree)
   const wsTabs = useStore((s) => s.workspaces[key]?.tabs)
@@ -184,10 +185,14 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
 
   return (
     <>
+      {/* Why: a worktree being removed keeps its tabs visible but inert
+          (no activate / close / reorder); the rest of the bar still works. */}
       <div
         ref={stripRef}
-        className="no-scrollbar flex min-w-0 items-stretch overflow-x-auto"
+        className={cn('no-scrollbar flex min-w-0 items-stretch overflow-x-auto', removing && 'opacity-50')}
         role="tablist"
+        inert={removing}
+        aria-disabled={removing || undefined}
       >
         {tabs.map((t) => {
           if (!t.id) return null
@@ -260,7 +265,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
         <DropdownMenuTrigger
           title="New tab"
           aria-label="New tab"
-          disabled={!connected}
+          disabled={!connected || removing}
           className="w-[34px] shrink-0 cursor-pointer text-[16px] text-faint outline-none hover:text-foreground disabled:opacity-40"
         >
           +

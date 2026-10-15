@@ -3,10 +3,12 @@
 // the first attempt is a plain `remove_worktree` (git refuses a dirty
 // worktree) and only after that refusal does the button become
 // "Remove anyway" (force). Live agent sessions are counted client-side.
-import { useState } from 'react'
-import { panesOfWorktree, removeWorktree, useStore } from '@/state/store'
+// Confirming closes the dialog at once and the removal runs in the background
+// (store `removing`): a modal left open while git works would block the whole
+// app. A refusal arrives as a toast and is remembered (`removeRefused`), so
+// reopening the dialog offers "Remove anyway".
+import { panesOfWorktree, removeWorktree, useStore, wsKey } from '@/state/store'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
-import { CivetError } from '@/backend'
 import { splitBranch, worktreeBranch } from '@/lib/worktree-view'
 import { Button } from '@/components/ui/button'
 import {
@@ -34,8 +36,8 @@ export function RemoveWorktreeDialog() {
 function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const allPanes = useStore((s) => s.panes[hostId])
-  const [refused, setRefused] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const refused = useStore((s) => s.removeRefused[wsKey(hostId, worktree)] ?? null)
+  const removing = useStore((s) => !!s.removing[wsKey(hostId, worktree)])
   const close = () => useStore.setState({ removeWorktree: null })
   if (!wt) return null
   const live = panesOfWorktree(allPanes, worktree).filter((p) => !p.exited)
@@ -52,16 +54,9 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
       : { bad: false, text: 'Git refuses if there are uncommitted changes' }
   ]
   const force = refused !== null || busyAgents > 0
-  async function run() {
-    setBusy(true)
-    try {
-      await removeWorktree(hostId, worktree, refused !== null)
-      close()
-    } catch (err) {
-      setRefused(CivetError.from(err).message)
-    } finally {
-      setBusy(false)
-    }
+  function run() {
+    close()
+    void removeWorktree(hostId, worktree, refused !== null)
   }
   return (
     <>
@@ -78,10 +73,10 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
         </div>
       ))}
       <div className="mt-1.5 flex justify-end gap-2">
-        <Button type="button" variant="outline" size="md" onClick={close} disabled={busy}>
+        <Button type="button" variant="outline" size="md" onClick={close}>
           Cancel
         </Button>
-        <Button type="button" size="md" variant={force ? 'destructive' : 'default'} disabled={busy} onClick={() => void run()}>
+        <Button type="button" size="md" variant={force ? 'destructive' : 'default'} disabled={removing} onClick={run}>
           {force ? 'Remove anyway' : 'Remove'}
         </Button>
       </div>

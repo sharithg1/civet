@@ -7,7 +7,8 @@
 // bottom. Data is the daemon's (repos, worktrees, panes); the "task" label is
 // the agent pane's title (see lib/worktree-view.ts). Right-clicking a worktree
 // row archives it (into the project's collapsed "Archived" group) or removes
-// it (the Remove worktree dialog).
+// it (the Remove worktree dialog). While a removal runs the row is dimmed,
+// shows a spinner and ignores clicks and the context menu.
 
 import { useState, type ReactNode } from 'react'
 import { Archive, ArchiveRestore, ChevronRight, MoreHorizontal, Plus, Trash2 } from 'lucide-react'
@@ -52,6 +53,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Kbd, ProjectTile, RingGlyph, useWorktreeTabs } from './chrome'
+import { Spinner } from '@/components/ui/spinner'
 import { StatusDot } from './StatusDot'
 
 export function Sidebar() {
@@ -343,16 +345,22 @@ function WorktreeMenu({
   hostId,
   wt,
   archived,
+  removing,
   children
 }: {
   hostId: string
   wt: WorktreeInfo
   archived: boolean
+  removing: boolean
   children: ReactNode
 }) {
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      {/* Why: not `disabled`, which would let the webview's native menu
+          through; preventing the event also keeps Radix's menu closed. */}
+      <ContextMenuTrigger asChild onContextMenu={(e) => removing && e.preventDefault()}>
+        {children}
+      </ContextMenuTrigger>
       <ContextMenuContent className="w-48" onCloseAutoFocus={restoreTerminalFocus}>
         <ContextMenuItem disabled={wt.isMain} onSelect={() => setWorktreeArchived(hostId, wt.id, !archived)}>
           {archived ? <ArchiveRestore /> : <Archive />}
@@ -377,6 +385,7 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
   const key = wsKey(hostId, wt.id)
   const selected = useStore((s) => s.active?.hostId === hostId && s.active.worktree === wt.id)
   const unread = useStore((s) => s.unread[key])
+  const removing = useStore((s) => !!s.removing[key])
   const paneMap = useStore((s) => s.panes[hostId])
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const labelPref = usePrefs((s) => s.worktreeLabel)
@@ -392,23 +401,32 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
   const sub = useTask ? branch.slice(prefix.length) : task
   const showTabs = tabs.length > 0 && (tabsPref === 'all' || (tabsPref === 'selected' && selected))
   return (
-    <WorktreeMenu hostId={hostId} wt={wt} archived={archived}>
+    <WorktreeMenu hostId={hostId} wt={wt} archived={archived} removing={removing}>
       <div
         role="button"
         tabIndex={-1}
         data-wt={wt.id}
         data-archived={archived ? 'true' : undefined}
         data-active={selected ? 'true' : 'false'}
-        title={`${host.label}:${wt.path}`}
-        onClick={() => selectWorktree(hostId, wt.id)}
+        data-removing={removing ? 'true' : undefined}
+        aria-disabled={removing || undefined}
+        title={removing ? `Removing ${host.label}:${wt.path}…` : `${host.label}:${wt.path}`}
+        onClick={() => !removing && selectWorktree(hostId, wt.id)}
         className={cn(
           'relative flex cursor-default gap-[9px] rounded-md px-2',
           wt.isMain ? 'py-[5px]' : 'pt-[5px] pb-1.5',
-          selected ? 'bg-accent' : 'hover:bg-hover',
-          archived && !selected && 'opacity-60'
+          selected ? 'bg-accent' : !removing && 'hover:bg-hover',
+          archived && !selected && 'opacity-60',
+          // Why: the tab sub-rows have their own click handlers; with their
+          // pointer events off every click lands on the (guarded) row.
+          removing && 'opacity-50 [&_*]:pointer-events-none'
         )}
       >
-        <StatusDot kind={dot} showIdle={dot !== 'idle'} className="mt-1.5" />
+        {removing ? (
+          <Spinner aria-label="Removing" className="mt-[3px] size-[13px] shrink-0 text-faint" />
+        ) : (
+          <StatusDot kind={dot} showIdle={dot !== 'idle'} className="mt-1.5" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-h-[19px] items-center gap-2">
             <span
@@ -423,6 +441,7 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
             </span>
             {wt.isMain && <span className="shrink-0 text-[11px] text-faint">default</span>}
             {wt.locked && <span className="shrink-0 text-[11px] text-faint">locked</span>}
+            {removing && <span className="shrink-0 text-[11px] text-faint">Removing…</span>}
           </div>
           {selected && !wt.isMain && sub && (
             <div className={cn('truncate text-[11px] leading-4 text-faint', useTask && 'font-mono')}>
