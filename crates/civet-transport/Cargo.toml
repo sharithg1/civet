@@ -10,11 +10,14 @@ publish.workspace = true
 [dependencies]
 civet-proto.workspace = true
 tokio.workspace = true
+futures.workspace = true
 quinn.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
+subtle.workspace = true
+serde.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -22,6 +25,7 @@ tracing.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 anyhow.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
