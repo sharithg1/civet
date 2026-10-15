@@ -1,19 +1,22 @@
-// Top bar of the v3 workspace: wordmark + sidebar toggle above the sidebar,
-// then the current worktree (opens the switcher), the worktree's tabs, a "+"
-// menu (Claude Code / Terminal / splits) and the right-panel toggle.
-// Tabs replace the old TabBar: same activate / close / middle-click-close
+// Header of the main column (Cursor-style: the sidebar and the right panel
+// each have their own header row, so this one only spans the work area). It
+// holds the current worktree's title (opens the switcher), the worktree's
+// tabs as pills, a "+" menu (Claude Code / Terminal / splits), a "…" menu of
+// worktree actions and, when the right panel is closed, its toggle. With the
+// sidebar closed it also takes the traffic-light inset and the sidebar
+// toggle. Tabs keep the old TabBar's activate / close / middle-click-close
 // behaviour, plus drag to reorder; a tab is still a split tree of panes.
-// On macOS the window uses an overlay title bar, so this row is also the
-// window's title bar: the traffic lights sit in its left inset and every
-// non-interactive part of it drags the window (double click zooms); see
+// On macOS the window uses an overlay title bar, so every non-interactive
+// part of this row drags the window (double click zooms); see
 // lib/window-chrome.ts.
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { ChevronDown, Copy, GitBranch, MoreHorizontal, PanelRight, Plus, Terminal, Trash2, X } from 'lucide-react'
 import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
-import { paneDot, splitBranch, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
+import { paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
 import {
   activateTab,
   closeTab,
@@ -21,6 +24,7 @@ import {
   newAgentTab,
   newTerminalTab,
   panesOfWorktree,
+  pushToast,
   splitFocused,
   useStore,
   wsKey
@@ -34,65 +38,54 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
-import { PanelGlyph, ProjectTile, useWorktreeInfo, useWorktreeTabs } from './chrome'
+import { useWorktreeInfo, useWorktreeTabs } from './chrome'
+import { IconButton } from './IconButton'
+import { SidebarToggle } from './Sidebar'
 import { StatusDot } from './StatusDot'
 
 export function TitleBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen)
-  const backendKind = useStore((s) => s.backend?.kind)
+  const rightPanelOpen = useStore((s) => s.rightPanelOpen)
   const active = useStore((s) => s.active)
   const inset = useTitleBarInset()
   return (
     <header
-      // "deep": any non-interactive descendant (wordmark, empty tab strip,
-      // spacer) drags the window; buttons and tabs keep their clicks.
+      // "deep": any non-interactive descendant (empty tab strip, spacer)
+      // drags the window; buttons and tabs keep their clicks.
       data-tauri-drag-region="deep"
-      data-titlebar-inset={inset}
-      className="flex h-10 shrink-0 items-stretch border-b border-border bg-chrome select-none"
+      data-titlebar-inset={sidebarOpen ? undefined : inset}
+      className="flex h-10 shrink-0 items-center gap-1 bg-background pr-2 pl-3 select-none"
+      style={!sidebarOpen && inset ? { paddingLeft: inset } : undefined}
     >
-      <div
-        className={cn('flex shrink-0 items-center gap-3 pr-3 pl-3.5', sidebarOpen && 'w-[260px]')}
-        style={inset ? { paddingLeft: inset } : undefined}
-      >
-        <span className="text-sm font-semibold text-foreground">Civet</span>
-        {backendKind === 'mock' && (
-          <span
-            className="font-mono text-2xs text-status-wait"
-            title="Not running inside Tauri: using the in-browser mock backend"
-          >
-            mock
-          </span>
-        )}
-        <button
-          type="button"
-          title="Toggle sidebar (⌥B)"
-          aria-label="Toggle sidebar"
-          aria-pressed={sidebarOpen}
-          onClick={() => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen }))}
-          className="grid h-5 w-[22px] cursor-pointer place-items-center rounded-sm hover:bg-hover-strong"
-        >
-          <PanelGlyph side="left" />
-        </button>
-      </div>
-      <div className="flex min-w-0 flex-1 items-stretch">
-        {active && <WorktreeContext hostId={active.hostId} worktree={active.worktree} />}
-        {active && <Tabs hostId={active.hostId} worktree={active.worktree} />}
-        <div className="flex-1" />
-        <button
-          type="button"
-          title="Toggle panel (⌥E)"
-          aria-label="Toggle right panel"
-          onClick={() => useStore.setState((s) => ({ rightPanelOpen: !s.rightPanelOpen }))}
-          className="grid w-10 shrink-0 cursor-pointer place-items-center hover:bg-hover"
-        >
-          <PanelGlyph side="right" />
-        </button>
-      </div>
+      {!sidebarOpen && (
+        <div className="mr-1 flex shrink-0 items-center">
+          <SidebarToggle />
+        </div>
+      )}
+      {active && <WorktreeTitle hostId={active.hostId} worktree={active.worktree} />}
+      {active && <Tabs hostId={active.hostId} worktree={active.worktree} />}
+      <div className="min-w-4 flex-1 self-stretch" />
+      {active && <WorktreeActions hostId={active.hostId} worktree={active.worktree} />}
+      {!rightPanelOpen && <RightPanelToggle />}
     </header>
   )
 }
 
-function WorktreeContext({ hostId, worktree }: { hostId: string; worktree: string }) {
+export function RightPanelToggle() {
+  const open = useStore((s) => s.rightPanelOpen)
+  return (
+    <IconButton
+      label={open ? 'Hide panel (⌥E)' : 'Show panel (⌥E)'}
+      side="bottom"
+      aria-pressed={open}
+      onClick={() => useStore.setState((s) => ({ rightPanelOpen: !s.rightPanelOpen }))}
+    >
+      <PanelRight className="size-4" />
+    </IconButton>
+  )
+}
+
+function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const panes = useStore((s) => s.panes[hostId])
   const labelPref = usePrefs((s) => s.worktreeLabel)
@@ -104,33 +97,64 @@ function WorktreeContext({ hostId, worktree }: { hostId: string; worktree: strin
   return (
     <button
       type="button"
-      title="Switch worktree (⌘K)"
+      title={`${repo.name} · ${worktreeBranch(info)} — switch worktree (⌘K)`}
       onClick={() => useStore.setState({ switcherOpen: true })}
-      className="flex max-w-[320px] min-w-0 shrink cursor-pointer items-center gap-[7px] border-r border-border px-3 text-sm hover:bg-hover"
+      className="group -ml-1.5 flex h-7 max-w-[340px] min-w-0 shrink cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-base hover:bg-hover"
     >
-      <ProjectTile name={repo.name} size={14} />
-      <span className="shrink-0 whitespace-nowrap text-muted-foreground">{repo.name}</span>
+      <span className="shrink-0 whitespace-nowrap text-quiet">{repo.name}</span>
       <span className="shrink-0 text-dim">/</span>
-      <span
-        className={cn(
-          'min-w-0 truncate font-medium text-foreground',
-          !useTask && 'font-mono'
-        )}
-      >
-        {useTask ? title : <BranchText branch={title} />}
+      <span className={cn('min-w-0 truncate text-soft group-hover:text-foreground', !useTask && 'font-mono text-sm')}>
+        {title}
       </span>
-      <span className="shrink-0 text-[9px] text-faint">▼</span>
+      <ChevronDown className="size-3.5 shrink-0 text-dim" />
     </button>
   )
 }
 
-function BranchText({ branch }: { branch: string }) {
-  const { prefix, name } = splitBranch(branch)
+/** "…" menu: copy the remote path, branch details, remove the worktree. */
+function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: string }) {
+  const wt = useWorktreeInfo(hostId, worktree)
+  const host = useStore((s) => s.hosts[hostId])
+  if (!wt) return null
+  const { info } = wt
+  const remote = `${host?.label ?? hostId}:${info.path}`
   return (
-    <>
-      {prefix && <span className="font-normal text-faint">{prefix}</span>}
-      {name}
-    </>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label="Worktree actions"
+        className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-hover-strong hover:text-foreground data-[state=open]:bg-hover-strong"
+      >
+        <MoreHorizontal className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={4} className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
+        <DropdownMenuItem
+          onSelect={() => {
+            void navigator.clipboard?.writeText(info.path).catch(() => {})
+            pushToast({ kind: 'info', title: `Copied ${remote}` }, 3200)
+          }}
+        >
+          <Copy />
+          Copy remote path
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => useStore.setState({ rightPanelOpen: true, rightTab: 'branch' })}>
+          <GitBranch />
+          Branch details
+        </DropdownMenuItem>
+        {!info.isMain && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              disabled={host?.state !== 'connected'}
+              onSelect={() => useStore.setState({ removeWorktree: { hostId, worktree } })}
+            >
+              <Trash2 />
+              Remove worktree…
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -189,7 +213,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           (no activate / close / reorder); the rest of the bar still works. */}
       <div
         ref={stripRef}
-        className={cn('no-scrollbar flex min-w-0 items-stretch overflow-x-auto', removing && 'opacity-50')}
+        className={cn('no-scrollbar ml-2 flex min-w-0 items-center gap-0.5 overflow-x-auto', removing && 'opacity-50')}
         role="tablist"
         inert={removing}
         aria-disabled={removing || undefined}
@@ -227,19 +251,21 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                 }
               }}
               className={cn(
-                'relative flex shrink-0 cursor-default items-center gap-2 border-r border-border-subtle pr-2.5 pl-3 text-sm select-none hover:text-foreground',
-                isActive ? 'bg-background text-foreground' : 'text-muted-foreground',
+                'group/tab relative flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1 pl-2.5 text-base select-none',
+                isActive ? 'bg-card text-foreground' : 'text-quiet hover:bg-hover hover:text-soft',
                 dragging === id && 'z-10 cursor-grabbing bg-hover-strong text-foreground'
               )}
             >
               {t.agent ? (
-                <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} />
+                <span className="grid size-3.5 shrink-0 place-items-center">
+                  <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} size={6} />
+                </span>
               ) : (
-                <span className="font-mono text-2xs text-faint">›_</span>
+                <Terminal className="size-3.5 shrink-0 text-quiet" />
               )}
               <span className="whitespace-nowrap">{t.label}</span>
               {count > 1 && (
-                <span className="font-mono text-2xs text-faint" title={`${count} panes`}>
+                <span className="text-sm text-dim" title={`${count} panes`}>
                   {count}
                 </span>
               )}
@@ -250,13 +276,13 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                   e.stopPropagation()
                   closeTab(key, id)
                 }}
-                className="size-4 cursor-pointer rounded-[3px] p-0 text-xs leading-none text-dim hover:bg-white/10 hover:text-foreground"
+                className={cn(
+                  'grid size-[18px] cursor-pointer place-items-center rounded-[4px] text-quiet hover:bg-hover-strong hover:text-foreground',
+                  !isActive && 'opacity-0 group-hover/tab:opacity-100'
+                )}
               >
-                ×
+                <X className="size-3" />
               </button>
-              {isActive && (
-                <span aria-hidden className="absolute inset-x-0 -bottom-px h-0.5 bg-soft" />
-              )}
             </div>
           )
         })}
@@ -266,9 +292,9 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           title="New tab"
           aria-label="New tab"
           disabled={!connected || removing}
-          className="w-[34px] shrink-0 cursor-pointer text-lg text-faint outline-none hover:text-foreground disabled:opacity-40"
+          className="ml-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-quiet outline-none hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-hover-strong"
         >
-          +
+          <Plus className="size-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" sideOffset={4} className="w-[200px]" onCloseAutoFocus={restoreTerminalFocus}>
           <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>

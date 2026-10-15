@@ -6,16 +6,17 @@
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
 
 export const TERMINAL_THEME_DARK: ITheme = {
-  // Ghostty's built-in defaults (`ghostty +show-config --default`): the
-  // #282c34 background with its Tomorrow Night 16-colour palette. Cursor and
+  // Ghostty's built-in Tomorrow Night 16-colour palette (`ghostty
+  // +show-config --default`) on the app's work-area background (--background
+  // in main.css), so the terminal sits flush in the chrome. Cursor and
   // selection follow Ghostty's unset behaviour (foreground cursor, inverted
   // selection).
-  background: '#282c34',
-  foreground: '#ffffff',
+  background: '#151616',
+  foreground: '#e6e6e6',
   cursor: '#ffffff',
-  cursorAccent: '#282c34',
+  cursorAccent: '#151616',
   selectionBackground: '#ffffff',
-  selectionForeground: '#282c34',
+  selectionForeground: '#151616',
   black: '#1d1f21',
   red: '#cc6666',
   green: '#b5bd68',

@@ -1,9 +1,12 @@
-// 24px status bar (v3): active host + latency (click for the host popover),
-// navigation hints, and the focused session on the right.
+// Footer of the main column, like the line under Cursor's composer: the
+// worktree's branch, the active host + latency (click for the host popover)
+// and, on the right, the focused session.
+import { ChevronDown, GitBranch, Server } from 'lucide-react'
 import { reconnectHost, requestRestartDaemon, upgradeSummary, useStore, wsKey } from '@/state/store'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
-import { DOT_LABEL, agentName, duration, paneDot } from '@/lib/worktree-view'
+import { DOT_LABEL, agentName, duration, paneDot, worktreeBranch } from '@/lib/worktree-view'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { useWorktreeInfo } from './chrome'
 import { HostStateDot, hostMeta } from './Sidebar'
 
 export function StatusBar() {
@@ -23,13 +26,24 @@ export function StatusBar() {
     right = `${pane.command.join(' ')} · ${duration(pane.createdAtMs)}`
   }
   return (
-    <footer className="flex h-6 shrink-0 items-center gap-3.5 overflow-hidden border-t border-border bg-chrome px-3 font-mono text-2xs whitespace-nowrap text-faint">
+    <footer className="flex h-8 shrink-0 items-center gap-1 overflow-hidden bg-background px-2 text-sm whitespace-nowrap text-quiet">
+      {active && <BranchChip hostId={active.hostId} worktree={active.worktree} />}
       {host && hostId && <HostPopover hostId={hostId} />}
-      {!host && <span>no host</span>}
-      <span className="hidden sm:inline">⌘K switch · ⌥` previous · ⌥↑↓ next</span>
+      {!host && <span className="px-1.5">no host</span>}
       <span className="flex-1" />
-      <span className="truncate">{right}</span>
+      <span className="truncate px-1.5 text-dim">{right}</span>
     </footer>
+  )
+}
+
+function BranchChip({ hostId, worktree }: { hostId: string; worktree: string }) {
+  const wt = useWorktreeInfo(hostId, worktree)
+  if (!wt) return null
+  return (
+    <span className="flex h-6 min-w-0 items-center gap-1.5 px-1.5" title={wt.info.path}>
+      <GitBranch className="size-3.5 shrink-0" />
+      <span className="truncate font-mono text-xs text-soft">{worktreeBranch(wt.info)}</span>
+    </span>
   )
 }
 
@@ -45,17 +59,20 @@ function HostPopover({ hostId }: { hostId: string }) {
   const transport = host.transport === 'quic' ? 'QUIC' : host.transport === 'stream' ? 'SSH tunnel' : 'no transport'
   const mock = backend && 'simulateNetworkDrop' in backend ? (backend as unknown as { simulateNetworkDrop(h: string): void }) : null
   const btn =
-    'h-[26px] cursor-pointer rounded-[5px] border border-border bg-transparent text-xs text-body hover:bg-white/10 disabled:cursor-default disabled:opacity-50'
+    'h-7 cursor-pointer rounded-md border border-input bg-card text-sm text-soft hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-50'
   return (
     <Popover>
-      <PopoverTrigger className="flex cursor-pointer items-center gap-1.5 outline-none hover:text-foreground">
+      <PopoverTrigger className="flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none hover:bg-hover hover:text-foreground data-[state=open]:bg-hover">
+        <Server className="size-3.5 shrink-0" />
+        {host.label}
         <HostStateDot host={host} />
-        {host.label} · {hostMeta(host)}
+        <span className="text-xs text-dim">{hostMeta(host)}</span>
         {host.upgrade && (
           <span className="text-status-wait" data-upgrade-hint>
             · civetd v{host.upgrade.availableVersion} available
           </span>
         )}
+        <ChevronDown className="size-3 shrink-0" />
       </PopoverTrigger>
       <PopoverContent
         side="top"

@@ -104,7 +104,7 @@
   --color-link: var(--link);
   --color-scrim: var(--scrim);
   --shadow-floating: 0 12px 40px rgb(0 0 0 / 0.45);
-  --shadow-menu: 0 12px 40px rgb(0 0 0 / 0.5);
+  --shadow-menu: 0 8px 28px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.06);
   --shadow-dialog: 0 24px 70px rgb(0 0 0 / 0.6);
   --shadow-palette: 0 16px 60px rgb(0 0 0 / 0.6);
   --radius-sm: calc(var(--radius) * 0.6);
@@ -115,12 +115,14 @@
 
 /* ── Light ─────────────────────────────────────────────── */
 :root {
-  --font-sans: 'Geist Variable', 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* UI text uses the platform font (SF Pro on macOS), as Cursor does; code,
+     branches and the terminal stay on Geist Mono. */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'Geist Variable', system-ui, sans-serif;
   --font-mono:
     'Geist Mono Variable', 'Geist Mono', 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Consolas,
     monospace;
-  /* sm ≈ 4px (chips), md ≈ 6px (rows, buttons), lg ≈ 7px (menus), xl ≈ 10px (dialogs). */
-  --radius: 0.45rem;
+  /* sm ≈ 5px (chips), md ≈ 6px (rows, pills), lg ≈ 8px (menus, cards), xl ≈ 11px (dialogs, inputs). */
+  --radius: 0.5rem;
   /* Project tiles: oklch(var(--tile-l) var(--tile-c) <hue per project>). */
   --tile-l: 0.76;
   --tile-c: 0.09;
@@ -193,74 +195,78 @@
 }
 
 /* ── Dark (default) ────────────────────────────────────── */
+/* Cursor-style dark: a slightly lifted sidebar (#181819) beside a flat
+   #151616 work area, hairline #262727 borders, #212121 raised surfaces
+   (cards, inputs, selected pills) and a four-step grey text scale
+   (#f0f0f0 / #b8b8b8 / #999 / #6b6b6b). Values sampled from Cursor 2. */
 .dark {
-  --background: #0a0a0a;
-  --foreground: #fafafa;
-  --card: #171717;
-  --card-foreground: #fafafa;
-  --popover: #171717;
-  --popover-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #171717;
-  --secondary: #262626;
-  --secondary-foreground: #fafafa;
-  --muted: #262626;
-  --muted-foreground: #a1a1a1;
-  --accent: #262626;
-  --accent-foreground: #fafafa;
-  --destructive: oklch(0.62 0.17 25);
-  --border: rgb(255 255 255 / 0.1);
-  --input: rgb(255 255 255 / 0.1);
-  --ring: #737373;
+  --background: #151616;
+  --foreground: #f0f0f0;
+  --card: #212121;
+  --card-foreground: #f0f0f0;
+  --popover: #1f1f1f;
+  --popover-foreground: #f0f0f0;
+  --primary: #f0f0f0;
+  --primary-foreground: #151616;
+  --secondary: #252626;
+  --secondary-foreground: #f0f0f0;
+  --muted: #252626;
+  --muted-foreground: #999999;
+  --accent: #252626;
+  --accent-foreground: #f0f0f0;
+  --destructive: #f07178;
+  --border: #262727;
+  --input: #313131;
+  --ring: #599de7;
   --chart-1: var(--color-blue-300);
   --chart-2: var(--color-blue-500);
   --chart-3: var(--color-blue-600);
   --chart-4: var(--color-blue-700);
   --chart-5: var(--color-blue-800);
-  --sidebar: #171717;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #fafafa;
-  --sidebar-primary-foreground: #171717;
-  --sidebar-accent: #262626;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: rgb(255 255 255 / 0.1);
-  --sidebar-ring: #525252;
-  --agent-question: oklch(0.8 0.14 75);
-  --agent-question-text: oklch(0.86 0.12 75);
-  --worktree-sidebar: #171717;
-  --worktree-sidebar-foreground: #fafafa;
-  --worktree-sidebar-accent: #262626;
-  --worktree-sidebar-accent-foreground: #fafafa;
-  --worktree-sidebar-border: rgb(255 255 255 / 0.1);
-  --tab-group-split-divider: #71717a;
-  --tab-group-split-divider-strong: #a1a1aa;
-  --terminal-pane-title-on-dark-fg: #737373;
-  --orca-terminal-divider-color: rgb(255 255 255 / 0.1);
-  --orca-terminal-divider-color-strong: rgb(255 255 255 / 0.25);
-  /* v3 surfaces and text scale */
-  --chrome: #171717;
-  --field: #0a0a0a;
-  --hover: rgb(255 255 255 / 0.04);
+  --sidebar: #181819;
+  --sidebar-foreground: #b8b8b8;
+  --sidebar-primary: #f0f0f0;
+  --sidebar-primary-foreground: #151616;
+  --sidebar-accent: #252626;
+  --sidebar-accent-foreground: #f0f0f0;
+  --sidebar-border: #262727;
+  --sidebar-ring: #599de7;
+  --agent-question: #f1b567;
+  --agent-question-text: #f1b567;
+  --worktree-sidebar: #181819;
+  --worktree-sidebar-foreground: #b8b8b8;
+  --worktree-sidebar-accent: #252626;
+  --worktree-sidebar-accent-foreground: #f0f0f0;
+  --worktree-sidebar-border: #262727;
+  --tab-group-split-divider: #3a3b3b;
+  --tab-group-split-divider-strong: #599de7;
+  --terminal-pane-title-on-dark-fg: #999999;
+  --orca-terminal-divider-color: #262727;
+  --orca-terminal-divider-color-strong: #599de7;
+  /* Surfaces and text scale */
+  --chrome: #181819;
+  --field: #212121;
+  --hover: rgb(255 255 255 / 0.035);
   --hover-strong: rgb(255 255 255 / 0.07);
-  --border-subtle: rgb(255 255 255 / 0.05);
-  --border-strong: rgb(255 255 255 / 0.18);
-  --body: #e5e5e5;
-  --soft: #d4d4d4;
-  --quiet: #8a8a8a;
-  --faint: #737373;
-  --dim: #525252;
-  --ghost: #404040;
+  --border-subtle: #212121;
+  --border-strong: #3a3b3b;
+  --body: #f0f0f0;
+  --soft: #b8b8b8;
+  --quiet: #999999;
+  --faint: #8a8a8a;
+  --dim: #6b6b6b;
+  --ghost: #444546;
   /* Agent status (dots, toasts). */
-  --status-run: oklch(0.74 0.13 250);
-  --status-wait: oklch(0.8 0.14 75);
-  --status-err: oklch(0.68 0.17 25);
-  --status-ok: oklch(0.76 0.13 155);
-  --status-err-text: oklch(0.78 0.12 25);
-  --prompt-user: oklch(0.8 0.12 110);
-  --prompt-path: oklch(0.76 0.1 250);
-  --link: #9ec2f5;
-  --scrim: rgb(5 6 8 / 0.55);
-  --scrim-palette: rgb(0 0 0 / 0.5);
+  --status-run: #599de7;
+  --status-wait: #f1b567;
+  --status-err: #f07178;
+  --status-ok: #6fcf97;
+  --status-err-text: #f49a9f;
+  --prompt-user: #b5bd68;
+  --prompt-path: #7bafe9;
+  --link: #7bafe9;
+  --scrim: rgb(0 0 0 / 0.5);
+  --scrim-palette: rgb(0 0 0 / 0.45);
 }
 
 @layer base {
@@ -291,14 +297,14 @@
 }
 
 ::selection {
-  background: rgb(120 160 255 / 0.3);
+  background: rgb(89 157 231 / 0.35);
 }
 ::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgb(255 255 255 / 0.07);
+  background: rgb(255 255 255 / 0.1);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
@@ -336,16 +342,17 @@
   border-color: transparent;
   outline: none;
 }
-/* Match TERMINAL_THEME_DARK.background so the inset padding isn't a darker frame. */
+/* Match TERMINAL_THEME_DARK.background (= --background) so the terminal sits
+   flush in the work area, like Cursor's integrated terminal. */
 .terminal-host {
-  background-color: #282c34;
+  background-color: var(--background);
 }
 .terminal-host .xterm {
   height: 100%;
   width: 100%;
   /* v3: terminal content sits inset from the chrome. FitAddon subtracts the
      .xterm element's padding, so this changes only layout, not sizing logic. */
-  padding: var(--term-pad, 14px 0 8px 6px);
+  padding: var(--term-pad, 10px 0 8px 14px);
 }
 .pane-multi .terminal-host .xterm {
   --term-pad: 6px 0 4px 6px;
@@ -419,7 +426,7 @@
 }
 .pane-divider:hover::after,
 .pane-divider.is-dragging::after {
-  --divider-thickness: 3px;
+  --divider-thickness: 2px;
   background: var(--orca-terminal-divider-color-strong);
 }
 

@@ -164,7 +164,7 @@ function PaneButton({
     <IconButton
       label={label}
       side="bottom"
-      className="size-5 rounded-sm text-faint hover:bg-white/10 hover:text-foreground dark:hover:bg-white/10"
+      className="size-5 rounded-[4px] text-quiet hover:bg-hover-strong hover:text-foreground dark:hover:bg-hover-strong"
       // Keep the click from refocusing the pane (and its xterm) first.
       onMouseDown={(e) => e.stopPropagation()}
       onClick={onClick}
