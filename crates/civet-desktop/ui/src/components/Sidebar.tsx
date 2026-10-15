@@ -56,7 +56,7 @@ import {
   wtKey
 } from '@/state/store'
 import type { HostView } from '@/state/store'
-import { applyOrder, setPrefs, usePrefs } from '@/state/prefs'
+import { applyOrder, clampSidebarWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
 import { dropLineClass, useReorder, type Reorder } from '@/lib/reorder'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
@@ -80,10 +80,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Kbd, useWorktreeTabs } from './chrome'
 import { IconButton } from './IconButton'
 import { StatusDot } from './StatusDot'
-import { ClaudeLogo } from './ClaudeLogo'
-
-/** Sidebar width; the main header lines up with it when the sidebar is closed. */
-export const SIDEBAR_WIDTH = 260
+import { AgentLogo, hasAgentLogo } from './AgentLogo'
 
 export function Sidebar() {
   const hostOrder = useStore((s) => s.hostOrder)
@@ -94,11 +91,16 @@ export function Sidebar() {
     savedOrder
   )
   const reorder = useReorder(ids, (next) => setPrefs({ hostOrder: next }))
+  const savedWidth = usePrefs((s) => s.sidebarWidth)
+  // While dragging the width lives here; it is saved once, on release.
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const width = dragWidth ?? clampSidebarWidth(savedWidth)
   return (
     <aside
-      className="flex h-full shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground"
-      style={{ width: SIDEBAR_WIDTH }}
+      className="relative flex h-full shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground"
+      style={{ width }}
     >
+      <SidebarResizeHandle width={width} onDrag={setDragWidth} />
       <SidebarTop />
       <SidebarNav />
       <div ref={reorder.listRef} className="min-h-0 flex-1 overflow-y-auto pt-3 pb-3" data-sidebar-scroll>
@@ -112,6 +114,48 @@ export function Sidebar() {
 }
 
 /** Window-title row: traffic-light inset, sidebar toggle, worktree history arrows. */
+/**
+ * Drag the sidebar's right edge to resize it (saved in prefs on release);
+ * double-click restores the default width.
+ */
+function SidebarResizeHandle({ width, onDrag }: { width: number; onDrag: (w: number | null) => void }) {
+  const [start, setStart] = useState<{ x: number; width: number } | null>(null)
+  const at = (e: React.PointerEvent) => clampSidebarWidth(start!.width + e.clientX - start!.x)
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuenow={width}
+      title="Drag to resize, double-click to reset"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        setStart({ x: e.clientX, width })
+      }}
+      onPointerMove={(e) => {
+        if (start) onDrag(at(e))
+      }}
+      onPointerUp={(e) => {
+        if (!start) return
+        setPrefs({ sidebarWidth: at(e) })
+        setStart(null)
+        onDrag(null)
+      }}
+      onPointerCancel={() => {
+        setStart(null)
+        onDrag(null)
+      }}
+      onDoubleClick={() => setPrefs({ sidebarWidth: DEFAULT_PREFS.sidebarWidth })}
+      className={cn(
+        'absolute inset-y-0 -right-[3px] z-10 w-1.5 cursor-col-resize transition-colors hover:bg-border-strong',
+        start && 'bg-border-strong'
+      )}
+    />
+  )
+}
+
 function SidebarTop() {
   const inset = useTitleBarInset()
   const backendKind = useStore((s) => s.backend?.kind)
@@ -657,8 +701,8 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
                   }}
                   className="group/tab flex h-6 cursor-default items-center gap-2 pl-[26px] text-sm"
                 >
-                  {t.agent?.agent === 'claude' ? (
-                    <ClaudeLogo className="size-3" />
+                  {t.agent && hasAgentLogo(t.agent.agent) ? (
+                    <AgentLogo agent={t.agent.agent} className="size-3" />
                   ) : t.agent ? null : (
                     <Terminal className="size-3 shrink-0 text-dim" />
                   )}

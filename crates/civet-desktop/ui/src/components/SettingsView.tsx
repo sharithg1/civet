@@ -84,6 +84,13 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
         desc: "Used for new Claude tabs (⌥C) and as the on-create step for projects that don't save their own.",
         ph: 'claude'
       },
+      {
+        id: 'codexCommand',
+        kind: 'input',
+        label: 'Codex command',
+        desc: 'Used for new Codex tabs (⌥X) and Codex on-create steps.',
+        ph: 'codex'
+      },
       { id: 'confirmCloseRunning', kind: 'switch', label: 'Confirm before closing a running agent' }
     ]
   },
@@ -110,6 +117,7 @@ const KEYS: [string, string][] = [
   ['⌥↑ / ⌥↓', 'Previous / next worktree'],
   ['⌥1 … ⌥9', 'Go to tab'],
   ['⌥C', 'New Claude tab'],
+  ['⌥X', 'New Codex tab'],
   ['⌥T / ⌘T', 'New terminal tab'],
   ['⌘D / ⇧⌘D', 'Split right / down'],
   ['⌘W', 'Close focused pane'],

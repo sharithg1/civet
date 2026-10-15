@@ -18,7 +18,17 @@ import {
 import { aggregateStatus } from '../lib/agent-status'
 import { promptLabel, worktreeBranch } from '../lib/worktree-view'
 import { splitShellWords } from '../lib/shell-words'
-import { applyOrder, onPrefsChange, setPrefs, usePrefs, type CreateStep, type Prefs } from './prefs'
+import {
+  agentCommandFor,
+  applyOrder,
+  onPrefsChange,
+  setPrefs,
+  stepAgent,
+  usePrefs,
+  type AgentKind,
+  type CreateStep,
+  type Prefs
+} from './prefs'
 import { forgetHost, loadSavedHosts, savedHost, saveHost } from './saved-hosts'
 import type {
   AgentAttentionEvent,
@@ -1053,13 +1063,21 @@ export function parseCommand(line: string): CommandSpec | null {
   return words.length ? { program: words[0]!, args: words.slice(1) } : null
 }
 
-const agentOf = (cmd: CommandSpec) => cmd.program.split('/').pop() || null
+/**
+ * The agent hint for a command: its program name, or `kind` when the program
+ * is some other launcher (`npx @openai/codex`), so the tab still gets the
+ * agent's name and logo.
+ */
+const agentOf = (cmd: CommandSpec, kind?: AgentKind) => {
+  const program = cmd.program.split('/').pop() || null
+  return kind && program !== 'claude' && program !== 'codex' ? kind : program
+}
 
-/** New tab running an agent (⌥C / "+" → Claude Code) in an existing worktree. */
-export async function newAgentTab(hostId: string, worktree: string, commandLine?: string): Promise<void> {
+/** New tab running an agent (⌥C / ⌥X / "+" → Claude Code, Codex) in an existing worktree. */
+export async function newAgentTab(hostId: string, worktree: string, kind: AgentKind = 'claude'): Promise<void> {
   if (isRemoving(hostId, worktree)) return
   try {
-    const command = parseCommand(commandLine ?? usePrefs.getState().agentCommand)
+    const command = parseCommand(agentCommandFor(kind))
     if (!command) throw new Error('No agent command configured')
     const wt = worktreesOf(hostId).find((w) => w.id === worktree)
     const pane = await backend().spawnPane(hostId, {
@@ -1069,7 +1087,7 @@ export async function newAgentTab(hostId: string, worktree: string, commandLine?
       env: [],
       size: DEFAULT_SPAWN_SIZE,
       title: null,
-      agent: agentOf(command)
+      agent: agentOf(command, kind)
     })
     addPaneSnapshot(hostId, pane)
     openPaneInTab(hostId, worktree, pane.id)
@@ -1094,12 +1112,15 @@ export async function createWorktreeWithSteps(p: {
   prompt: string
 }): Promise<void> {
   const steps = p.steps
-    .map((st) => ({ ...st, cmd: st.cmd.trim() || (st.kind === 'agent' ? usePrefs.getState().agentCommand : '') }))
-    .filter((st) => st.kind === 'agent' || st.cmd)
-  const firstAgent = steps.findIndex((st) => st.kind === 'agent')
+    .map((st) => {
+      const agent = stepAgent(st.kind)
+      return { ...st, agent, cmd: st.cmd.trim() || (agent ? agentCommandFor(agent) : '') }
+    })
+    .filter((st) => st.agent || st.cmd)
+  const firstAgent = steps.findIndex((st) => st.agent)
   const prompt = p.prompt.trim()
   const specs = steps.map((st, i) => {
-    if (st.kind !== 'agent') return null
+    if (!st.agent) return null
     const spec = parseCommand(st.cmd)
     if (!spec) throw new Error(`Step ${i + 1}: enter a command`)
     return i === firstAgent && prompt ? { ...spec, args: [...spec.args, prompt] } : spec
@@ -1124,7 +1145,7 @@ export async function createWorktreeWithSteps(p: {
       env: [],
       size: DEFAULT_SPAWN_SIZE,
       title: prompt ? prompt.slice(0, 80) : branch,
-      agent: agentOf(command)
+      agent: agentOf(command, steps[firstAgent]!.agent!)
     })
     worktree = res.worktree
     addPaneSnapshot(p.hostId, res.pane)
@@ -1141,15 +1162,15 @@ export async function createWorktreeWithSteps(p: {
       const pane = await backend().spawnPane(p.hostId, {
         worktree: worktree.id,
         cwd: worktree.path,
-        command: st.kind === 'agent' ? specs[i]! : null,
+        command: st.agent ? specs[i]! : null,
         env: [],
         size: DEFAULT_SPAWN_SIZE,
         title: i === firstAgent && prompt ? prompt.slice(0, 80) : null,
-        agent: st.kind === 'agent' ? agentOf(specs[i]!) : null
+        agent: st.agent ? agentOf(specs[i]!, st.agent) : null
       })
       addPaneSnapshot(p.hostId, pane)
       opened[i] = pane.id
-      if (st.kind === 'terminal') await backend().writeInput(p.hostId, pane.id, `${st.cmd}\r`)
+      if (!st.agent) await backend().writeInput(p.hostId, pane.id, `${st.cmd}\r`)
     } catch (err) {
       reportError(`On-create step ${i + 1} failed`, err)
     }
@@ -1164,7 +1185,7 @@ export async function createWorktreeWithSteps(p: {
   const focus = opened[firstAgent >= 0 ? firstAgent : 0] ?? opened.find((x) => x !== undefined)
   if (focus !== undefined) openPaneInTab(p.hostId, worktree.id, focus)
   const label = steps.length
-    ? steps.map((st) => (st.kind === 'agent' ? `opened ${st.cmd}` : `ran ${st.cmd}`)).join(', ')
+    ? steps.map((st) => (st.agent ? `opened ${st.cmd}` : `ran ${st.cmd}`)).join(', ')
     : 'no on-create steps'
   const what = branch ? `Created ${branch}` : `Opened in ${worktreeBranch(worktree)}`
   pushToast({ kind: 'info', title: `${what} · ${label}` }, 3200)

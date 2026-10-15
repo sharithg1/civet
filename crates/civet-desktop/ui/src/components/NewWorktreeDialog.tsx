@@ -1,14 +1,14 @@
 // "New worktree" (Civet v3): project chips, branch name (optional: empty runs
 // the steps in the project's main checkout), a preview line with
-// the (editable) base, ordered on-create steps (Claude / Terminal, each opens
-// in its own tab), "Save as default for <project>", and an optional first
-// task for Claude. The first agent step goes through `launch_agent`, so the
+// the (editable) base, ordered on-create steps (Claude / Codex / Terminal,
+// each opens in its own tab), "Save as default for <project>", and an
+// optional first task for the first agent. The first agent step goes through `launch_agent`, so the
 // single-call "worktree + agent" path is unchanged; see
 // store.createWorktreeWithSteps.
 
 import { useState } from 'react'
 import { createWorktreeWithSteps, useStore, wtKey } from '@/state/store'
-import { setPrefs, usePrefs, type CreateStep } from '@/state/prefs'
+import { agentCommandFor, setPrefs, stepAgent, usePrefs, type CreateStep, type StepKind } from '@/state/prefs'
 import { splitShellWords } from '@/lib/shell-words'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
@@ -31,6 +31,21 @@ export function branchNameError(name: string): string | null {
 
 const FIELD =
   'border-border bg-field shadow-none dark:bg-field font-mono text-foreground placeholder:text-faint focus-visible:ring-0 focus-visible:border-border-strong'
+
+const STEP_KINDS: readonly [StepKind, string][] = [
+  ['agent', 'Claude'],
+  ['codex', 'Codex'],
+  ['terminal', 'Terminal']
+]
+
+/** A step's command after switching its kind: an agent's default command follows the kind. */
+function switchedCmd(from: CreateStep, to: StepKind): string {
+  const prev = stepAgent(from.kind)
+  const next = stepAgent(to)
+  const isDefault = !from.cmd.trim() || (prev !== null && from.cmd === agentCommandFor(prev))
+  if (!isDefault) return from.cmd
+  return next ? agentCommandFor(next) : ''
+}
 
 function defaultSteps(hostId: string, repo: string): CreateStep[] {
   const saved = usePrefs.getState().createSteps[wtKey(hostId, repo)]
@@ -61,7 +76,7 @@ export function NewWorktreeDialog() {
   const baseValue = base ?? repo?.defaultBranch ?? ''
   const stepError = steps
     .map((st, i) => {
-      if (st.kind !== 'agent' || !st.cmd.trim()) return null
+      if (!stepAgent(st.kind) || !st.cmd.trim()) return null
       try {
         splitShellWords(st.cmd)
         return null
@@ -71,7 +86,9 @@ export function NewWorktreeDialog() {
     })
     .find(Boolean)
   const canSubmit = !busy && !!repo && !nameError && !stepError
-  const hasAgent = steps.some((s) => s.kind === 'agent')
+  const firstAgent = steps.map((s) => stepAgent(s.kind)).find((a) => a !== null)
+  const hasAgent = !!firstAgent
+  const agentLabel = firstAgent === 'codex' ? 'Codex' : 'Claude'
   const slug = name.trim() || '<branch>'
   const update = (i: number, patch: Partial<CreateStep>) =>
     setSteps((list) => list.map((s, j) => (j === i ? { ...s, ...patch } : s)))
@@ -191,28 +208,13 @@ export function NewWorktreeDialog() {
                 <div key={i} className="flex items-center gap-2 border-b border-white/[0.08] px-2 py-1.5">
                   <span className="w-3 text-right font-mono text-2xs text-dim">{i + 1}</span>
                   <div className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5" role="radiogroup" aria-label={`Step ${i + 1} kind`}>
-                    {(
-                      [
-                        ['agent', 'Claude'],
-                        ['terminal', 'Terminal']
-                      ] as const
-                    ).map(([k, label]) => (
+                    {STEP_KINDS.map(([k, label]) => (
                       <button
                         key={k}
                         type="button"
                         role="radio"
                         aria-checked={st.kind === k}
-                        onClick={() =>
-                          update(i, {
-                            kind: k,
-                            cmd:
-                              k === 'agent'
-                                ? st.cmd || usePrefs.getState().agentCommand
-                                : st.cmd === usePrefs.getState().agentCommand
-                                  ? ''
-                                  : st.cmd
-                          })
-                        }
+                        onClick={() => update(i, { kind: k, cmd: switchedCmd(st, k) })}
                         className={cn(
                           'h-5 cursor-pointer rounded-sm px-2 text-xs',
                           st.kind === k ? 'bg-field text-foreground' : 'bg-transparent text-muted-foreground'
@@ -225,7 +227,7 @@ export function NewWorktreeDialog() {
                   <Input
                     aria-label={`Step ${i + 1} command`}
                     value={st.cmd}
-                    placeholder={st.kind === 'agent' ? 'claude' : 'pnpm install'}
+                    placeholder={st.kind === 'agent' ? 'claude' : st.kind === 'codex' ? 'codex' : 'pnpm install'}
                     spellCheck={false}
                     onChange={(e) => update(i, { cmd: e.target.value })}
                     className={cn('h-[26px] min-w-0 flex-1 rounded-[5px] border-white/[0.08] px-2 text-xs', FIELD)}
@@ -263,11 +265,13 @@ export function NewWorktreeDialog() {
             {stepError && <span className="text-2xs text-status-err-text">{stepError}</span>}
           </div>
           <Textarea
-            aria-label="First task for Claude"
+            aria-label={`First task for ${agentLabel}`}
             value={prompt}
             rows={3}
             disabled={!hasAgent}
-            placeholder={hasAgent ? 'First task for Claude (optional)' : 'Add a Claude step to give it a first task'}
+            placeholder={
+              hasAgent ? `First task for ${agentLabel} (optional)` : 'Add a Claude or Codex step to give it a first task'
+            }
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {

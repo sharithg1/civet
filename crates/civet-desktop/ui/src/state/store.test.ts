@@ -146,6 +146,57 @@ describe('store', () => {
     setPrefs({ prediction: 'auto' })
   })
 
+  describe('Codex tabs and steps', () => {
+    const main: WorktreeInfo = { id: '/m', repo: 'r', path: '/m', branch: 'main', head: null, isMain: true, locked: false }
+    function setup() {
+      let next = 10
+      const spawnPane = vi.fn(async (_h: string, req: { command: { program: string } | null; agent: string | null }) =>
+        pane(next++, { worktree: '/m', command: req.command ? [req.command.program] : ['zsh'], agent: req.agent })
+      )
+      useStore.setState({
+        backend: fakeBackend({ spawnPane, writeInput: vi.fn(async () => {}) } as Partial<CivetBackend>),
+        repos: { h: [{ id: 'r', name: 'r', path: '/m', defaultBranch: 'main' }] },
+        worktrees: { [store.wtKey('h', 'r')]: [main] },
+        workspaces: {},
+        removing: {}
+      })
+      return spawnPane
+    }
+    afterEach(() => setPrefs({ codexCommand: 'codex' }))
+
+    it('⌥X opens the configured Codex command with the codex agent hint', async () => {
+      const spawnPane = setup()
+      setPrefs({ codexCommand: 'npx @openai/codex --full-auto' })
+      await store.newAgentTab('h', '/m', 'codex')
+      expect(spawnPane).toHaveBeenCalledWith(
+        'h',
+        expect.objectContaining({
+          command: { program: 'npx', args: ['@openai/codex', '--full-auto'] },
+          agent: 'codex'
+        })
+      )
+    })
+
+    it('a Codex on-create step runs codex and gets the first task', async () => {
+      const spawnPane = setup()
+      await store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'r',
+        branch: '',
+        base: null,
+        steps: [
+          { kind: 'codex', cmd: '' },
+          { kind: 'agent', cmd: '' }
+        ],
+        prompt: 'fix the bug'
+      })
+      expect(spawnPane.mock.calls.map(([, req]) => req)).toEqual([
+        expect.objectContaining({ command: { program: 'codex', args: ['fix the bug'] }, agent: 'codex' }),
+        expect.objectContaining({ command: { program: 'claude', args: [] }, agent: 'claude' })
+      ])
+    })
+  })
+
   describe('removeWorktree', () => {
     const repo: RepoInfo = { id: 'r', name: 'r', path: '/r', defaultBranch: 'main' }
     const wt = (id: string, patch: Partial<WorktreeInfo> = {}): WorktreeInfo => ({

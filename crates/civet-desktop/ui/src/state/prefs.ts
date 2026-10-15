@@ -6,7 +6,8 @@ import { create } from 'zustand'
 
 export type WorktreeLabel = 'task' | 'branch'
 export type SidebarTabs = 'selected' | 'all' | 'none'
-export type StepKind = 'agent' | 'terminal'
+/** `agent` is a Claude step (the name predates Codex steps; kept for saved steps). */
+export type StepKind = 'agent' | 'codex' | 'terminal'
 export type CreateStep = { kind: StepKind; cmd: string }
 /** Local echo prediction: `auto` = mosh-style, only on links slower than ~30 ms. */
 export type Prediction = 'auto' | 'off'
@@ -31,6 +32,8 @@ export type Prefs = {
   recentCount: number
   /** Command for new Claude tabs (⌥C) and the default on-create step. */
   agentCommand: string
+  /** Command for new Codex tabs (⌥X) and Codex on-create steps. */
+  codexCommand: string
   /** Ask before closing a pane whose agent is still working. */
   confirmCloseRunning: boolean
   /** Saved on-create steps per `${hostId}\0${repoId}` ("Save as default for …"). */
@@ -47,6 +50,8 @@ export type Prefs = {
   collapsedHosts: Record<string, true>
   /** Collapsed projects in the sidebar, by `wtKey(hostId, repoId)`. */
   collapsedRepos: Record<string, true>
+  /** Sidebar width in px, as last dragged. */
+  sidebarWidth: number
   /** Panels as last toggled (⌥B / ⌥E); null: the default for the window size. */
   sidebarOpen: boolean | null
   rightPanelOpen: boolean | null
@@ -54,6 +59,19 @@ export type Prefs = {
   rightTab: 'files' | 'changes' | 'branch' | 'ports'
   /** Port forwards to restore on connect, per host id. */
   pinnedForwards: Record<string, PinnedForward[]>
+}
+
+/** Agent CLIs with their own tab command (⌥C / ⌥X) and on-create step kind. */
+export type AgentKind = 'claude' | 'codex'
+
+/** The configured command line for an agent kind. */
+export function agentCommandFor(kind: AgentKind, prefs: Prefs = usePrefs.getState()): string {
+  return kind === 'codex' ? prefs.codexCommand : prefs.agentCommand
+}
+
+/** The agent an on-create step runs, or null for a terminal step. */
+export function stepAgent(kind: StepKind): AgentKind | null {
+  return kind === 'agent' ? 'claude' : kind === 'codex' ? 'codex' : null
 }
 
 /** Fields kept by "Reset to defaults": saved data and sidebar layout, not settings. */
@@ -65,6 +83,7 @@ const KEPT_ON_RESET = [
   'collapsedHosts',
   'collapsedRepos',
   'sidebarOpen',
+  'sidebarWidth',
   'rightPanelOpen',
   'rightTab',
   'pinnedForwards'
@@ -75,6 +94,7 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarTabs: 'selected',
   recentCount: 5,
   agentCommand: 'claude',
+  codexCommand: 'codex',
   confirmCloseRunning: true,
   createSteps: {},
   prediction: 'auto',
@@ -84,6 +104,7 @@ export const DEFAULT_PREFS: Prefs = {
   collapsedHosts: {},
   collapsedRepos: {},
   sidebarOpen: null,
+  sidebarWidth: 260,
   rightPanelOpen: null,
   rightTab: 'branch',
   pinnedForwards: {}
@@ -122,6 +143,15 @@ export function resetPrefs(): void {
 }
 
 /** `ids` in the saved `order` first, then the rest in their original order. */
+/** Sidebar width limits for the drag handle. */
+export const SIDEBAR_MIN_WIDTH = 200
+export const SIDEBAR_MAX_WIDTH = 480
+
+export function clampSidebarWidth(px: number): number {
+  if (!Number.isFinite(px)) return DEFAULT_PREFS.sidebarWidth
+  return Math.round(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, px)))
+}
+
 export function applyOrder(ids: readonly string[], order: readonly string[] | undefined): string[] {
   if (!order?.length) return [...ids]
   const rank = new Map(order.map((id, i) => [id, i]))
