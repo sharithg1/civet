@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-worktrees"
+description = "Enables the list_worktrees command without any pre-configured scope."
+commands.allow = ["list_worktrees"]
+
+[[permission]]
+identifier = "deny-list-worktrees"
+description = "Denies the list_worktrees command without any pre-configured scope."
+commands.deny = ["list_worktrees"]

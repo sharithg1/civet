@@ -79,6 +79,12 @@ dirs = "7.0.0"
 tauri = { version = "2.12.4", features = [] }
 tauri-build = { version = "2.7.3", features = [] }
 tauri-plugin-notification = "2.7.0"
+# macOS wake notification (NSWorkspaceDidWakeNotification); already in the
+# graph via tao/wry, only features are added.
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace"] }
+block2 = "0.6.2"
 
 # --- test helpers ---
 tempfile = "3.27"

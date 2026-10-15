@@ -1,0 +1,61 @@
+{
+  "description": "Shared binary channel record fixture (docs/INTERFACES.md 6.2). Checked by src/records.rs (Rust) and records.fixture.test.ts (UI). payload is UTF-8 text.",
+  "records": [
+    {
+      "kind": 1,
+      "flags": 3,
+      "cols": 80,
+      "rows": 24,
+      "state": 4294967303,
+      "ackedInputSeq": 5,
+      "historyStart": 1000,
+      "historyLines": 2000,
+      "payload": "\u001bc[full]"
+    },
+    {
+      "kind": 2,
+      "flags": 0,
+      "cols": 80,
+      "rows": 24,
+      "state": 4294967303,
+      "ackedInputSeq": 9,
+      "historyStart": 0,
+      "historyLines": 0,
+      "payload": ""
+    },
+    {
+      "kind": 1,
+      "flags": 4,
+      "cols": 100,
+      "rows": 30,
+      "state": 4294967304,
+      "ackedInputSeq": 9,
+      "historyStart": 2100,
+      "historyLines": 2150,
+      "payload": "\u00e9\u2603\r\n"
+    },
+    {
+      "kind": 4,
+      "flags": 0,
+      "cols": 100,
+      "rows": 30,
+      "state": 4294967304,
+      "ackedInputSeq": 9,
+      "historyStart": 0,
+      "historyLines": 0,
+      "payload": "\u001b[4mx\u001b[0m"
+    },
+    {
+      "kind": 3,
+      "flags": 0,
+      "cols": 0,
+      "rows": 0,
+      "state": 0,
+      "ackedInputSeq": 0,
+      "historyStart": 0,
+      "historyLines": 0,
+      "payload": ""
+    }
+  ],
+  "hex": "010350001800000007000000010000000500000000000000e803000000000000d007000000000000080000001b635b66756c6c5d0200500018000000070000000100000009000000000000000000000000000000000000000000000000000000010464001e000000080000000100000009000000000000003408000000000000660800000000000007000000c3a9e298830d0a040064001e0000000800000001000000090000000000000000000000000000000000000000000000090000001b5b346d781b5b306d0300000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+}

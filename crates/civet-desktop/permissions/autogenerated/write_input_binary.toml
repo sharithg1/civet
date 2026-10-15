@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-write-input-binary"
+description = "Enables the write_input_binary command without any pre-configured scope."
+commands.allow = ["write_input_binary"]
+
+[[permission]]
+identifier = "deny-write-input-binary"
+description = "Denies the write_input_binary command without any pre-configured scope."
+commands.deny = ["write_input_binary"]

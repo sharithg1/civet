@@ -7,6 +7,7 @@
 
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import type { CivetBackend, PaneAttachment } from '../backend'
 import { termSize, type PaneId } from '../types'
 import { FrameBatcher } from './frame-batcher'
@@ -68,6 +69,10 @@ export class PaneController {
   mount(container: HTMLElement): void {
     this.container = container
     this.term.loadAddon(this.fit)
+    // Match the daemon's (alacritty_terminal) character widths: emoji and
+    // other wide chars take two cells, so diffs from the server line up.
+    this.term.loadAddon(new Unicode11Addon())
+    this.term.unicode.activeVersion = '11'
     this.term.open(container)
     this.webgl = attachWebgl(this.term, (reason) => this.cb.onRenderer('dom', reason))
     if (this.webgl.active) this.cb.onRenderer('webgl')

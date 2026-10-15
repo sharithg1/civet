@@ -6,13 +6,51 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+default-run = "civet-desktop"
 
-# Placeholder: the desktop agent adds tauri / tauri-build (pinned in the
-# workspace) and a [[bin]] target. This crate is excluded from the
-# workspace's default-members so Tauri doesn't slow everyone else's builds.
+# Excluded from the workspace's default-members so Tauri doesn't slow down
+# everyone else's builds: `cargo build -p civet-desktop`.
+
+[lib]
+name = "civet_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "civet-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
 
 [dependencies]
 civet-proto.workspace = true
+civet-transport.workspace = true
+civet-term.workspace = true
+civetd.workspace = true
+tauri.workspace = true
+tauri-plugin-notification.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-app-kit.workspace = true
+block2.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tauri = { workspace = true, features = ["test"] }
+# The in-process daemon for the integration tests.
+civetd = { workspace = true, features = ["server"] }
+anyhow.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

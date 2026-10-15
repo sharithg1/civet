@@ -12,11 +12,12 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "cd .. && tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
     "@xterm/addon-fit": "0.12.0-beta.301",
+    "@xterm/addon-unicode11": "0.10.0-beta.301",
     "@xterm/addon-webgl": "0.20.0-beta.300",
     "@xterm/xterm": "6.1.0-beta.304",
     "clsx": "^2.1.1",

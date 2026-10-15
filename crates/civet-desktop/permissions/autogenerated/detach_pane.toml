@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-detach-pane"
+description = "Enables the detach_pane command without any pre-configured scope."
+commands.allow = ["detach_pane"]
+
+[[permission]]
+identifier = "deny-detach-pane"
+description = "Denies the detach_pane command without any pre-configured scope."
+commands.deny = ["detach_pane"]

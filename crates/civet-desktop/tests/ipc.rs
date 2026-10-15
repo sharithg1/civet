@@ -1,0 +1,191 @@
+//! The real Tauri command layer through the IPC boundary (mock runtime, the
+//! app's own tauri.conf.json and capability/ACL): every command accepts the
+//! exact JSON argument names `ui/src/backend.ts` sends, rejects with
+//! `{ code, message }`, and is permitted for the main window.
+
+use std::sync::Arc;
+
+use civet_desktop::commands::{AppState, handler};
+use civet_desktop::error::CmdError;
+use civet_desktop::events::{
+    AgentAttentionEvent, BootstrapProgressEvent, DaemonEventPayload, HostStateEvent, HostTarget,
+    TransportChoice, UiEvents,
+};
+use civet_desktop::hosts::{Connector, Established, HostManager, ManagerConfig, Progress};
+use futures::future::BoxFuture;
+use serde_json::{Value, json};
+use tauri::ipc::{CallbackFn, InvokeBody};
+use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder};
+use tauri::webview::InvokeRequest;
+
+struct NullUi;
+
+impl UiEvents for NullUi {
+    fn host_state(&self, _: HostStateEvent) {}
+    fn bootstrap_progress(&self, _: BootstrapProgressEvent) {}
+    fn daemon_event(&self, _: DaemonEventPayload) {}
+    fn agent_attention(&self, _: AgentAttentionEvent) {}
+    fn window_focused(&self) -> bool {
+        true
+    }
+    fn notify(&self, _: &str, _: &str) {}
+}
+
+/// Every connect fails like an unreachable ssh host.
+struct Unreachable;
+
+impl Connector for Unreachable {
+    fn connect<'a>(
+        &'a self,
+        _: &'a HostTarget,
+        _: TransportChoice,
+        _: Progress,
+    ) -> BoxFuture<'a, Result<Established, CmdError>> {
+        Box::pin(async {
+            Err(CmdError::bootstrap(
+                "ssh failed (exit Some(255)): unreachable",
+            ))
+        })
+    }
+}
+
+fn invoke(
+    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+    cmd: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let req = InvokeRequest {
+        cmd: cmd.into(),
+        callback: CallbackFn(0),
+        error: CallbackFn(1),
+        url: "tauri://localhost".parse().unwrap(),
+        body: InvokeBody::Json(args),
+        headers: Default::default(),
+        invoke_key: INVOKE_KEY.to_string(),
+    };
+    get_ipc_response(webview, req).map(|b| b.deserialize::<Value>().unwrap())
+}
+
+#[test]
+fn every_command_through_ipc() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tauri::async_runtime::set(rt.handle().clone());
+    let hosts = HostManager::new(
+        ManagerConfig::default(),
+        Arc::new(NullUi),
+        Arc::new(Unreachable),
+        rt.handle().clone(),
+    );
+    let app = mock_builder()
+        .manage(AppState { hosts })
+        .invoke_handler(handler())
+        .build(civet_desktop::context())
+        .expect("app");
+    let w = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    assert_eq!(invoke(&w, "list_hosts", json!({})), Ok(json!([])));
+    assert_eq!(
+        invoke(&w, "notify_network_change", json!({})),
+        Ok(Value::Null)
+    );
+    assert_eq!(
+        invoke(&w, "set_prediction", json!({ "enabled": false })),
+        Ok(Value::Null)
+    );
+
+    // connect_host: bootstrap failure → { code: "bootstrap" }, host listed as failed.
+    let err = invoke(
+        &w,
+        "connect_host",
+        json!({ "target": { "kind": "ssh", "destination": "box", "port": null, "extraArgs": [] }, "transport": "auto" }),
+    )
+    .unwrap_err();
+    assert_eq!(err["code"], "bootstrap", "{err}");
+    assert!(err["message"].as_str().unwrap().contains("unreachable"));
+    let hosts = invoke(&w, "list_hosts", json!({})).unwrap();
+    assert_eq!(hosts[0]["hostId"], "box");
+    assert_eq!(hosts[0]["state"], "failed");
+
+    // Every host command with the UI's argument names: the arguments
+    // deserialize (else Tauri rejects with a string, not { code }) and the
+    // unknown host is reported as noSuchHost.
+    let size = json!({ "cols": 80, "rows": 24, "pixelWidth": 0, "pixelHeight": 0 });
+    let spawn = json!({
+        "worktree": null, "cwd": null, "command": { "program": "sh", "args": [] },
+        "env": [["A", "1"]], "size": size, "title": null, "agent": null
+    });
+    let launch = json!({
+        "repo": "r", "branch": "b", "base": null, "worktreePath": null,
+        "command": { "program": "claude", "args": [] }, "env": [], "size": size,
+        "title": null, "agent": "claude"
+    });
+    let calls: Vec<(&str, Value)> = vec![
+        ("disconnect_host", json!({ "hostId": "x" })),
+        ("daemon_info", json!({ "hostId": "x" })),
+        ("ping", json!({ "hostId": "x" })),
+        ("list_repos", json!({ "hostId": "x" })),
+        ("add_repo", json!({ "hostId": "x", "path": "/r" })),
+        ("remove_repo", json!({ "hostId": "x", "repo": "r" })),
+        ("list_worktrees", json!({ "hostId": "x", "repo": "r" })),
+        (
+            "create_worktree",
+            json!({ "hostId": "x", "repo": "r", "branch": "b", "base": null, "path": null }),
+        ),
+        (
+            "remove_worktree",
+            json!({ "hostId": "x", "worktree": "/w", "force": true }),
+        ),
+        ("list_panes", json!({ "hostId": "x" })),
+        ("spawn_pane", json!({ "hostId": "x", "request": spawn })),
+        ("launch_agent", json!({ "hostId": "x", "request": launch })),
+        (
+            "attach_pane",
+            json!({ "hostId": "x", "pane": 1, "onOutput": "__CHANNEL__:7" }),
+        ),
+        ("detach_pane", json!({ "hostId": "x", "pane": 1 })),
+        (
+            "write_input",
+            json!({ "hostId": "x", "pane": 1, "data": "ls\r" }),
+        ),
+        (
+            "write_input_binary",
+            json!({ "hostId": "x", "pane": 1, "data": "\u{1b}[M !!" }),
+        ),
+        (
+            "resize_pane",
+            json!({ "hostId": "x", "pane": 1, "size": size }),
+        ),
+        ("kill_pane", json!({ "hostId": "x", "pane": 1 })),
+        (
+            "kill_pane",
+            json!({ "hostId": "x", "pane": 1, "signal": "terminate" }),
+        ),
+        (
+            "fetch_scrollback",
+            json!({ "hostId": "x", "pane": 1, "query": { "before": { "end": null, "limit": 200 } } }),
+        ),
+        (
+            "fetch_scrollback",
+            json!({ "hostId": "x", "pane": 1, "query": { "range": { "start": 0, "end": 10 } } }),
+        ),
+        (
+            "set_agent_status",
+            json!({ "hostId": "x", "pane": 1, "status": "needsInput" }),
+        ),
+    ];
+    for (cmd, args) in calls {
+        let err = invoke(&w, cmd, args).unwrap_err();
+        assert_eq!(err["code"], "noSuchHost", "{cmd}: {err}");
+    }
+    // A malformed argument is rejected by Tauri itself (sanity check that
+    // the loop above really exercised deserialization).
+    let err = invoke(&w, "kill_pane", json!({ "hostId": "x", "pane": "one" })).unwrap_err();
+    assert!(err.is_string(), "{err}");
+    drop(app);
+    rt.shutdown_background();
+}

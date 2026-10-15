@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-repos"
+description = "Enables the list_repos command without any pre-configured scope."
+commands.allow = ["list_repos"]
+
+[[permission]]
+identifier = "deny-list-repos"
+description = "Denies the list_repos command without any pre-configured scope."
+commands.deny = ["list_repos"]
