@@ -191,6 +191,9 @@ fn all_requests() -> Vec<Request> {
             name: "shot.png".into(),
             data: vec![0x89, b'P', b'N', b'G'],
         },
+        Request::ListPullRequests {
+            repo: RepoId::from("r"),
+        },
     ]
 }
 
@@ -231,6 +234,13 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
         Ok(Response::FileUploaded {
             path: "/tmp/civet-drops/1/shot.png".into(),
         }),
+        Ok(Response::PullRequests(vec![PullRequestInfo {
+            number: 42,
+            branch: "feat/x".into(),
+            title: "Add x".into(),
+            url: "https://github.com/o/r/pull/42".into(),
+            state: PullRequestState::Merged,
+        }])),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]

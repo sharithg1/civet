@@ -34,6 +34,7 @@ import type {
   HostTarget,
   PaneId,
   PaneInfo,
+  PullRequestInfo,
   RepoInfo,
   TermSize,
   TransportChoice,
@@ -82,6 +83,8 @@ type State = {
   repos: Record<string, RepoInfo[]>
   /** key: wtKey(hostId, repoId) */
   worktrees: Record<string, WorktreeInfo[]>
+  /** key: wtKey(hostId, repoId) → head branch → its newest PR */
+  pullRequests: Record<string, Record<string, PullRequestInfo>>
   panes: Record<string, Record<PaneId, PaneInfo>>
   /** key: wsKey(hostId, worktreeId) */
   workspaces: Record<string, Workspace>
@@ -122,6 +125,7 @@ export const useStore = create<State>(() => ({
   hostOrder: [],
   repos: {},
   worktrees: {},
+  pullRequests: {},
   panes: {},
   workspaces: {},
   active: null,
@@ -211,6 +215,7 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
   }
   window.addEventListener('online', nudge)
   document.addEventListener('visibilitychange', onVisibility)
+  const prTimer = setInterval(resyncPullRequests, PR_REFRESH_MS)
 
   // Local echo prediction preference (Settings → General); Rust defaults to on.
   const pushPrediction = () =>
@@ -243,6 +248,7 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
 
   return () => {
     unPrefs()
+    clearInterval(prTimer)
     unlisten.forEach((u) => u())
     window.removeEventListener('online', nudge)
     document.removeEventListener('visibilitychange', onVisibility)
@@ -445,6 +451,7 @@ export function refreshWorktrees(hostId: string, repo: string): Promise<void> {
         if ((wtEpoch.get(k) ?? 0) !== epoch) entry.again = true
         else applyWorktreeList(hostId, repo, list)
       }
+      refreshPullRequests(hostId, repo)
     } catch (err) {
       reportError(`Could not list worktrees of ${repo}`, err)
     } finally {
@@ -518,6 +525,50 @@ export function resyncWorktrees(): void {
   for (const [hostId, h] of Object.entries(s.hosts)) {
     if (h.state !== 'connected') continue
     for (const r of s.repos[hostId] ?? []) void refreshWorktrees(hostId, r.id)
+  }
+}
+
+// ── Pull requests ─────────────────────────────────────────────────────────
+// `gh pr list` on the host (civetd >= 0.1.5), at most once a minute per
+// repo: after worktree re-lists and on a timer (initApp). Failures (no gh,
+// not logged in, not a GitHub repo, older daemon) leave rows without a PR.
+
+const PR_REFRESH_MS = 60_000
+/** key: wtKey → when its last `list_pull_requests` started (ms) */
+const prFetched = new Map<string, number>()
+
+export function refreshPullRequests(hostId: string, repo: string): void {
+  const k = wtKey(hostId, repo)
+  const now = Date.now()
+  if (now - (prFetched.get(k) ?? -Infinity) < PR_REFRESH_MS) return
+  prFetched.set(k, now)
+  backend()
+    .listPullRequests(hostId, repo)
+    .then(
+      (list) => {
+        const byBranch: Record<string, PullRequestInfo> = {}
+        for (const pr of list) byBranch[pr.branch] ??= pr // newest first
+        const prev = get().pullRequests[k]
+        if (prev && JSON.stringify(prev) === JSON.stringify(byBranch)) return
+        set((s) => ({ pullRequests: { ...s.pullRequests, [k]: byBranch } }))
+      },
+      (err: unknown) => console.debug(`list_pull_requests ${repo} on ${hostId}:`, err)
+    )
+}
+
+export async function openPullRequest(pr: PullRequestInfo): Promise<void> {
+  try {
+    await backend().openPullRequest(pr.url)
+  } catch (err) {
+    reportError(`Could not open PR #${pr.number}`, err)
+  }
+}
+
+function resyncPullRequests(): void {
+  const s = get()
+  for (const [hostId, h] of Object.entries(s.hosts)) {
+    if (h.state !== 'connected') continue
+    for (const r of s.repos[hostId] ?? []) refreshPullRequests(hostId, r.id)
   }
 }
 

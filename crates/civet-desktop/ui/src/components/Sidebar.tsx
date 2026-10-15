@@ -23,6 +23,10 @@ import {
   ChevronRight,
   Folder,
   FolderPlus,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
   Lock,
   MoreHorizontal,
   PanelLeft,
@@ -38,6 +42,7 @@ import {
   activateTabIndex,
   cycleWorktree,
   disconnectHost,
+  openPullRequest,
   panesOfWorktree,
   reconnectHost,
   requestRestartDaemon,
@@ -57,7 +62,7 @@ import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
 import { ago, worktreeBranch, worktreeDot, worktreeTask } from '@/lib/worktree-view'
-import type { WorktreeInfo } from '@/types'
+import type { PullRequestInfo, WorktreeInfo } from '@/types'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -75,6 +80,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Kbd, useWorktreeTabs } from './chrome'
 import { IconButton } from './IconButton'
 import { StatusDot } from './StatusDot'
+import { ClaudeLogo } from './ClaudeLogo'
 
 /** Sidebar width; the main header lines up with it when the sidebar is closed. */
 export const SIDEBAR_WIDTH = 260
@@ -531,6 +537,32 @@ function WorktreeMenu({
   )
 }
 
+const PR_ICON = {
+  open: { Icon: GitPullRequest, className: 'text-status-ok', label: 'Open' },
+  draft: { Icon: GitPullRequestDraft, className: 'text-quiet', label: 'Draft' },
+  merged: { Icon: GitMerge, className: 'text-pr-merged', label: 'Merged' },
+  closed: { Icon: GitPullRequestClosed, className: 'text-status-err', label: 'Closed' }
+} as const
+
+/** The branch's pull request state, as in Cursor's sidebar; opens it on GitHub. */
+function PullRequestIcon({ pr }: { pr: PullRequestInfo }) {
+  const { Icon, className, label } = PR_ICON[pr.state]
+  return (
+    <button
+      type="button"
+      aria-label={`Open PR #${pr.number} on GitHub`}
+      title={`#${pr.number} · ${label}\n${pr.title}\nClick to open on GitHub`}
+      onClick={(e) => {
+        e.stopPropagation()
+        void openPullRequest(pr)
+      }}
+      className="-mx-1 grid size-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] hover:bg-hover-strong"
+    >
+      <Icon className={cn('size-3.5', className)} />
+    </button>
+  )
+}
+
 function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: WorktreeInfo; archived?: boolean }) {
   const hostId = host.hostId
   const key = wsKey(hostId, wt.id)
@@ -538,6 +570,13 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
   const unread = useStore((s) => s.unread[key])
   const removing = useStore((s) => !!s.removing[key])
   const paneMap = useStore((s) => s.panes[hostId])
+  // Any worktree, the main one included (a feature branch may be checked
+  // out there), except on the default branch.
+  const pr = useStore((s) => {
+    const defaultBranch = s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch
+    if (!wt.branch || wt.branch === defaultBranch) return undefined
+    return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
+  })
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const labelPref = usePrefs((s) => s.worktreeLabel)
   const tabsPref = usePrefs((s) => s.sidebarTabs)
@@ -593,6 +632,7 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
             {title}
           </span>
           {wt.locked && <Lock aria-label="locked" className="size-3.5 shrink-0 text-dim" />}
+          {pr && !removing && <PullRequestIcon pr={pr} />}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
           ) : wt.isMain ? (
@@ -617,7 +657,11 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
                   }}
                   className="group/tab flex h-6 cursor-default items-center gap-2 pl-[26px] text-sm"
                 >
-                  {t.agent ? null : <Terminal className="size-3 shrink-0 text-dim" />}
+                  {t.agent?.agent === 'claude' ? (
+                    <ClaudeLogo className="size-3" />
+                  ) : t.agent ? null : (
+                    <Terminal className="size-3 shrink-0 text-dim" />
+                  )}
                   <span
                     className={cn(
                       'shrink-0',

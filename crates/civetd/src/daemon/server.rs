@@ -497,6 +497,10 @@ impl Server {
             Request::ListWorktrees { repo } => {
                 s.list_worktrees(&repo).await.map(Response::Worktrees)
             }
+            Request::ListPullRequests { repo } => s
+                .list_pull_requests(&repo)
+                .await
+                .map(Response::PullRequests),
             Request::CreateWorktree {
                 repo,
                 branch,

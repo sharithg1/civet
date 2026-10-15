@@ -16,7 +16,7 @@ import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
-import { paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
+import { paneDot, worktreeBranch, worktreeTask, type DotKind } from '@/lib/worktree-view'
 import {
   activateTab,
   closeTab,
@@ -42,6 +42,7 @@ import { useWorktreeInfo, useWorktreeTabs } from './chrome'
 import { IconButton } from './IconButton'
 import { SidebarToggle } from './Sidebar'
 import { StatusDot } from './StatusDot'
+import { ClaudeLogo } from './ClaudeLogo'
 
 export function TitleBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen)
@@ -256,7 +257,9 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                 dragging === id && 'z-10 cursor-grabbing bg-hover-strong text-foreground'
               )}
             >
-              {t.agent ? (
+              {t.agent?.agent === 'claude' ? (
+                <ClaudeTabIcon dot={paneDot(panes?.[t.agent.id], connected)} active={isActive} />
+              ) : t.agent ? (
                 <span className="grid size-3.5 shrink-0 place-items-center">
                   <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} size={6} />
                 </span>
@@ -313,5 +316,25 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
         </DropdownMenuContent>
       </DropdownMenu>
     </>
+  )
+}
+
+/** Claude's logo with the agent's status as a corner badge (none when idle). */
+function ClaudeTabIcon({ dot, active }: { dot: DotKind; active: boolean }) {
+  return (
+    <span className="relative grid size-3.5 shrink-0 place-items-center">
+      <ClaudeLogo className="size-3.5" />
+      {dot !== 'idle' && (
+        <StatusDot
+          kind={dot}
+          size={6}
+          className={cn(
+            'absolute -right-0.5 -bottom-0.5 ring-[1.5px]',
+            active ? 'ring-card' : 'ring-background',
+            dot === 'disc' && 'bg-background'
+          )}
+        />
+      )}
+    </span>
   )
 }

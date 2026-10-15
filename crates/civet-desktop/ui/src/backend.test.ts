@@ -35,6 +35,7 @@ describe('TauriBackend commands', () => {
     await backend.addRepo('h', '/src/x')
     await backend.removeRepo('h', 'x')
     await backend.listWorktrees('h', 'x')
+    await backend.listPullRequests('h', 'x')
     await backend.createWorktree('h', 'x', 'feat')
     await backend.removeWorktree('h', '/w', true)
     await backend.listPanes('h')
@@ -59,6 +60,7 @@ describe('TauriBackend commands', () => {
       ['add_repo', { hostId: 'h', path: '/src/x' }],
       ['remove_repo', { hostId: 'h', repo: 'x' }],
       ['list_worktrees', { hostId: 'h', repo: 'x' }],
+      ['list_pull_requests', { hostId: 'h', repo: 'x' }],
       ['create_worktree', { hostId: 'h', repo: 'x', branch: 'feat', base: null, path: null }],
       ['remove_worktree', { hostId: 'h', worktree: '/w', force: true }],
       ['list_panes', { hostId: 'h' }],

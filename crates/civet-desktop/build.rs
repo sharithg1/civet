@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "prepare_file_drop",
     "upload_file",
     "list_worktrees",
+    "list_pull_requests",
     "create_worktree",
     "remove_worktree",
     "list_panes",
@@ -38,6 +39,7 @@ const COMMANDS: &[&str] = &[
     "stop_forward",
     "list_forwards",
     "open_local_url",
+    "open_pull_request",
 ];
 
 /// Bundled daemon binaries (`bundle.resources` in tauri.conf.json):

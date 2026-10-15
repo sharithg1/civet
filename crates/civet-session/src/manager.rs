@@ -342,6 +342,16 @@ impl SessionManager {
         self.worktrees_of(&r, false).await
     }
 
+    /// The repository's recent pull requests (`gh pr list`, see
+    /// [`crate::github`]).
+    pub async fn list_pull_requests(
+        &self,
+        repo: &RepoId,
+    ) -> Result<Vec<civet_proto::PullRequestInfo>, SessionError> {
+        let r = self.find_repo(repo).await?;
+        crate::github::list_pull_requests(Path::new(&r.path)).await
+    }
+
     /// `git worktree add [-b branch] -- <path> [base]`. Default path:
     /// `<parent of main worktree>/<repo name>-worktrees/<branch, '/' -> '-'>`.
     /// With `base` (must resolve to a commit: `git rev-parse --verify

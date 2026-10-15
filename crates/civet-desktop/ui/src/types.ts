@@ -64,6 +64,16 @@ export type WorktreeInfo = {
   locked: boolean
 }
 
+export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
+
+export type PullRequestInfo = {
+  number: number
+  branch: string
+  title: string
+  url: string
+  state: PullRequestState
+}
+
 export type CommandSpec = { program: string; args: string[] }
 
 export type SpawnPaneRequest = {

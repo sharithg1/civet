@@ -23,6 +23,7 @@
 
 mod error;
 mod git;
+mod github;
 mod hooks;
 mod manager;
 mod pane;

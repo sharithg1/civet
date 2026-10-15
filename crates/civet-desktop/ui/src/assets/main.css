@@ -98,6 +98,7 @@
   --color-status-wait: var(--status-wait);
   --color-status-err: var(--status-err);
   --color-status-ok: var(--status-ok);
+  --color-pr-merged: var(--pr-merged);
   --color-status-err-text: var(--status-err-text);
   --color-prompt-user: var(--prompt-user);
   --color-prompt-path: var(--prompt-path);
@@ -188,6 +189,7 @@
   --status-err: oklch(0.6 0.19 25);
   --status-ok: oklch(0.62 0.14 155);
   --status-err-text: oklch(0.55 0.17 25);
+  --pr-merged: oklch(0.55 0.18 295);
   --prompt-user: oklch(0.55 0.12 110);
   --prompt-path: oklch(0.5 0.12 250);
   --link: #2563eb;
@@ -262,6 +264,8 @@
   --status-err: #f07178;
   --status-ok: #6fcf97;
   --status-err-text: #f49a9f;
+  /* Merged PR icon (open / closed reuse status-ok / status-err). */
+  --pr-merged: #a78bfa;
   --prompt-user: #b5bd68;
   --prompt-path: #7bafe9;
   --link: #7bafe9;

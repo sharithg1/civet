@@ -155,6 +155,15 @@ pub async fn list_worktrees(
 }
 
 #[tauri::command]
+pub async fn list_pull_requests(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+) -> Res<Vec<civet_proto::PullRequestInfo>> {
+    state.hosts.list_pull_requests(&host_id, repo).await
+}
+
+#[tauri::command]
 pub async fn create_worktree(
     state: State<'_, AppState>,
     host_id: String,
@@ -335,8 +344,23 @@ pub async fn open_local_url(url: String) -> Res<()> {
             "only http://localhost URLs can be opened",
         ));
     }
+    open_in_browser(&url).await
+}
+
+/// Open a pull request (sidebar PR icon) in the default browser. Only
+/// `https://<host>/<owner>/<repo>/pull/<number>`: the URL comes from `gh`
+/// on the host, so it is checked like any other input.
+#[tauri::command]
+pub async fn open_pull_request(url: String) -> Res<()> {
+    if !is_pull_request_url(&url) {
+        return Err(CmdError::new("invalidArgument", "not a pull request URL"));
+    }
+    open_in_browser(&url).await
+}
+
+async fn open_in_browser(url: &str) -> Res<()> {
     let status = tokio::process::Command::new("/usr/bin/open")
-        .arg(&url)
+        .arg(url)
         .status()
         .await
         .map_err(|e| CmdError::new("io", format!("open: {e}")))?;
@@ -345,6 +369,29 @@ pub async fn open_local_url(url: String) -> Res<()> {
     } else {
         Err(CmdError::new("io", format!("open {url} failed ({status})")))
     }
+}
+
+/// `https://<host>/<owner>/<repo>/pull/<number>` (github.com or an
+/// Enterprise host), nothing after the number but an optional `/`.
+pub fn is_pull_request_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let ok_part = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    let parts: Vec<&str> = rest.trim_end_matches('/').split('/').collect();
+    matches!(
+        parts.as_slice(),
+        [host, owner, repo, "pull", number]
+            if ok_part(host)
+                && ok_part(owner)
+                && ok_part(repo)
+                && !number.is_empty()
+                && number.chars().all(|c| c.is_ascii_digit())
+    )
 }
 
 /// `http(s)://localhost[:port][/...]` or the same with `127.0.0.1`.
@@ -395,6 +442,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         prepare_file_drop,
         upload_file,
         list_worktrees,
+        list_pull_requests,
         create_worktree,
         remove_worktree,
         list_panes,
@@ -415,6 +463,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         stop_forward,
         list_forwards,
         open_local_url,
+        open_pull_request,
     ]
 }
 
@@ -444,5 +493,23 @@ mod tests {
         assert!(!is_local_url("file:///etc/passwd"));
         assert!(!is_local_url("http://example.com"));
         assert!(!is_local_url("http://localhost:80/ -a Terminal"));
+    }
+
+    #[test]
+    fn pull_request_urls() {
+        assert!(is_pull_request_url("https://github.com/o/r/pull/5"));
+        assert!(is_pull_request_url(
+            "https://ghe.corp.example/my-org/my.repo/pull/12/"
+        ));
+        assert!(!is_pull_request_url("http://github.com/o/r/pull/5"));
+        assert!(!is_pull_request_url("https://github.com/o/r/issues/5"));
+        assert!(!is_pull_request_url("https://github.com/o/r/pull/5/files"));
+        assert!(!is_pull_request_url("https://user@github.com/o/r/pull/5"));
+        assert!(!is_pull_request_url("https://github.com/o/r/pull/5?x=1"));
+        assert!(!is_pull_request_url("https://github.com/o/r/pull/"));
+        assert!(!is_pull_request_url(
+            "https://github.com/o/r/pull/5 -a Terminal"
+        ));
+        assert!(!is_pull_request_url("file:///o/r/pull/5"));
     }
 }

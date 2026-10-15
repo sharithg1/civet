@@ -63,8 +63,8 @@ pub use agent::{
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
     AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, ErrorCode, Event,
-    KillSignal, LaunchAgentRequest, PaneInfo, RepoInfo, Request, Response, RpcError,
-    SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
+    KillSignal, LaunchAgentRequest, PaneInfo, PullRequestInfo, PullRequestState, RepoInfo, Request,
+    Response, RpcError, SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -102,6 +102,10 @@ pub const CLIPBOARD_EVENT_MIN_CLIENT_VERSION: &str = "0.1.1";
 /// appended within protocol 1; an older daemon fails to decode it and drops
 /// the connection, so clients check `daemon_version` before sending it.
 pub const UPLOAD_FILE_MIN_DAEMON_VERSION: &str = "0.1.4";
+
+/// Oldest daemon that understands [`Request::ListPullRequests`] (appended
+/// within protocol 1, gated like [`UPLOAD_FILE_MIN_DAEMON_VERSION`]).
+pub const LIST_PULL_REQUESTS_MIN_DAEMON_VERSION: &str = "0.1.5";
 
 /// Largest [`Request::UploadFile`] payload (headroom under the frame limit).
 pub const MAX_UPLOAD_BYTES: usize = 15 * 1024 * 1024;

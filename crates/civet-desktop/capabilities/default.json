@@ -22,6 +22,7 @@
     "allow-prepare-file-drop",
     "allow-upload-file",
     "allow-list-worktrees",
+    "allow-list-pull-requests",
     "allow-create-worktree",
     "allow-remove-worktree",
     "allow-list-panes",
@@ -41,6 +42,7 @@
     "allow-forward-port",
     "allow-stop-forward",
     "allow-list-forwards",
-    "allow-open-local-url"
+    "allow-open-local-url",
+    "allow-open-pull-request"
   ]
 }
