@@ -888,3 +888,23 @@ async fn status_process_exit_is_done() {
     assert_eq!(p.exit_code, Some(3));
     assert_eq!(p.status, AgentStatus::Done);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn osc52_clipboard_write_is_an_event() {
+    let f = fixture();
+    let mut events = f.mgr.subscribe_events();
+    let info = f
+        .mgr
+        .spawn_pane(sh(
+            "sleep 0.2; printf '\\033]52;c;?\\007'; printf '\\033]52;c;Y29waWVk\\007'; sleep 30",
+        ))
+        .await
+        .unwrap();
+    match next_event(&mut events, |e| matches!(e, Event::Clipboard { .. })).await {
+        Event::Clipboard { pane, text } => {
+            assert_eq!(pane, info.id);
+            assert_eq!(text, "copied");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}

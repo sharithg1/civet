@@ -15,6 +15,7 @@ import type {
   AgentStatus,
   BootstrapProgressEvent,
   BootstrapStep,
+  ClipboardEvent,
   DaemonEvent,
   DaemonEventEnvelope,
   DaemonInfo,
@@ -735,6 +736,10 @@ export class MockBackend implements CivetBackend {
 
   async setPrediction(_enabled: boolean) {}
 
+  async writeClipboard(text: string) {
+    await navigator.clipboard?.writeText(text)
+  }
+
   async onHostState(cb: (e: HostStateEvent) => void) {
     return this.emitter.on('civet://host-state', cb)
   }
@@ -746,5 +751,8 @@ export class MockBackend implements CivetBackend {
   }
   async onAgentAttention(cb: (e: AgentAttentionEvent) => void) {
     return this.emitter.on('civet://agent-attention', cb)
+  }
+  async onClipboard(cb: (e: ClipboardEvent) => void) {
+    return this.emitter.on('civet://clipboard', cb)
   }
 }

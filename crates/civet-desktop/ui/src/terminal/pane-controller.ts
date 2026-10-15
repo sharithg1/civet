@@ -14,6 +14,7 @@ import { FrameBatcher } from './frame-batcher'
 import { PaneStream, type LineRange } from './pane-stream'
 import { RecordParseError, parseRecords, type TermRecord } from './records'
 import { ScrollbackPager } from './scrollback-pager'
+import { handleClipboardKey, isMacPlatform } from './clipboard-keys'
 import { buildDefaultTerminalOptions } from './terminal-options'
 import { attachWebgl, type WebglHandle } from './webgl'
 
@@ -94,6 +95,19 @@ export class PaneController {
       if (y === 0 && buf.type === 'normal' && buf.baseY > 0) this.cb.onScrollTop()
     })
     this.cleanups.push(() => d1.dispose(), () => d2.dispose(), () => d3.dispose())
+
+    // Cmd+C copies xterm's selection, Cmd+A selects all (see clipboard-keys).
+    const isMac = isMacPlatform()
+    this.term.attachCustomKeyEventHandler((ev) =>
+      handleClipboardKey(ev, this.term, {
+        isMac,
+        copy: (text) => {
+          this.backend.writeClipboard(text).catch((err: unknown) =>
+            this.cb.onError(`copy: ${String((err as Error).message ?? err)}`)
+          )
+        }
+      })
+    )
 
     // Scrolling up while already at the top (or with no local scrollback yet).
     const onWheel = (e: WheelEvent) => {

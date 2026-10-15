@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "fetch_scrollback",
     "set_agent_status",
     "set_prediction",
+    "write_clipboard",
 ];
 
 fn main() {

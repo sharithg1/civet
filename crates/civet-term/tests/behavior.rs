@@ -160,3 +160,47 @@ fn pane_terminal_is_send() {
     assert_send::<civet_term::PaneTerminal>();
     assert_send::<std::sync::Arc<civet_term::Snapshot>>();
 }
+
+#[test]
+fn osc52_set_yields_clipboard_text() {
+    let mut t = term(20, 5);
+    // "hello ✓" base64, BEL- and ST-terminated, `c` and empty selectors.
+    let o = t.feed(b"\x1b]52;c;aGVsbG8g4pyT\x07");
+    assert_eq!(o.clipboard.as_deref(), Some("hello ✓"));
+    assert!(o.pty_replies.is_empty());
+    assert!(!o.changed, "a clipboard write is not a screen change");
+    let o = t.feed(b"\x1b]52;;Zm9v\x1b\\");
+    assert_eq!(o.clipboard.as_deref(), Some("foo"));
+    // Split across feeds, several in one call: the last wins.
+    assert!(t.feed(b"\x1b]52;c;YW").clipboard.is_none());
+    let o = t.feed(b"Jj\x07\x1b]52;c;YmFy\x07");
+    assert_eq!(o.clipboard.as_deref(), Some("bar"));
+    // Nothing on plain output.
+    assert!(t.feed(b"x").clipboard.is_none());
+}
+
+#[test]
+fn osc52_query_is_ignored() {
+    let mut t = term(20, 5);
+    t.feed(b"\x1b]52;c;c2VjcmV0\x07");
+    for q in [
+        &b"\x1b]52;c;?\x07"[..],
+        b"\x1b]52;p;?\x1b\\",
+        b"\x1b]52;;?\x07",
+    ] {
+        let o = t.feed(q);
+        assert!(o.pty_replies.is_empty(), "query must not be answered");
+        assert!(o.clipboard.is_none());
+    }
+}
+
+#[test]
+fn osc52_oversized_or_invalid_is_dropped() {
+    let mut t = term(20, 5);
+    let big = vec![b'A'; (civet_proto::MAX_CLIPBOARD_BYTES / 3 + 1) * 4];
+    let mut seq = b"\x1b]52;c;".to_vec();
+    seq.extend_from_slice(&big);
+    seq.push(0x07);
+    assert!(t.feed(&seq).clipboard.is_none());
+    assert!(t.feed(b"\x1b]52;c;!!notbase64\x07").clipboard.is_none());
+}

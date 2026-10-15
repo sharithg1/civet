@@ -79,6 +79,16 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// [`PROTOCOL_VERSION`] until we deliberately support a range.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
 
+/// Largest OSC 52 clipboard text the daemon forwards ([`Event::Clipboard`]);
+/// bigger writes are dropped.
+pub const MAX_CLIPBOARD_BYTES: usize = 1 << 20;
+
+/// Oldest client (`ClientHello::client_version`) that can decode
+/// [`Event::Clipboard`]. The variant was appended within protocol 1; older
+/// clients would fail to decode it and drop the connection, so the daemon
+/// does not send it to them.
+pub const CLIPBOARD_EVENT_MIN_CLIENT_VERSION: &str = "0.1.1";
+
 /// First four bytes of every [`ClientHello`]; lets the daemon reject
 /// non-Civet traffic on its UDP port immediately.
 pub const MAGIC: [u8; 4] = *b"CIVT";

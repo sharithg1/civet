@@ -52,6 +52,9 @@ pub struct FeedOutcome {
     pub cwd: Option<String>,
     /// Alternate screen entered/left during this call (final value).
     pub alt_screen_changed: Option<bool>,
+    /// OSC 52 clipboard write (decoded text; the last one if several), at
+    /// most [`civet_proto::MAX_CLIPBOARD_BYTES`]. Queries are never answered.
+    pub clipboard: Option<String>,
 }
 
 /// A desktop notification requested by the program.

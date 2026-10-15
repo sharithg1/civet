@@ -11,7 +11,9 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Line;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape as AlShape, Processor, Rgb, Timeout};
-use civet_proto::{ScrollbackLine, ScrollbackPage, ScrollbackRequest, TermSize};
+use civet_proto::{
+    MAX_CLIPBOARD_BYTES, ScrollbackLine, ScrollbackPage, ScrollbackRequest, TermSize,
+};
 
 use crate::encode::{EncodedUpdate, encode_diff, encode_full, encode_line};
 use crate::scan::ScrollScanner;
@@ -32,6 +34,11 @@ const CHUNK_LINES: u64 = 900;
 
 /// alacritty needs at least two columns (a wide char must fit).
 const MIN_COLS: u16 = 2;
+
+/// OSC 52: the program may *set* the clipboard (forwarded to clients as
+/// [`FeedOutcome::clipboard`]), never read it: queries (`OSC 52 ; c ; ?`)
+/// are ignored, so a remote program cannot exfiltrate the local clipboard.
+const OSC52_POLICY: Osc52 = Osc52::OnlyCopy;
 
 /// Default colors reported for OSC 10/11/4 queries when the program has not
 /// set them (a dark theme).
@@ -71,6 +78,7 @@ impl EventListener for Listener {
                 | Event::ColorRequest(..)
                 | Event::TextAreaSizeRequest(_)
                 | Event::Bell
+                | Event::ClipboardStore(..)
         ) {
             self.0.lock().unwrap_or_else(|e| e.into_inner()).push(event);
         }
@@ -149,7 +157,7 @@ impl PaneTerminal {
         let events = Listener::default();
         let term_config = Config {
             scrolling_history: cap,
-            osc52: Osc52::Disabled,
+            osc52: OSC52_POLICY,
             ..Config::default()
         };
         let dims = Dims {
@@ -254,6 +262,17 @@ impl PaneTerminal {
                     outcome.pty_replies.extend_from_slice(fmt(ws).as_bytes());
                 }
                 Event::Bell => outcome.bell = true,
+                // Both `c` and `p`/`s`: the client OS has a single clipboard.
+                Event::ClipboardStore(_, text) => {
+                    if text.len() <= MAX_CLIPBOARD_BYTES {
+                        outcome.clipboard = Some(text);
+                    } else {
+                        tracing::debug!(
+                            len = text.len(),
+                            "OSC 52 clipboard write too large, dropped"
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -408,7 +427,7 @@ impl PaneTerminal {
             self.cap = cap;
             let config = Config {
                 scrolling_history: cap,
-                osc52: Osc52::Disabled,
+                osc52: OSC52_POLICY,
                 ..Config::default()
             };
             self.term.set_options(config);

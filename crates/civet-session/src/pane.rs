@@ -354,6 +354,17 @@ impl Pane {
         if outcome.bell && !self.is_closed() {
             self.emit(Event::Bell { pane: self.id });
         }
+        if let Some(text) = &outcome.clipboard
+            && !self.is_closed()
+        {
+            // Not part of the screen state: a resume or full repaint never
+            // re-sends it. civetd forwards it to subscribers only.
+            tracing::debug!(pane = self.id.0, len = text.len(), "OSC 52 clipboard write");
+            self.emit(Event::Clipboard {
+                pane: self.id,
+                text: text.clone(),
+            });
+        }
         let sig = signals(&outcome);
         let changes = lock(&self.status).on_output(now, bytes.len(), &sig);
         if !self.is_closed() {

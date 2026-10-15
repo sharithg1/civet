@@ -21,6 +21,7 @@ import type {
   AgentStatus,
   BootstrapProgressEvent,
   BootstrapStep,
+  ClipboardEvent,
   CommandSpec,
   DaemonEvent,
   HostState,
@@ -139,7 +140,8 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
     b.onHostState(onHostState),
     b.onBootstrapProgress(onBootstrapProgress),
     b.onDaemonEvent(({ hostId, event }) => onDaemonEvent(hostId, event)),
-    b.onAgentAttention(onAgentAttention)
+    b.onAgentAttention(onAgentAttention),
+    b.onClipboard(onClipboard)
   ])
   const nudge = () => void b.notifyNetworkChange().catch(() => {})
   const onVisibility = () => document.visibilityState === 'visible' && nudge()
@@ -266,6 +268,16 @@ export function onAgentAttention(e: AgentAttentionEvent): void {
     body: e.message ?? (e.status === 'done' ? 'Agent finished' : 'Agent needs input'),
     target: { hostId: e.hostId, worktree: e.worktree, pane: e.pane }
   })
+}
+
+/** A pane's program copied text (OSC 52); the Rust side already wrote the clipboard. */
+export function onClipboard(e: ClipboardEvent): void {
+  if (e.ok) {
+    const n = e.chars === 1 ? '1 character' : `${e.chars} characters`
+    pushToast({ kind: 'info', title: 'Copied to clipboard', body: n }, 1500)
+  } else {
+    pushToast({ kind: 'error', title: 'Copy failed', body: `Pane ${e.pane} could not set the clipboard` }, 6000)
+  }
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────

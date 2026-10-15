@@ -10,8 +10,8 @@ use civet_desktop::batch::RecordSink;
 use civet_desktop::connect::{dial, session_config};
 use civet_desktop::error::CmdError;
 use civet_desktop::events::{
-    AgentAttentionEvent, BootstrapProgressEvent, DaemonEventPayload, HostState, HostStateEvent,
-    HostTarget, TransportChoice, UiEvents,
+    AgentAttentionEvent, BootstrapProgressEvent, ClipboardWrite, DaemonEventPayload, HostState,
+    HostStateEvent, HostTarget, TransportChoice, UiEvents,
 };
 use civet_desktop::hosts::{Connector, Established, HostManager, ManagerConfig, Progress};
 use civet_desktop::records::{RecordHeader, RecordKind, decode_all, flags};
@@ -38,6 +38,7 @@ struct RecordingUi {
     events: Mutex<Vec<DaemonEventPayload>>,
     attention: Mutex<Vec<AgentAttentionEvent>>,
     notes: Mutex<Vec<(String, String)>>,
+    clipboard: Mutex<Vec<ClipboardWrite>>,
     focused: Mutex<bool>,
 }
 
@@ -67,6 +68,9 @@ impl UiEvents for RecordingUi {
     }
     fn window_focused(&self) -> bool {
         *self.focused.lock().unwrap()
+    }
+    fn clipboard(&self, write: ClipboardWrite) {
+        self.clipboard.lock().unwrap().push(write);
     }
     fn notify(&self, title: &str, body: &str) {
         self.notes
@@ -661,4 +665,63 @@ async fn connect_failure_is_reported_as_failed() {
             .code,
         "invalidArgument"
     );
+}
+
+/// OSC 52 from a remote program reaches the UI sink as a clipboard write
+/// (not as a daemon event), once, and not again after a re-attach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn osc52_clipboard_write_reaches_the_ui() {
+    let rig = Rig::new(fast()).await;
+    let m = &rig.mgr;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Auto)
+        .await
+        .unwrap();
+    let pane = m
+        .spawn_pane(
+            h,
+            shell_pane(
+                "read x; printf '\\033]52;c;?\\007\\033]52;c;Y2xpcCDinJM=\\007ready\\n'; exec cat",
+            ),
+        )
+        .await
+        .unwrap();
+    let (sink, mut screen) = Screen::new();
+    m.attach_pane(h, pane.id, sink).await.unwrap();
+    screen
+        .until("first record", |s| !s.records.is_empty())
+        .await;
+    m.write_input(h, pane.id, b"go\r".to_vec()).unwrap();
+    screen.until("ready", |s| s.text().contains("ready")).await;
+    eventually("clipboard write", || {
+        !rig.ui.clipboard.lock().unwrap().is_empty()
+    })
+    .await;
+    assert_eq!(
+        *rig.ui.clipboard.lock().unwrap(),
+        vec![ClipboardWrite {
+            host_id: h.into(),
+            pane: pane.id,
+            text: "clip ✓".into(),
+        }]
+    );
+    assert!(
+        !rig.ui
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e.event, civet_proto::Event::Clipboard { .. })),
+        "clipboard text is not broadcast as a daemon event"
+    );
+    // Re-attach (full repaint): no second write.
+    m.detach_pane(h, pane.id).unwrap();
+    let (sink2, mut screen2) = Screen::new();
+    m.attach_pane(h, pane.id, sink2).await.unwrap();
+    screen2
+        .until("repaint", |s| s.text().contains("ready"))
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.ui.clipboard.lock().unwrap().len(), 1);
+    m.shutdown().await;
 }

@@ -29,6 +29,7 @@
     "allow-kill-pane",
     "allow-fetch-scrollback",
     "allow-set-agent-status",
-    "allow-set-prediction"
+    "allow-set-prediction",
+    "allow-write-clipboard"
   ]
 }

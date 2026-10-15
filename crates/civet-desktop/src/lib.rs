@@ -13,6 +13,7 @@
 //! The React frontend lives in `ui/`.
 
 pub mod batch;
+pub mod clipboard;
 pub mod commands;
 pub mod connect;
 pub mod error;
@@ -33,8 +34,9 @@ use tauri_plugin_notification::NotificationExt;
 use crate::commands::AppState;
 use crate::connect::SshConnector;
 use crate::events::{
-    AgentAttentionEvent, BootstrapProgressEvent, DaemonEventPayload, EV_AGENT_ATTENTION,
-    EV_BOOTSTRAP_PROGRESS, EV_DAEMON_EVENT, EV_HOST_STATE, HostStateEvent, UiEvents,
+    AgentAttentionEvent, BootstrapProgressEvent, ClipboardEvent, ClipboardWrite,
+    DaemonEventPayload, EV_AGENT_ATTENTION, EV_BOOTSTRAP_PROGRESS, EV_CLIPBOARD, EV_DAEMON_EVENT,
+    EV_HOST_STATE, HostStateEvent, UiEvents,
 };
 use crate::hosts::{HostManager, ManagerConfig};
 
@@ -73,6 +75,33 @@ impl<R: tauri::Runtime> UiEvents for TauriUi<R> {
             .webview_windows()
             .values()
             .any(|w| w.is_focused().unwrap_or(false))
+    }
+
+    fn clipboard(&self, write: ClipboardWrite) {
+        // AppKit's pasteboard belongs on the main thread.
+        let app = self.app.clone();
+        let res = self.app.run_on_main_thread(move || {
+            let ok = clipboard::write_text(&write.text);
+            tracing::info!(
+                host = %write.host_id,
+                pane = %write.pane,
+                len = write.text.len(),
+                ok,
+                "OSC 52 clipboard write"
+            );
+            let e = ClipboardEvent {
+                host_id: write.host_id,
+                pane: write.pane,
+                chars: write.text.chars().count(),
+                ok,
+            };
+            if let Err(err) = app.emit(EV_CLIPBOARD, e) {
+                tracing::warn!(event = EV_CLIPBOARD, error = %err, "emit failed");
+            }
+        });
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "clipboard write not scheduled");
+        }
     }
 
     fn notify(&self, title: &str, body: &str) {

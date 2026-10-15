@@ -116,11 +116,11 @@ map. Everything is re-exported from the crate root.
 | Requests → responses | `Ping{nonce}`→`Pong{nonce, server_time_ms}`; `GetDaemonInfo`→`DaemonInfo`; `ListRepos`→`Repos`; `AddRepo{path}`→`Repo`; `RemoveRepo{repo}`→`Ok`; `ListWorktrees{repo}`→`Worktrees`; `CreateWorktree{repo, branch, base, path}`→`Worktree`; `RemoveWorktree{worktree, force}`→`Ok`; `SpawnPane(SpawnPaneRequest)`→`PaneSpawned(PaneInfo)`; `LaunchAgent(LaunchAgentRequest)`→`AgentLaunched{worktree, pane}`; `ResizePane{pane, size}`→`Ok`; `KillPane{pane, signal}`→`Ok`; `ListPanes`→`Panes`; `SubscribePane{pane, known_state}`→`Subscribed(SubscribeInfo)`; `UnsubscribePane{pane}`→`Ok`; `FetchScrollback(ScrollbackRequest)`→`Scrollback(ScrollbackPage)`; `SetAgentStatus{pane, status}`→`Ok` |
 | Spawn | `SpawnPaneRequest { worktree, cwd, command: Option<CommandSpec>, env: Vec<(String,String)>, size: TermSize, title, agent }`, `CommandSpec { program, args }`, `LaunchAgentRequest { repo, branch, base, worktree_path, command, env, size, title, agent }`, `KillSignal::{Hangup (default), Terminate, Kill}` |
 | Info | `RepoInfo`, `WorktreeInfo`, `PaneInfo { id, worktree, cwd, command, title, size, agent, status, exit_code, exited, created_at_ms, state }`, `DaemonInfo`, `SubscribeInfo { pane, state, size, history_lines, last_input_seq }` |
-| Events (pushed to every client) | `Event::{PaneCreated(PaneInfo), PaneExited{pane, exit_code}, PaneClosed{pane}, PaneTitle{pane, title}, PaneResized{pane, size}, AgentStatus(AgentStatusEvent), Bell{pane}, ReposChanged, WorktreesChanged{repo}}`, `Event::pane()` |
+| Events (pushed to every client) | `Event::{PaneCreated(PaneInfo), PaneExited{pane, exit_code}, PaneClosed{pane}, PaneTitle{pane, title}, PaneResized{pane, size}, AgentStatus(AgentStatusEvent), Bell{pane}, ReposChanged, WorktreesChanged{repo}, Clipboard{pane, text}}`, `Event::pane()`. `Clipboard` (OSC 52 set, appended in 0.1.1 within protocol 1) is the exception: only sent to clients subscribed to the pane whose `client_version` is at least `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` (older clients cannot decode it), at most `MAX_CLIPBOARD_BYTES` (1 MiB), never replayed on resume / Full |
 | Terminal | `TermSize { cols, rows, pixel_width, pixel_height }`, `InputMessage { pane, seq, data }`, `ScreenUpdate { pane, state, base_state, kind: UpdateKind::{Full, Diff}, acked_input_seq, size, history_lines, history_start, payload }`, `ScreenAck { pane, state }` |
 | Scrollback | `ScrollbackRequest { req_id, pane, query }`, `ScrollbackQuery::{Before { end: Option<u64>, limit }, Range { start, end }}`, `ScrollbackPage { req_id, pane, start, lines: Vec<ScrollbackLine>, oldest_available, end_available }`, `ScrollbackLine { vt, wrapped }` |
 | Agent status | `AgentStatus::{Unknown (default), Running, NeedsInput, Done, Idle}` (`FromStr` is lenient), `AgentStatusSource::{EscapeCode, Hook, Heuristic, ProcessExit, Client}`, `AgentStatusEvent { pane, status, previous, source, message, at_ms }`, `parse_status_file(&str) -> Option<(AgentStatus, Option<String>)>` |
-| Constants | `PROTOCOL_VERSION = 1`, `MIN_PROTOCOL_VERSION`, `MAGIC = b"CIVT"`, `ALPN = b"civet/1"`, `MAX_INFLIGHT_UPDATES = 8`, `MAX_REPLAY_LINES = 2000`, `FULL_REPLAY_LINES = 1000`, `ECHO_ACK_DELAY_MS = 50`, `ENV_PANE_ID`, `ENV_STATUS_FILE`, `ENV_STATE_DIR`, `STATE_DIR_NAME`, `now_ms()`, `is_compatible(v)` |
+| Constants | `PROTOCOL_VERSION = 1`, `MIN_PROTOCOL_VERSION`, `MAGIC = b"CIVT"`, `ALPN = b"civet/1"`, `MAX_INFLIGHT_UPDATES = 8`, `MAX_REPLAY_LINES = 2000`, `FULL_REPLAY_LINES = 1000`, `ECHO_ACK_DELAY_MS = 50`, `ENV_PANE_ID`, `ENV_STATUS_FILE`, `ENV_STATE_DIR`, `STATE_DIR_NAME`, `MAX_CLIPBOARD_BYTES` (1 MiB), `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` ("0.1.1"), `now_ms()`, `is_compatible(v)` |
 
 ### Stream layout (normative)
 
@@ -726,6 +726,11 @@ pub struct FeedOutcome {
     pub cwd: Option<String>,
     /// alternate screen entered/left during this call (final value).
     pub alt_screen_changed: Option<bool>,
+    /// OSC 52 clipboard write (decoded; last one wins), at most
+    /// MAX_CLIPBOARD_BYTES. alacritty runs with Osc52::OnlyCopy: queries
+    /// (`OSC 52;c;?`) are never answered, so a program cannot read the
+    /// client's clipboard.
+    pub clipboard: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1450,6 +1455,7 @@ JSON forms unless shown. Errors reject the promise with
 | `fetch_scrollback` | `{ hostId, pane, query: ScrollbackQuery }` | `ScrollbackPageView` |
 | `set_agent_status` | `{ hostId, pane, status: AgentStatus }` | `null` |
 | `set_prediction` | `{ enabled: boolean }` | `null` (phase 2) |
+| `write_clipboard` | `{ text: string }` | `null` (Cmd+C on an xterm selection; sync command, runs on the main thread for NSPasteboard) |
 
 ```ts
 type HostTarget =
@@ -1520,6 +1526,7 @@ visible latency for keystroke echoes).
 | `civet://bootstrap-progress` | `{ hostId, step: "probe" \| "upload" \| "start" \| "resolve" \| "dial" \| "fallback", message: string \| null }` |
 | `civet://daemon-event` | `{ hostId, event: Event }` (proto JSON, e.g. `{ "paneTitle": { "pane": 3, "title": "vim" } }`) |
 | `civet://agent-attention` | `{ hostId, pane, status: "done" \| "needsInput", previous, title, worktree: string \| null, message: string \| null }` |
+| `civet://clipboard` | `{ hostId, pane, chars: number, ok: boolean }`: a pane's program set the clipboard (OSC 52). Rust already wrote the system clipboard (NSPasteboard, no user gesture needed); the UI only shows a "Copied" toast. `Event::Clipboard` is not forwarded as a `civet://daemon-event` |
 
 ```ts
 type HostState = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";

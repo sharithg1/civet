@@ -478,6 +478,17 @@ pub enum Event {
         /// Repository.
         repo: RepoId,
     },
+    /// The program in a pane set the clipboard with OSC 52 (write only: the
+    /// daemon never answers OSC 52 queries). Sent only to clients that are
+    /// subscribed to the pane and new enough to decode it (client version at
+    /// least [`crate::CLIPBOARD_EVENT_MIN_CLIENT_VERSION`]); never replayed.
+    /// `text` is at most [`crate::MAX_CLIPBOARD_BYTES`] bytes.
+    Clipboard {
+        /// Pane.
+        pane: PaneId,
+        /// Decoded clipboard text.
+        text: String,
+    },
 }
 
 impl Event {
@@ -489,7 +500,8 @@ impl Event {
             | Event::PaneClosed { pane }
             | Event::PaneTitle { pane, .. }
             | Event::PaneResized { pane, .. }
-            | Event::Bell { pane } => Some(*pane),
+            | Event::Bell { pane }
+            | Event::Clipboard { pane, .. } => Some(*pane),
             Event::AgentStatus(e) => Some(e.pane),
             Event::ReposChanged | Event::WorktreesChanged { .. } => None,
         }

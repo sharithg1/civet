@@ -1,6 +1,6 @@
 // In-app toasts for agent attention and errors. Card look ported from Orca's
 // src/renderer/src/components/NotificationCardStack.tsx; sonner was dropped.
-import { AlertCircle, X } from 'lucide-react'
+import { AlertCircle, ClipboardCheck, X } from 'lucide-react'
 import { dismissToast, revealPane, useStore } from '../state/store'
 import { AgentStateDot } from './AgentStateDot'
 import { cn } from '../lib/utils'
@@ -28,6 +28,8 @@ export function Toasts() {
           <span className="mt-0.5">
             {t.kind === 'error' ? (
               <AlertCircle className="size-3.5 text-destructive" />
+            ) : t.kind === 'info' ? (
+              <ClipboardCheck className="size-3.5 text-muted-foreground" />
             ) : (
               <AgentStateDot state={t.status === 'needsInput' ? 'permission' : 'done'} size="md" />
             )}

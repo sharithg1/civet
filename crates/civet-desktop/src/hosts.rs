@@ -25,9 +25,9 @@ use tokio::time::Instant;
 use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
-    AgentAttentionEvent, BootstrapProgressEvent, DaemonEventPayload, HostState, HostStateEvent,
-    HostSummary, HostTarget, LaunchedAgent, PingResult, ProgressStep, ScrollbackPageView,
-    TransportChoice, UiEvents,
+    AgentAttentionEvent, BootstrapProgressEvent, ClipboardWrite, DaemonEventPayload, HostState,
+    HostStateEvent, HostSummary, HostTarget, LaunchedAgent, PingResult, ProgressStep,
+    ScrollbackPageView, TransportChoice, UiEvents,
 };
 use crate::linkstate::{HostStateUpdate, LinkAction, LinkMapper, RECONNECTING_AFTER};
 use crate::pane::PaneView;
@@ -551,6 +551,20 @@ impl HostManager {
     }
 
     fn handle_daemon_event(&self, host: &Arc<Host>, event: Event) {
+        // OSC 52: straight to the clipboard; the text is not broadcast to
+        // the UI as a daemon event.
+        if let Event::Clipboard { pane, text } = event {
+            if text.len() > civet_proto::MAX_CLIPBOARD_BYTES {
+                tracing::warn!(%pane, len = text.len(), "oversized clipboard write ignored");
+                return;
+            }
+            self.inner.ui.clipboard(ClipboardWrite {
+                host_id: host.id.clone(),
+                pane,
+                text,
+            });
+            return;
+        }
         match &event {
             Event::PaneCreated(info) => {
                 lock(&host.panes).insert(info.id, info.clone());
@@ -584,7 +598,10 @@ impl HostManager {
                 }
                 self.agent_attention(host, e);
             }
-            Event::Bell { .. } | Event::ReposChanged | Event::WorktreesChanged { .. } => {}
+            Event::Bell { .. }
+            | Event::ReposChanged
+            | Event::WorktreesChanged { .. }
+            | Event::Clipboard { .. } => {}
         }
         self.inner.ui.daemon_event(DaemonEventPayload {
             host_id: host.id.clone(),

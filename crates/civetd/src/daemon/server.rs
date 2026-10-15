@@ -217,7 +217,18 @@ impl Server {
         };
 
         // Install the connection unless a newer one took over meanwhile.
-        let event_task = tokio::spawn(forward_events(events, sender.clone())).abort_handle();
+        let clipboard_ok = !super::bootstrap::version_newer(
+            civet_proto::CLIPBOARD_EVENT_MIN_CLIENT_VERSION,
+            &hello.client_version,
+        );
+        let event_task = tokio::spawn(forward_events(
+            events,
+            sender.clone(),
+            Arc::downgrade(&self),
+            client,
+            clipboard_ok,
+        ))
+        .abort_handle();
         {
             let mut clients = self.lock();
             match clients.get_mut(&client) {
@@ -557,10 +568,28 @@ async fn futures_join_all<F: std::future::Future<Output = ()> + Send + 'static>(
 }
 
 /// Forward daemon events to one client.
-async fn forward_events(mut events: broadcast::Receiver<Event>, sender: ServerSender) {
+/// Push daemon events to one connection. Everything goes to every client
+/// except [`Event::Clipboard`] (OSC 52), which only goes to clients that
+/// can decode it (`clipboard_ok`) and are subscribed to that pane.
+async fn forward_events(
+    mut events: broadcast::Receiver<Event>,
+    sender: ServerSender,
+    server: std::sync::Weak<Server>,
+    client: ClientId,
+    clipboard_ok: bool,
+) {
     loop {
         match events.recv().await {
             Ok(ev) => {
+                if let Event::Clipboard { pane, .. } = &ev {
+                    let subscribed = clipboard_ok
+                        && server
+                            .upgrade()
+                            .is_some_and(|s| s.subscription(client, *pane).is_some());
+                    if !subscribed {
+                        continue;
+                    }
+                }
                 if sender.send(ServerMessage::Event(ev)).await.is_err() {
                     return;
                 }

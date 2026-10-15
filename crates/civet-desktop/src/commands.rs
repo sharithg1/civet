@@ -1,5 +1,6 @@
 //! Tauri commands (docs/INTERFACES.md §6.1). Thin wrappers over
-//! [`HostManager`]; every one is `async` so none runs on the main thread.
+//! [`HostManager`]; every one is `async` so none runs on the main thread,
+//! except `write_clipboard`, which must (AppKit).
 //! Keep the list in sync with `build.rs` (ACL) and the capability file.
 
 use civet_proto::{
@@ -242,6 +243,18 @@ pub async fn set_prediction(state: State<'_, AppState>, enabled: bool) -> Res<()
     Ok(())
 }
 
+/// Put `text` on the system clipboard (Cmd+C on an xterm selection).
+/// Synchronous on purpose: Tauri runs sync commands on the main thread,
+/// where AppKit's pasteboard wants to be used. Write only.
+#[tauri::command]
+pub fn write_clipboard(text: String) -> Res<()> {
+    if crate::clipboard::write_text(&text) {
+        Ok(())
+    } else {
+        Err(CmdError::new("clipboard", "could not write the clipboard"))
+    }
+}
+
 /// The invoke handler with every command.
 pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static
 {
@@ -270,6 +283,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         fetch_scrollback,
         set_agent_status,
         set_prediction,
+        write_clipboard,
     ]
 }
 

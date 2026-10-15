@@ -13,6 +13,7 @@ import type {
   AgentStatus,
   BootstrapProgressEvent,
   CivetErrorPayload,
+  ClipboardEvent,
   DaemonEventEnvelope,
   DaemonInfo,
   HostStateEvent,
@@ -41,7 +42,8 @@ export const CivetEvents = {
   hostState: 'civet://host-state',
   bootstrapProgress: 'civet://bootstrap-progress',
   daemonEvent: 'civet://daemon-event',
-  agentAttention: 'civet://agent-attention'
+  agentAttention: 'civet://agent-attention',
+  clipboard: 'civet://clipboard'
 } as const
 
 /** Rejection type of every backend call: `{ code, message }` from Rust, as an Error. */
@@ -112,11 +114,14 @@ export interface CivetBackend {
   fetchScrollback(hostId: string, pane: PaneId, query: ScrollbackQuery): Promise<ScrollbackPageView>
   setAgentStatus(hostId: string, pane: PaneId, status: AgentStatus): Promise<void>
   setPrediction(enabled: boolean): Promise<void>
+  /** Write text to the system clipboard (Cmd+C on a terminal selection). */
+  writeClipboard(text: string): Promise<void>
 
   onHostState(cb: (e: HostStateEvent) => void): Promise<Unlisten>
   onBootstrapProgress(cb: (e: BootstrapProgressEvent) => void): Promise<Unlisten>
   onDaemonEvent(cb: (e: DaemonEventEnvelope) => void): Promise<Unlisten>
   onAgentAttention(cb: (e: AgentAttentionEvent) => void): Promise<Unlisten>
+  onClipboard(cb: (e: ClipboardEvent) => void): Promise<Unlisten>
 }
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
@@ -272,6 +277,9 @@ export class TauriBackend implements CivetBackend {
   setPrediction(enabled: boolean) {
     return this.callVoid('set_prediction', { enabled })
   }
+  writeClipboard(text: string) {
+    return this.callVoid('write_clipboard', { text })
+  }
 
   private on<T>(event: string, cb: (payload: T) => void): Promise<Unlisten> {
     return this.deps.listen<T>(event, (e) => cb(e.payload))
@@ -287,6 +295,9 @@ export class TauriBackend implements CivetBackend {
   }
   onAgentAttention(cb: (e: AgentAttentionEvent) => void) {
     return this.on(CivetEvents.agentAttention, cb)
+  }
+  onClipboard(cb: (e: ClipboardEvent) => void) {
+    return this.on(CivetEvents.clipboard, cb)
   }
 }
 

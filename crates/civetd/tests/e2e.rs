@@ -220,6 +220,7 @@ struct Raw {
     responses: HashMap<u64, Result<Response, RpcError>>,
     input_acks: Vec<(PaneId, u64)>,
     goodbye: Option<String>,
+    events: Vec<Event>,
     next_id: u64,
 }
 
@@ -233,6 +234,7 @@ impl Raw {
             responses: HashMap::new(),
             input_acks: Vec::new(),
             goodbye: None,
+            events: Vec::new(),
             next_id: 100,
         }
     }
@@ -263,7 +265,7 @@ impl Raw {
             }
             ServerMessage::InputAck { pane, seq } => self.input_acks.push((pane, seq)),
             ServerMessage::Goodbye { reason } => self.goodbye = Some(reason),
-            ServerMessage::Event(_) => {}
+            ServerMessage::Event(e) => self.events.push(e),
         }
         true
     }
@@ -925,4 +927,98 @@ async fn bootstrap_local_mode() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let _ = Event::ReposChanged; // keep the import set stable
+}
+
+/// OSC 52 from a pane reaches subscribed clients that are new enough as
+/// `Event::Clipboard`, and nobody else; a re-subscribe (full repaint) does
+/// not re-send it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn osc52_clipboard_event_reaches_subscribed_clients_only() {
+    let (daemon, dir) = start_daemon().await;
+    let info = daemon.info().clone();
+    async fn raw(daemon: &Daemon, info: &BootstrapInfo, version: &str) -> Raw {
+        let sock = tokio::net::UnixStream::connect(daemon.socket_path())
+            .await
+            .unwrap();
+        let hello = ClientHello::new(
+            info.session_key.clone(),
+            ClientId::generate().unwrap(),
+            "e2e-clip",
+            version,
+        );
+        Raw::new(
+            civet_transport::connect_stream(sock, hello, vec![])
+                .await
+                .unwrap(),
+        )
+    }
+    let mut a = raw(&daemon, &info, civetd::VERSION).await;
+    let mut b = raw(&daemon, &info, civetd::VERSION).await; // not subscribed
+    let mut old = raw(&daemon, &info, "0.1.0").await; // subscribed, too old
+    let pane = match a.request(sh_pane(dir.path())).await.unwrap() {
+        Response::PaneSpawned(p) => p.id,
+        other => panic!("{other:?}"),
+    };
+    for c in [&mut a, &mut old] {
+        let r = c
+            .request(Request::SubscribePane {
+                pane,
+                known_state: None,
+            })
+            .await;
+        assert!(matches!(r, Ok(Response::Subscribed(_))), "{r:?}");
+    }
+    // Query first (must be ignored), then a set: "hi" base64.
+    a.input(pane, 1, "printf '\\033]52;c;?\\007\\033]52;c;aGk=\\007'\n")
+        .await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    let clip = |c: &Raw| {
+        c.events
+            .iter()
+            .filter(|e| matches!(e, Event::Clipboard { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    while clip(&a).is_empty() {
+        assert!(a.pump(deadline).await, "connection closed");
+    }
+    assert_eq!(
+        clip(&a),
+        vec![Event::Clipboard {
+            pane,
+            text: "hi".into()
+        }]
+    );
+    // Let the others drain whatever the daemon sent them.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for c in [&mut b, &mut old] {
+        assert!(matches!(
+            c.request(Request::Ping { nonce: 1 }).await,
+            Ok(Response::Pong { .. })
+        ));
+        assert!(clip(c).is_empty(), "{:?}", c.events);
+    }
+    // Re-subscribing (full repaint) does not replay the clipboard write.
+    assert!(matches!(
+        a.request(Request::UnsubscribePane { pane }).await,
+        Ok(Response::Ok)
+    ));
+    assert!(matches!(
+        a.request(Request::SubscribePane {
+            pane,
+            known_state: None
+        })
+        .await,
+        Ok(Response::Subscribed(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(matches!(
+        a.request(Request::Ping { nonce: 2 }).await,
+        Ok(Response::Pong { .. })
+    ));
+    assert_eq!(clip(&a).len(), 1);
+    for c in [a, b, old] {
+        c.conn.close().await;
+    }
+    daemon.shutdown("test done").await;
 }

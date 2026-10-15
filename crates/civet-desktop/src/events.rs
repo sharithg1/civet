@@ -13,6 +13,8 @@ pub const EV_BOOTSTRAP_PROGRESS: &str = "civet://bootstrap-progress";
 pub const EV_DAEMON_EVENT: &str = "civet://daemon-event";
 /// `civet://agent-attention`
 pub const EV_AGENT_ATTENTION: &str = "civet://agent-attention";
+/// `civet://clipboard`
+pub const EV_CLIPBOARD: &str = "civet://clipboard";
 
 /// What `connect_host` connects to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +180,33 @@ pub struct AgentAttentionEvent {
     pub message: Option<String>,
 }
 
+/// A program in a pane set the clipboard (OSC 52). The core hands the text
+/// to [`UiEvents::clipboard`], which writes the system clipboard and emits
+/// [`ClipboardEvent`] (without the text) for the "Copied" toast.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardWrite {
+    /// Host.
+    pub host_id: String,
+    /// Pane.
+    pub pane: PaneId,
+    /// Text to put on the clipboard (at most `MAX_CLIPBOARD_BYTES`).
+    pub text: String,
+}
+
+/// `civet://clipboard`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardEvent {
+    /// Host.
+    pub host_id: String,
+    /// Pane.
+    pub pane: PaneId,
+    /// Length of the copied text in characters.
+    pub chars: usize,
+    /// Whether the system clipboard was written.
+    pub ok: bool,
+}
+
 /// `fetch_scrollback` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,6 +256,9 @@ pub trait UiEvents: Send + Sync + 'static {
     fn window_focused(&self) -> bool;
     /// Show a native notification.
     fn notify(&self, title: &str, body: &str);
+    /// OSC 52 from a pane: write the system clipboard, then emit
+    /// `civet://clipboard`. Default: ignore (tests that do not care).
+    fn clipboard(&self, _write: ClipboardWrite) {}
 }
 
 #[cfg(test)]

@@ -159,6 +159,9 @@ export type BootstrapProgressEvent = {
 
 export type DaemonEventEnvelope = { hostId: string; event: DaemonEvent }
 
+/** `civet://clipboard`: a pane's program set the clipboard (OSC 52); Rust already wrote it. */
+export type ClipboardEvent = { hostId: string; pane: PaneId; chars: number; ok: boolean }
+
 export type AgentAttentionEvent = {
   hostId: string
   pane: PaneId

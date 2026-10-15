@@ -262,6 +262,10 @@ fn all_events() -> Vec<Event> {
         Event::WorktreesChanged {
             repo: RepoId::from("r"),
         },
+        Event::Clipboard {
+            pane: PaneId(1),
+            text: "copied ✓".into(),
+        },
     ]
 }
 
@@ -536,4 +540,26 @@ proptest! {
         dec.push(&bytes);
         while let Ok(Some(_)) = dec.next_raw() {}
     }
+}
+
+#[test]
+fn clipboard_event_is_appended() {
+    // Appended within protocol 1: existing variants keep their indices and
+    // Clipboard takes the next one (postcard varint discriminant).
+    assert_eq!(encode(&Event::ReposChanged).unwrap(), vec![7]);
+    let bytes = encode(&Event::Clipboard {
+        pane: PaneId(3),
+        text: "hi".into(),
+    })
+    .unwrap();
+    assert_eq!(bytes, vec![9, 3, 2, b'h', b'i']);
+    let v = serde_json::to_value(Event::Clipboard {
+        pane: PaneId(3),
+        text: "hi".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"clipboard": {"pane": 3, "text": "hi"}})
+    );
 }
