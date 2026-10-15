@@ -135,6 +135,15 @@ impl Mirror {
         self.rows().iter().any(|r| r.trim_end() == row)
     }
 
+    /// The shell's `$ ` prompt is on screen. Why: typing before the shell
+    /// is reading leaves the tty's echo of the command above the prompt and
+    /// the command's output on the prompt row (`$ hello`), which a row match
+    /// never sees; dash on Linux starts slowly enough to hit this. Matches `$` (PS1) and
+    /// macOS's `sh-3.2$` (bash 3.2 as sh ignores PS1 from the environment).
+    fn has_prompt(&self) -> bool {
+        self.rows().iter().any(|r| r.trim_end().ends_with('$'))
+    }
+
     fn count_rows(&self, row: &str) -> usize {
         self.rows().iter().filter(|r| r.trim_end() == row).count()
     }
@@ -346,6 +355,10 @@ async fn quic_echo_and_rebind_resume_latency() {
     let pane = spawn_sh(&session, dir.path()).await;
     session.subscribe(pane).await.unwrap();
     let mut mirrors = HashMap::new();
+    wait_session(&mut events, &mut mirrors, |m, _| {
+        m.get(&pane).is_some_and(Mirror::has_prompt)
+    })
+    .await;
     session.send_input(pane, b"echo hello\n".to_vec());
     wait_session(&mut events, &mut mirrors, |m, _| {
         m.get(&pane).is_some_and(|m| m.has_row("hello"))
@@ -414,6 +427,7 @@ async fn resume_after_disconnect_loses_nothing() {
     })
     .await
     .unwrap();
+    c1.wait_screen(pane, Mirror::has_prompt).await;
     c1.input(pane, 1, "echo start\n").await;
     c1.wait_screen(pane, |m| m.has_row("start")).await;
     c1.input(pane, 2, "sleep 1; seq 1 300; echo done\n").await;
@@ -555,6 +569,10 @@ async fn session_resume_replays_history_into_client() {
     let pane = spawn_sh(&session, dir.path()).await;
     session.subscribe(pane).await.unwrap();
     let mut mirrors = HashMap::new();
+    wait_session(&mut events, &mut mirrors, |m, _| {
+        m.get(&pane).is_some_and(Mirror::has_prompt)
+    })
+    .await;
     session.send_input(pane, b"echo ready\n".to_vec());
     wait_session(&mut events, &mut mirrors, |m, _| {
         m.get(&pane).is_some_and(|m| m.has_row("ready"))
@@ -607,6 +625,7 @@ async fn duplicate_input_seq_not_applied_twice() {
     })
     .await
     .unwrap();
+    c.wait_screen(pane, Mirror::has_prompt).await;
     c.input(pane, 1, "echo dup\n").await;
     c.input(pane, 1, "echo dup\n").await;
     c.input(pane, 2, "echo two\n").await;
@@ -803,6 +822,10 @@ async fn stdio_tunnel_binary() {
     let pane = spawn_sh(&session, dir.path()).await;
     session.subscribe(pane).await.unwrap();
     let mut mirrors = HashMap::new();
+    wait_session(&mut events, &mut mirrors, |m, _| {
+        m.get(&pane).is_some_and(Mirror::has_prompt)
+    })
+    .await;
     session.send_input(pane, b"seq 1 40; echo hello-tunnel\n".to_vec());
     wait_session(&mut events, &mut mirrors, |m, _| {
         m.get(&pane).is_some_and(|m| m.has_row("hello-tunnel"))
@@ -968,6 +991,7 @@ async fn osc52_clipboard_event_reaches_subscribed_clients_only() {
             .await;
         assert!(matches!(r, Ok(Response::Subscribed(_))), "{r:?}");
     }
+    a.wait_screen(pane, Mirror::has_prompt).await;
     // Query first (must be ignored), then a set: "hi" base64.
     a.input(pane, 1, "printf '\\033]52;c;?\\007\\033]52;c;aGk=\\007'\n")
         .await;

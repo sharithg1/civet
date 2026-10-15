@@ -136,6 +136,15 @@ impl Mirror {
         self.term.screen_text()
     }
 
+    /// The shell's `$ ` prompt is on screen. Why: typing before the shell
+    /// reads leaves the tty's echo of the command above the prompt and its
+    /// output on the prompt row (`$ hello`), which a row match never sees;
+    /// dash on Linux starts slowly enough to hit this. Matches `$` (PS1) and
+    /// macOS's `sh-3.2$` (bash 3.2 as sh ignores PS1 from the environment).
+    pub fn has_prompt(&self) -> bool {
+        self.rows().iter().any(|r| r.trim_end().ends_with('$'))
+    }
+
     /// Any visible row equal to `row` (trailing spaces ignored).
     pub fn has_row(&self, row: &str) -> bool {
         self.rows().iter().any(|r| r.trim_end() == row)

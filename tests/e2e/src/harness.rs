@@ -6,7 +6,7 @@
 //! on drop ([`DaemonGuard`]), child daemons are SIGKILLed on drop
 //! ([`ChildDaemon`]), stdio tunnels are `kill_on_drop` children.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -328,6 +328,12 @@ pub fn tunnel_dialer(state_dir: &Path) -> (Arc<dyn Dialer>, Arc<Mutex<Vec<u32>>>
 // Requests
 // ---------------------------------------------------------------------------
 
+/// An interactive `sh` (no `-c` script): it shows a prompt.
+fn is_shell(req: &Request) -> bool {
+    matches!(req, Request::SpawnPane(r)
+        if r.command.as_ref().is_some_and(|c| c.program == "sh" && c.args.is_empty()))
+}
+
 /// `sh` pane (PS1 `$ `) in `cwd`, 80x24.
 pub fn sh_pane(cwd: &Path) -> Request {
     cmd_pane(cwd, "sh", &[])
@@ -375,6 +381,9 @@ pub struct Client {
     pub first_hello: ServerHello,
     /// Track transcripts in new mirrors.
     pub transcripts: bool,
+    /// Panes spawned as an interactive `sh` ([`Client::attach`] waits for
+    /// their prompt).
+    shells: HashSet<PaneId>,
 }
 
 /// Session config with a client id (default timings).
@@ -402,6 +411,7 @@ impl Client {
             goodbye: None,
             first_hello,
             transcripts: true,
+            shells: HashSet::new(),
         })
     }
 
@@ -481,18 +491,31 @@ impl Client {
     }
 
     /// Spawn a pane.
-    pub async fn spawn(&self, req: Request) -> PaneId {
-        match self.session.request(req).await.expect("spawn request") {
+    pub async fn spawn(&mut self, req: Request) -> PaneId {
+        let shell = is_shell(&req);
+        let pane = match self.session.request(req).await.expect("spawn request") {
             Response::PaneSpawned(p) => p.id,
             other => panic!("unexpected {other:?}"),
+        };
+        if shell {
+            self.shells.insert(pane);
         }
+        pane
     }
 
-    /// Subscribe and create its mirror.
+    /// Subscribe and create its mirror; for an `sh` pane, wait until its
+    /// prompt is up so the test's first keystrokes reach a reading shell
+    /// (see [`Mirror::has_prompt`]).
     pub async fn attach(&mut self, pane: PaneId) {
         let t = self.transcripts;
         self.mirrors.entry(pane).or_insert_with(|| Mirror::new(t));
         self.session.subscribe(pane).await.expect("subscribe");
+        if self.shells.contains(&pane) {
+            self.wait_until(Duration::from_secs(10), "the shell prompt", |c| {
+                c.m(pane).has_prompt()
+            })
+            .await;
+        }
     }
 
     /// The mirror of a pane.
