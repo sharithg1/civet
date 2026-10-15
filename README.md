@@ -2,6 +2,7 @@
 
 <img width="1728" height="1083" alt="image" src="https://github.com/user-attachments/assets/6bf08b82-4e82-45b8-8bd0-b6a2b499990a" />
 
+
 Civet is a remote-first workspace for coding agents. A Rust daemon,
 `civetd`, runs on your Linux dev box. It owns repos, git worktrees, the
 PTYs of every shell and agent pane, and each pane's terminal screen and
