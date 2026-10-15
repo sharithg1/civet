@@ -3,6 +3,7 @@ import type { CivetBackend } from '../backend'
 import type { HostSummary, PaneInfo } from '../types'
 import { termSize } from '../types'
 import { setPrefs } from './prefs'
+import type { Tab } from './store'
 
 // The store touches window/document only in initApp (listeners); give node a stub.
 beforeAll(() => {
@@ -142,5 +143,19 @@ describe('store', () => {
     setPrefs({ prediction: 'off' })
     expect(setPrediction).toHaveBeenCalledTimes(3)
     setPrefs({ prediction: 'auto' })
+  })
+
+  it('moveTab reorders tabs within a worktree and clamps the target', () => {
+    const key = store.wsKey('h', '/w')
+    const tab = (id: string, pane: number): Tab => ({ id, root: { type: 'leaf', pane }, focused: pane })
+    useStore.setState({ workspaces: { [key]: { tabs: [tab('a', 1), tab('b', 2), tab('c', 3)], activeTab: 'a' } } })
+    const order = () => useStore.getState().workspaces[key]!.tabs.map((t) => t.id)
+    store.moveTab(key, 'a', 2)
+    expect(order()).toEqual(['b', 'c', 'a'])
+    store.moveTab(key, 'a', -5)
+    expect(order()).toEqual(['a', 'b', 'c'])
+    store.moveTab(key, 'missing', 0)
+    expect(order()).toEqual(['a', 'b', 'c'])
+    expect(useStore.getState().workspaces[key]!.activeTab).toBe('a')
   })
 })

@@ -112,6 +112,40 @@ pub async fn remove_repo(state: State<'_, AppState>, host_id: String, repo: Repo
 }
 
 #[tauri::command]
+pub async fn prepare_file_drop(
+    state: State<'_, AppState>,
+    host_id: String,
+    paths: Vec<String>,
+) -> Res<Vec<crate::hosts::DroppedFile>> {
+    state.hosts.prepare_file_drop(&host_id, paths).await
+}
+
+/// Raw-body command (no JSON array of bytes): the file contents are the
+/// invoke body, host and file name ride in `x-civet-host` / `x-civet-name`.
+#[tauri::command]
+pub async fn upload_file(
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Res<String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err(CmdError::new(
+            "invalidArgument",
+            "upload_file expects a raw body",
+        ));
+    };
+    let header = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .ok_or_else(|| CmdError::new("invalidArgument", format!("upload_file: missing {k}")))
+    };
+    let (host_id, name) = (header("x-civet-host")?, header("x-civet-name")?);
+    state.hosts.upload_file(&host_id, name, data.clone()).await
+}
+
+#[tauri::command]
 pub async fn list_worktrees(
     state: State<'_, AppState>,
     host_id: String,
@@ -285,6 +319,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_repos,
         add_repo,
         remove_repo,
+        prepare_file_drop,
+        upload_file,
         list_worktrees,
         create_worktree,
         remove_worktree,

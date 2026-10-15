@@ -684,6 +684,19 @@ export function activateTab(key: string, tabId: string): void {
   updateWorkspace(key, (w) => ({ ...w, activeTab: tabId }))
 }
 
+/** Reorder a tab within its worktree (tab-strip drag); `toIndex` is clamped. */
+export function moveTab(key: string, tabId: string, toIndex: number): void {
+  updateWorkspace(key, (w) => {
+    const from = w.tabs.findIndex((t) => t.id === tabId)
+    const to = Math.max(0, Math.min(toIndex, w.tabs.length - 1))
+    if (from < 0 || from === to) return w
+    const tabs = [...w.tabs]
+    const [tab] = tabs.splice(from, 1)
+    tabs.splice(to, 0, tab!)
+    return { ...w, tabs }
+  })
+}
+
 export function focusPane(hostId: string, pane: PaneId): void {
   const found = findTabOfPane(hostId, pane)
   if (!found || found.tab.focused === pane) return

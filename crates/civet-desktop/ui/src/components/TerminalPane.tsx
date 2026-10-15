@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Columns2, History, Rows2, X } from 'lucide-react'
 import { useStore, closePanes, focusPane, splitFocused, reportError } from '@/state/store'
 import { PaneController } from '@/terminal/pane-controller'
+import { registerPane } from '@/terminal/pane-registry'
 import type { LineRange } from '@/terminal/pane-stream'
 import type { PaneId } from '@/types'
 import { cn } from '@/lib/utils'
@@ -51,8 +52,10 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
       canReportInputError: () => useStore.getState().hosts[hostId]?.state === 'connected'
     })
     c.mount(el)
+    const unregister = registerPane(c)
     setController(c)
     return () => {
+      unregister()
       c.dispose()
       setController(null)
     }
@@ -96,6 +99,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
       )}
       onMouseDown={() => focusPane(hostId, pane)}
       data-pane-id={pane}
+      data-host-id={hostId}
     >
       {multiPane ? (
         <div className="flex h-[22px] shrink-0 items-center gap-1.5 px-3 font-mono text-[11px] text-faint">

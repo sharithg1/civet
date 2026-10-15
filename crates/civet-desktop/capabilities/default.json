@@ -19,6 +19,8 @@
     "allow-list-repos",
     "allow-add-repo",
     "allow-remove-repo",
+    "allow-prepare-file-drop",
+    "allow-upload-file",
     "allow-list-worktrees",
     "allow-create-worktree",
     "allow-remove-worktree",

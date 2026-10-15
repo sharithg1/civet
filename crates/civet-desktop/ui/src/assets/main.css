@@ -310,21 +310,35 @@
   border-color: transparent;
   outline: none;
 }
+/* Match TERMINAL_THEME_DARK.background so the inset padding isn't a darker frame. */
+.terminal-host {
+  background-color: #282c34;
+}
 .terminal-host .xterm {
   height: 100%;
   width: 100%;
   /* v3: terminal content sits inset from the chrome. FitAddon subtracts the
      .xterm element's padding, so this changes only layout, not sizing logic. */
-  padding: var(--term-pad, 14px 0 8px 22px);
+  padding: var(--term-pad, 14px 0 8px 6px);
 }
 .pane-multi .terminal-host .xterm {
-  --term-pad: 6px 0 4px 12px;
+  --term-pad: 6px 0 4px 6px;
 }
 .history-host .xterm {
-  --term-pad: 6px 0 4px 22px;
+  --term-pad: 6px 0 4px 6px;
 }
 .pane-multi .history-host .xterm {
-  --term-pad: 4px 0 4px 12px;
+  --term-pad: 4px 0 4px 6px;
+}
+/* OS file drag over a pane (lib/file-drop.ts). */
+[data-drop-target]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  border: 2px solid var(--ring);
+  background: color-mix(in srgb, var(--ring) 8%, transparent);
 }
 /* overflow: clip (not hidden) so focusing xterm's textarea can never scroll
    the pane sideways when a terminal is a few pixels wider than its box. */

@@ -2,12 +2,13 @@
 // then the current worktree (opens the switcher), the worktree's tabs, a "+"
 // menu (Claude Code / Terminal / splits) and the right-panel toggle.
 // Tabs replace the old TabBar: same activate / close / middle-click-close
-// behaviour; a tab is still a split tree of panes.
+// behaviour, plus drag to reorder; a tab is still a split tree of panes.
 // On macOS the window uses an overlay title bar, so this row is also the
 // window's title bar: the traffic lights sit in its left inset and every
 // non-interactive part of it drags the window (double click zooms); see
 // lib/window-chrome.ts.
 
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
@@ -16,6 +17,7 @@ import { paneDot, splitBranch, worktreeBranch, worktreeTask } from '@/lib/worktr
 import {
   activateTab,
   closeTab,
+  moveTab,
   newAgentTab,
   newTerminalTab,
   panesOfWorktree,
@@ -139,9 +141,54 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const panes = useStore((s) => s.panes[hostId])
   const tabs = useWorktreeTabs(hostId, worktree)
   const wsTabs = useStore((s) => s.workspaces[key]?.tabs)
+  const stripRef = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ id: string; startX: number; moved: boolean } | null>(null)
+  const [dragging, setDragging] = useState<string | null>(null)
+
+  // Pointer events rather than HTML5 drag-and-drop: Tauri's native file-drop
+  // handler swallows HTML5 drag events in the webview. The strip reorders
+  // live as the pointer crosses a neighbour's midpoint.
+  const onPointerMove = (e: ReactPointerEvent) => {
+    const d = drag.current
+    if (!d) return
+    if (!d.moved) {
+      if (Math.abs(e.clientX - d.startX) < 4) return
+      d.moved = true
+      setDragging(d.id)
+    }
+    const els = Array.from(stripRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])
+    const from = els.findIndex((el) => el.dataset.tabId === d.id)
+    if (from < 0) return
+    const mid = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect()
+      return r.left + r.width / 2
+    }
+    const next = els[from + 1]
+    const prev = els[from - 1]
+    if (next && e.clientX > mid(next)) moveTab(key, d.id, from + 1)
+    else if (prev && e.clientX < mid(prev)) moveTab(key, d.id, from - 1)
+  }
+  const endDrag = (e: ReactPointerEvent) => {
+    const d = drag.current
+    if (!d) return
+    drag.current = null
+    setDragging(null)
+    ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+    // A drag isn't a click: keep the trailing click from re-activating.
+    if (d.moved) {
+      const swallow = (ev: MouseEvent) => ev.stopPropagation()
+      window.addEventListener('click', swallow, { capture: true, once: true })
+      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0)
+    }
+  }
+
   return (
     <>
-      <div className="no-scrollbar flex min-w-0 items-stretch overflow-x-auto" role="tablist">
+      <div
+        ref={stripRef}
+        className="no-scrollbar flex min-w-0 items-stretch overflow-x-auto"
+        role="tablist"
+      >
         {tabs.map((t) => {
           if (!t.id) return null
           const id = t.id
@@ -154,8 +201,17 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
               role="tab"
               aria-selected={isActive}
               data-active={isActive ? 'true' : 'false'}
+              data-tab-id={id}
               title={t.what.text}
               onClick={() => activateTab(key, id)}
+              onPointerDown={(e) => {
+                if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
+                drag.current = { id, startX: e.clientX, moved: false }
+                e.currentTarget.setPointerCapture(e.pointerId)
+              }}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
               onMouseDown={(e) => {
                 if (e.button === 1) e.preventDefault()
               }}
@@ -167,7 +223,8 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
               }}
               className={cn(
                 'relative flex shrink-0 cursor-default items-center gap-2 border-r border-border-subtle pr-2.5 pl-3 text-[12.5px] select-none hover:text-foreground',
-                isActive ? 'bg-background text-foreground' : 'text-muted-foreground'
+                isActive ? 'bg-background text-foreground' : 'text-muted-foreground',
+                dragging === id && 'z-10 cursor-grabbing bg-hover-strong text-foreground'
               )}
             >
               {t.agent ? (

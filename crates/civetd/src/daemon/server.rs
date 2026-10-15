@@ -479,6 +479,13 @@ impl Server {
             Request::ListRepos => s.list_repos().await.map(Response::Repos),
             Request::AddRepo { path } => s.add_repo(&path).await.map(Response::Repo),
             Request::RemoveRepo { repo } => s.remove_repo(&repo).await.map(|()| Response::Ok),
+            Request::UploadFile { name, data } => {
+                return super::uploads::store(&super::uploads::default_root(), &name, &data)
+                    .await
+                    .map(|p| Response::FileUploaded {
+                        path: p.to_string_lossy().into_owned(),
+                    });
+            }
             Request::ListWorktrees { repo } => {
                 s.list_worktrees(&repo).await.map(Response::Worktrees)
             }

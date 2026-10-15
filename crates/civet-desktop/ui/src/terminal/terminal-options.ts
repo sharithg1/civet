@@ -2,34 +2,36 @@
 // (buildDefaultTerminalOptions) and src/shared/terminal-themes/defaults.ts
 // ("Ghostty Default Style Dark"). Settings plumbing, contrast correction and
 // the scrollback policy module were dropped; Civet has one fixed theme
-// (colours and font from the Civet Workspace v3 design).
+// (Ghostty's default colours, font from the Civet Workspace v3 design).
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
 
 export const TERMINAL_THEME_DARK: ITheme = {
-  // Civet v3: near-black content area, neutral text, the design's oklch
-  // prompt/status hues converted to hex (xterm parses hex/rgb only).
-  background: '#0a0a0a',
-  foreground: '#e5e5e5',
-  cursor: '#d4d4d4',
-  cursorAccent: '#0a0a0a',
-  selectionBackground: 'rgba(120, 160, 255, 0.3)',
-  selectionForeground: '#fafafa',
-  black: '#262626',
-  red: '#ef6661',
-  green: '#c2c564',
-  yellow: '#ebb25f',
-  blue: '#7fb6ee',
-  magenta: '#af95df',
-  cyan: '#64c3c3',
-  white: '#d4d4d4',
-  brightBlack: '#737373',
-  brightRed: '#fb9890',
-  brightGreen: '#65c98c',
-  brightYellow: '#f2af48',
-  brightBlue: '#8bbcef',
-  brightMagenta: '#c3acec',
-  brightCyan: '#8fd6d6',
-  brightWhite: '#fafafa'
+  // Ghostty's built-in defaults (`ghostty +show-config --default`): the
+  // #282c34 background with its Tomorrow Night 16-colour palette. Cursor and
+  // selection follow Ghostty's unset behaviour (foreground cursor, inverted
+  // selection).
+  background: '#282c34',
+  foreground: '#ffffff',
+  cursor: '#ffffff',
+  cursorAccent: '#282c34',
+  selectionBackground: '#ffffff',
+  selectionForeground: '#282c34',
+  black: '#1d1f21',
+  red: '#cc6666',
+  green: '#b5bd68',
+  yellow: '#f0c674',
+  blue: '#81a2be',
+  magenta: '#b294bb',
+  cyan: '#8abeb7',
+  white: '#c5c8c6',
+  brightBlack: '#666666',
+  brightRed: '#d54e53',
+  brightGreen: '#b9ca4a',
+  brightYellow: '#e7c547',
+  brightBlue: '#7aa6da',
+  brightMagenta: '#c397d8',
+  brightCyan: '#70c0b1',
+  brightWhite: '#eaeaea'
 }
 
 /** Bundled Geist Mono first (see main.tsx: loaded before any terminal opens). */
@@ -60,7 +62,8 @@ export function buildDefaultTerminalOptions(): ITerminalOptions {
     // Why (Orca): on macOS, non-US layouts rely on Option to compose characters like @ and €.
     macOptionIsMeta: false,
     macOptionClickForcesSelection: true,
-    drawBoldTextInBrightColors: true,
+    // Ghostty default (bold-is-bright = false): bold keeps its own colour.
+    drawBoldTextInBrightColors: false,
     scrollbar: { width: 7 },
     theme: TERMINAL_THEME_DARK
   }

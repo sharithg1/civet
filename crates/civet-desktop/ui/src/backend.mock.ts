@@ -12,7 +12,14 @@
 // "upgrade available" flow; Restart daemon starts a fresh one), "fail" never
 // connects, "udp-blocked" falls back to the SSH tunnel.
 
-import { CivetError, type CivetBackend, type PaneOutputHandler, type Unlisten } from './backend'
+import {
+  CivetError,
+  type CivetBackend,
+  type DroppedFile,
+  type FileDropEvent,
+  type PaneOutputHandler,
+  type Unlisten
+} from './backend'
 import { RecordFlag, RecordKind, encodeRecords, type RecordInit } from './terminal/records'
 import type {
   AgentAttentionEvent,
@@ -838,5 +845,16 @@ export class MockBackend implements CivetBackend {
   }
   async onClipboard(cb: (e: ClipboardEvent) => void) {
     return this.emitter.on('civet://clipboard', cb)
+  }
+
+  async prepareFileDrop(_hostId: string, paths: string[]): Promise<DroppedFile[]> {
+    return paths.map((source) => ({ source, path: source, error: null }))
+  }
+  async uploadFile(_hostId: string, name: string, _data: Uint8Array) {
+    return `/tmp/civet-drops/mock/${name}`
+  }
+  // A browser has no native file paths to drop.
+  async onFileDrop(_cb: (e: FileDropEvent) => void) {
+    return () => {}
   }
 }

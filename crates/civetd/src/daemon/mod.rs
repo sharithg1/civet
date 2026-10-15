@@ -37,6 +37,7 @@
 mod bootstrap;
 mod server;
 mod sys;
+mod uploads;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::RangeInclusive;

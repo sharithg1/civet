@@ -297,6 +297,18 @@ pub enum Request {
         /// Repository.
         repo: RepoId,
     },
+    /// Store a file the user dropped on a pane (e.g. an image for an agent)
+    /// in a fresh daemon-side temp directory. -> [`Response::FileUploaded`].
+    /// Clients send it only to daemons of at least
+    /// [`crate::UPLOAD_FILE_MIN_DAEMON_VERSION`]; at most
+    /// [`crate::MAX_UPLOAD_BYTES`] of data.
+    UploadFile {
+        /// Original file name (basename only; the daemon sanitizes it).
+        name: String,
+        /// File contents.
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -336,6 +348,11 @@ pub enum Response {
         worktree: WorktreeInfo,
         /// The agent's pane.
         pane: PaneInfo,
+    },
+    /// Reply to [`Request::UploadFile`].
+    FileUploaded {
+        /// Absolute path of the stored file on the daemon's host.
+        path: String,
     },
 }
 

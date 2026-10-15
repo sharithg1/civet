@@ -18,6 +18,7 @@ import { handleClipboardKey, isMacPlatform } from './clipboard-keys'
 import { handleShiftEnter } from './newline-keys'
 import { InputQueue } from './input-queue'
 import { buildDefaultTerminalOptions } from './terminal-options'
+import { clipboardImage, clipboardImageName, dropChunks } from './file-drop'
 import { attachWebgl, type WebglHandle } from './webgl'
 
 export const RESIZE_DEBOUNCE_MS = 100
@@ -125,6 +126,19 @@ export class PaneController {
         })
     )
 
+    // Cmd+V with only an image on the clipboard (a screenshot): store it on
+    // the pane's host and paste its path, which agents attach as an image.
+    // Capture phase, ahead of xterm's own paste handler on its textarea.
+    const onPaste = (e: ClipboardEvent) => {
+      const image = clipboardImage(e.clipboardData)
+      if (!image || this.stream.closed) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      void this.pasteImage(image)
+    }
+    container.addEventListener('paste', onPaste, { capture: true })
+    this.cleanups.push(() => container.removeEventListener('paste', onPaste, { capture: true }))
+
     // Scrolling up while already at the top (or with no local scrollback yet).
     const onWheel = (e: WheelEvent) => {
       const buf = this.term.buffer.active
@@ -220,6 +234,30 @@ export class PaneController {
 
   focus(): void {
     this.term.focus()
+  }
+
+  /**
+   * Hand dropped file paths (already on this pane's host) to the program:
+   * images as a bracketed paste (agents attach them), others typed.
+   */
+  dropPaths(paths: readonly string[]): void {
+    if (this.stream.closed) return
+    for (const c of dropChunks(paths)) {
+      // term.paste applies bracketed-paste framing when the program enabled it.
+      if (c.kind === 'paste') this.term.paste(c.text)
+      else this.input.push('text', c.text)
+    }
+    this.focus()
+  }
+
+  private async pasteImage(image: File): Promise<void> {
+    try {
+      const data = new Uint8Array(await image.arrayBuffer())
+      const path = await this.backend.uploadFile(this.hostId, clipboardImageName(image.type), data)
+      if (!this.disposed) this.dropPaths([path])
+    } catch (err) {
+      this.cb.onError(`paste image: ${String((err as Error).message ?? err)}`)
+    }
   }
 
   /** Re-check the size, e.g. when the tab becomes visible again. */

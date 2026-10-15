@@ -901,6 +901,112 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::RemoveRepo { repo }).await?, Response::Ok => ())
     }
 
+    /// `prepare_file_drop`: make files dropped on a pane usable from
+    /// `host_id`. On This Mac the local paths work as they are; for a remote
+    /// host each file is uploaded (`UploadFile`) and the daemon-side path
+    /// returned. One result per input path, in order.
+    pub async fn prepare_file_drop(
+        &self,
+        host_id: &str,
+        paths: Vec<String>,
+    ) -> Result<Vec<DroppedFile>, CmdError> {
+        if host_id == "local" {
+            return Ok(paths
+                .into_iter()
+                .map(|p| DroppedFile {
+                    path: Some(p.clone()),
+                    source: p,
+                    error: None,
+                })
+                .collect());
+        }
+        self.check_upload_support(host_id)?;
+        let mut out = Vec::with_capacity(paths.len());
+        for source in paths {
+            let r = self.upload_one(host_id, &source).await;
+            out.push(match r {
+                Ok(path) => DroppedFile {
+                    source,
+                    path: Some(path),
+                    error: None,
+                },
+                Err(e) => DroppedFile {
+                    source,
+                    path: None,
+                    error: Some(e.message),
+                },
+            });
+        }
+        Ok(out)
+    }
+
+    async fn upload_one(&self, host_id: &str, source: &str) -> Result<String, CmdError> {
+        let io = |e: std::io::Error| CmdError::new("io", format!("{source}: {e}"));
+        let meta = tokio::fs::metadata(source).await.map_err(io)?;
+        if !meta.is_file() {
+            return Err(CmdError::new(
+                "invalidArgument",
+                format!("{source}: only files can be dropped on a remote pane"),
+            ));
+        }
+        if meta.len() > civet_proto::MAX_UPLOAD_BYTES as u64 {
+            return Err(CmdError::new(
+                "invalidArgument",
+                format!(
+                    "{source}: larger than {} MiB",
+                    civet_proto::MAX_UPLOAD_BYTES >> 20
+                ),
+            ));
+        }
+        let data = tokio::fs::read(source).await.map_err(io)?;
+        let name = Path::new(source)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.upload_file(host_id, name, data).await
+    }
+
+    /// `upload_file`: store `data` as `name` in a fresh temp directory on
+    /// `host_id` (any host, This Mac included) and return its path there.
+    /// Used for clipboard images pasted into a pane.
+    pub async fn upload_file(
+        &self,
+        host_id: &str,
+        name: String,
+        data: Vec<u8>,
+    ) -> Result<String, CmdError> {
+        self.check_upload_support(host_id)?;
+        if data.len() > civet_proto::MAX_UPLOAD_BYTES {
+            return Err(CmdError::new(
+                "invalidArgument",
+                format!(
+                    "{name}: larger than {} MiB",
+                    civet_proto::MAX_UPLOAD_BYTES >> 20
+                ),
+            ));
+        }
+        expect_response!(
+            self.request(host_id, Request::UploadFile { name, data }).await?,
+            Response::FileUploaded { path } => path
+        )
+    }
+
+    /// `UploadFile` would make an older daemon drop the connection.
+    fn check_upload_support(&self, host_id: &str) -> Result<(), CmdError> {
+        let running = lock(&self.host(host_id)?.status).daemon_version.clone();
+        let min = civet_proto::UPLOAD_FILE_MIN_DAEMON_VERSION;
+        if running.as_deref().is_none_or(|v| version_older(v, min)) {
+            return Err(CmdError::new(
+                "unsupported",
+                format!(
+                    "{host_id} runs civetd {}; this needs v{min} or newer (restart the daemon to upgrade)",
+                    running.as_deref().unwrap_or("?")
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// `list_worktrees`
     pub async fn list_worktrees(
         &self,
@@ -1205,4 +1311,28 @@ async fn sleep_until_opt(t: Option<Instant>) {
         Some(t) => tokio::time::sleep_until(t).await,
         None => std::future::pending().await,
     }
+}
+
+/// One entry of a `prepare_file_drop` result.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DroppedFile {
+    /// The dropped (local) path.
+    pub source: String,
+    /// Path to paste into the pane, on the pane's host.
+    pub path: Option<String>,
+    /// Why the file could not be made available.
+    pub error: Option<String>,
+}
+
+/// True if semver-ish `a` is older than `b` (numeric components; anything
+/// unparsable counts as 0).
+fn version_older(a: &str, b: &str) -> bool {
+    fn parts(v: &str) -> Vec<u64> {
+        v.split(['.', '-', '+'])
+            .take(3)
+            .map(|p| p.parse().unwrap_or(0))
+            .collect()
+    }
+    parts(a) < parts(b)
 }

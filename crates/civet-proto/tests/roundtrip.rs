@@ -187,6 +187,10 @@ fn all_requests() -> Vec<Request> {
         Request::RemoveRepo {
             repo: RepoId::from("r"),
         },
+        Request::UploadFile {
+            name: "shot.png".into(),
+            data: vec![0x89, b'P', b'N', b'G'],
+        },
     ]
 }
 
@@ -223,6 +227,9 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
         Ok(Response::AgentLaunched {
             worktree: worktree(),
             pane: pane_info(),
+        }),
+        Ok(Response::FileUploaded {
+            path: "/tmp/civet-drops/1/shot.png".into(),
         }),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),

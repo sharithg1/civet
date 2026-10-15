@@ -4,7 +4,8 @@
 // (xterm's selection lives in a canvas, not the DOM), so Cmd+C is handled
 // explicitly and written through the Rust side. Cmd+V is left alone: the app
 // menu's Paste fires a real paste event on xterm's textarea, and xterm.js
-// applies bracketed paste mode itself. Ctrl+C still goes to the pty.
+// applies bracketed paste mode itself (an image-only paste is handled in
+// PaneController: uploaded to the pane's host, its path pasted). Ctrl+C still goes to the pty.
 
 export type ClipboardKeyEvent = Pick<
   KeyboardEvent,

@@ -7,6 +7,7 @@
 
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { toBytes } from './terminal/records'
 import type {
   AgentAttentionEvent,
@@ -126,9 +127,30 @@ export interface CivetBackend {
   onDaemonEvent(cb: (e: DaemonEventEnvelope) => void): Promise<Unlisten>
   onAgentAttention(cb: (e: AgentAttentionEvent) => void): Promise<Unlisten>
   onClipboard(cb: (e: ClipboardEvent) => void): Promise<Unlisten>
+
+  /**
+   * Make files dropped on a pane usable from its host: local paths as they
+   * are on This Mac, uploaded to the daemon (daemon-side paths) otherwise.
+   */
+  prepareFileDrop(hostId: string, paths: string[]): Promise<DroppedFile[]>
+  /** Store `data` as `name` in a temp dir on the host; resolves to its path there. */
+  uploadFile(hostId: string, name: string, data: Uint8Array): Promise<string>
+  /** OS file drags over the window (positions in CSS pixels). */
+  onFileDrop(cb: (e: FileDropEvent) => void): Promise<Unlisten>
 }
 
-type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
+export type DroppedFile = { source: string; path: string | null; error: string | null }
+
+export type FileDropEvent =
+  | { type: 'over'; x: number; y: number }
+  | { type: 'drop'; x: number; y: number; paths: string[] }
+  | { type: 'leave' }
+
+type InvokeFn = <T>(
+  cmd: string,
+  args?: Record<string, unknown> | Uint8Array,
+  options?: { headers: Record<string, string> }
+) => Promise<T>
 type ListenFn = <T>(event: string, cb: (e: { payload: T }) => void) => Promise<UnlistenFn>
 type ChannelCtor = new <T>() => Channel<T>
 
@@ -308,6 +330,30 @@ export class TauriBackend implements CivetBackend {
   }
   onClipboard(cb: (e: ClipboardEvent) => void) {
     return this.on(CivetEvents.clipboard, cb)
+  }
+
+  prepareFileDrop(hostId: string, paths: string[]) {
+    return this.call<DroppedFile[]>('prepare_file_drop', { hostId, paths })
+  }
+  async uploadFile(hostId: string, name: string, data: Uint8Array) {
+    // Raw body: a JSON array of numbers would be ~4x the bytes.
+    try {
+      return await this.deps.invoke<string>('upload_file', data, {
+        headers: { 'x-civet-host': hostId, 'x-civet-name': name }
+      })
+    } catch (err) {
+      throw CivetError.from(err)
+    }
+  }
+  onFileDrop(cb: (e: FileDropEvent) => void) {
+    // Tauri reports physical pixels; elementFromPoint wants CSS pixels.
+    return getCurrentWebview().onDragDropEvent(({ payload: p }) => {
+      if (p.type === 'leave') return cb({ type: 'leave' })
+      const r = window.devicePixelRatio || 1
+      const x = p.position.x / r
+      const y = p.position.y / r
+      cb(p.type === 'drop' ? { type: 'drop', x, y, paths: p.paths } : { type: 'over', x, y })
+    })
   }
 }
 

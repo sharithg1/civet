@@ -94,6 +94,14 @@ pub const MAX_CLIPBOARD_BYTES: usize = 1 << 20;
 /// does not send it to them.
 pub const CLIPBOARD_EVENT_MIN_CLIENT_VERSION: &str = "0.1.1";
 
+/// Oldest daemon that understands [`Request::UploadFile`]. The variant was
+/// appended within protocol 1; an older daemon fails to decode it and drops
+/// the connection, so clients check `daemon_version` before sending it.
+pub const UPLOAD_FILE_MIN_DAEMON_VERSION: &str = "0.1.4";
+
+/// Largest [`Request::UploadFile`] payload (headroom under the frame limit).
+pub const MAX_UPLOAD_BYTES: usize = 15 * 1024 * 1024;
+
 /// First four bytes of every [`ClientHello`]; lets the daemon reject
 /// non-Civet traffic on its UDP port immediately.
 pub const MAGIC: [u8; 4] = *b"CIVT";

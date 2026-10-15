@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-file-drop"
+description = "Enables the prepare_file_drop command without any pre-configured scope."
+commands.allow = ["prepare_file_drop"]
+
+[[permission]]
+identifier = "deny-prepare-file-drop"
+description = "Denies the prepare_file_drop command without any pre-configured scope."
+commands.deny = ["prepare_file_drop"]
