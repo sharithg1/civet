@@ -85,7 +85,7 @@ export function ConnectScreen({ onCancel }: { onCancel?: () => void }) {
           onChange={(e) => setDestination(e.target.value)}
         />
         {isMock && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Mock backend: any name works; names containing “fail” fail, “udp-blocked” falls back to
             SSH.
           </p>
@@ -96,7 +96,7 @@ export function ConnectScreen({ onCancel }: { onCancel?: () => void }) {
           <Label htmlFor="force-ssh" className="text-xs">
             Force SSH fallback
           </Label>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             Skip QUIC and tunnel through SSH (for hosts where UDP is blocked).
           </span>
         </div>
@@ -158,7 +158,7 @@ export function ConnectScreen({ onCancel }: { onCancel?: () => void }) {
         >
           {form(
             <div className="flex flex-col gap-1">
-              <DialogTitle className="text-lg leading-normal">Connect to a host</DialogTitle>
+              <DialogTitle>Connect to a host</DialogTitle>
               <DialogDescription>{INTRO}</DialogDescription>
             </div>
           )}

@@ -109,7 +109,7 @@ export function NewWorktreeDialog() {
         className="w-[540px] max-w-[calc(100vw-32px)] sm:max-w-[540px]"
         onCloseAutoFocus={restoreTerminalFocus}
       >
-        <DialogTitle className="text-[14px] leading-normal font-semibold">New worktree</DialogTitle>
+        <DialogTitle>New worktree</DialogTitle>
         <DialogDescription className="sr-only">
           Creates a git worktree on {hostLabel} and runs the on-create steps in it.
         </DialogDescription>
@@ -133,7 +133,7 @@ export function NewWorktreeDialog() {
                   setSteps(defaultSteps(req.hostId, r.id))
                 }}
                 className={cn(
-                  'flex h-7 cursor-pointer items-center gap-[7px] rounded-[5px] border px-2.5 text-[12.5px]',
+                  'flex h-7 cursor-pointer items-center gap-[7px] rounded-[5px] border px-2.5 text-sm',
                   r.id === repoId ? 'border-border-strong bg-white/[0.08]' : 'border-white/[0.08] bg-transparent'
                 )}
               >
@@ -153,17 +153,17 @@ export function NewWorktreeDialog() {
               spellCheck={false}
               aria-invalid={nameError ? true : undefined}
               onChange={(e) => setName(e.target.value)}
-              className={cn('h-8 rounded-[5px] px-2.5 text-[12.5px] md:text-[12.5px]', FIELD)}
+              className={cn('h-8 rounded-[5px] px-2.5 text-sm', FIELD)}
             />
-            {nameError && <span className="text-[11px] text-status-err-text">{nameError}</span>}
+            {nameError && <span className="text-2xs text-status-err-text">{nameError}</span>}
           </div>
           {useMain ? (
-            <div className="truncate font-mono text-[11px] text-faint">
+            <div className="truncate font-mono text-2xs text-faint">
               {hostLabel}:{repo?.name ?? '…'} · main checkout
               {mainWt ? ` (${worktreeBranch(mainWt)})` : ''} · no new worktree
             </div>
           ) : (
-            <div className="flex items-center font-mono text-[11px] text-faint">
+            <div className="flex items-center font-mono text-2xs text-faint">
               <span className="truncate">
                 {hostLabel}:{repo?.name ?? '…'}/{slug} · from&nbsp;
               </span>
@@ -175,21 +175,21 @@ export function NewWorktreeDialog() {
                 spellCheck={false}
                 onChange={(e) => setBase(e.target.value)}
                 style={{ width: `${Math.max(4, baseValue.length + 1)}ch` }}
-                className="rounded-sm border-none bg-transparent p-0 font-mono text-[11px] text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none hover:text-foreground focus:text-foreground"
+                className="rounded-sm border-none bg-transparent p-0 font-mono text-2xs text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none hover:text-foreground focus:text-foreground"
               />
             </div>
           )}
           <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between text-[12px]">
+            <div className="flex items-baseline justify-between text-xs">
               <span className="font-medium text-body">On create</span>
-              <span className="text-[11.5px] text-faint">
+              <span className="text-xs text-faint">
                 {steps.length ? 'runs in order, each in its own tab' : 'just creates the worktree'}
               </span>
             </div>
             <div className="overflow-hidden rounded-lg border border-border">
               {steps.map((st, i) => (
                 <div key={i} className="flex items-center gap-2 border-b border-white/[0.08] px-2 py-1.5">
-                  <span className="w-3 text-right font-mono text-[10.5px] text-dim">{i + 1}</span>
+                  <span className="w-3 text-right font-mono text-2xs text-dim">{i + 1}</span>
                   <div className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5" role="radiogroup" aria-label={`Step ${i + 1} kind`}>
                     {(
                       [
@@ -214,7 +214,7 @@ export function NewWorktreeDialog() {
                           })
                         }
                         className={cn(
-                          'h-5 cursor-pointer rounded-sm px-2 text-[11.5px]',
+                          'h-5 cursor-pointer rounded-sm px-2 text-xs',
                           st.kind === k ? 'bg-field text-foreground' : 'bg-transparent text-muted-foreground'
                         )}
                       >
@@ -228,14 +228,14 @@ export function NewWorktreeDialog() {
                     placeholder={st.kind === 'agent' ? 'claude' : 'pnpm install'}
                     spellCheck={false}
                     onChange={(e) => update(i, { cmd: e.target.value })}
-                    className={cn('h-[26px] min-w-0 flex-1 rounded-[5px] border-white/[0.08] px-2 text-[12px] md:text-[12px]', FIELD)}
+                    className={cn('h-[26px] min-w-0 flex-1 rounded-[5px] border-white/[0.08] px-2 text-xs', FIELD)}
                   />
                   <button
                     type="button"
                     title="Remove step"
                     aria-label={`Remove step ${i + 1}`}
                     onClick={() => setSteps((list) => list.filter((_, j) => j !== i))}
-                    className="size-[22px] cursor-pointer rounded-sm p-0 text-[13px] text-faint hover:bg-muted hover:text-foreground"
+                    className="size-[22px] cursor-pointer rounded-sm p-0 text-sm text-faint hover:bg-muted hover:text-foreground"
                   >
                     ×
                   </button>
@@ -245,12 +245,12 @@ export function NewWorktreeDialog() {
                 <button
                   type="button"
                   onClick={() => setSteps((list) => [...list, { kind: 'terminal', cmd: '' }])}
-                  className="h-6 cursor-pointer rounded-[5px] border border-dashed border-white/[0.16] px-[9px] text-[11.5px] text-muted-foreground hover:border-white/30 hover:text-foreground"
+                  className="h-6 cursor-pointer rounded-[5px] border border-dashed border-white/[0.16] px-[9px] text-xs text-muted-foreground hover:border-white/30 hover:text-foreground"
                 >
                   + Add step
                 </button>
                 <span className="flex-1" />
-                <label className="flex cursor-pointer items-center gap-1.5 text-[11.5px] text-muted-foreground">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
                   <Checkbox
                     checked={save}
                     onCheckedChange={(v) => setSave(v === true)}
@@ -260,7 +260,7 @@ export function NewWorktreeDialog() {
                 </label>
               </div>
             </div>
-            {stepError && <span className="text-[11px] text-status-err-text">{stepError}</span>}
+            {stepError && <span className="text-2xs text-status-err-text">{stepError}</span>}
           </div>
           <Textarea
             aria-label="First task for Claude"
@@ -276,12 +276,12 @@ export function NewWorktreeDialog() {
               }
             }}
             className={cn(
-              'field-sizing-fixed min-h-0 resize-none rounded-[5px] px-2.5 py-2 font-sans text-[12.5px] leading-[1.5] md:text-[12.5px]',
+              'field-sizing-fixed min-h-0 resize-none rounded-[5px] px-2.5 py-2 font-sans text-sm leading-normal',
               FIELD,
               'font-sans'
             )}
           />
-          {error && <p className="text-[12px] text-status-err-text">{error}</p>}
+          {error && <p className="text-xs text-status-err-text">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" size="md" onClick={close} disabled={busy}>
               Cancel

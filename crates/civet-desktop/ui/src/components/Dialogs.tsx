@@ -59,7 +59,7 @@ export function AddProjectDialog() {
     <Dialog open={req !== null} onOpenChange={(open) => !open && close()}>
       <DialogContent onCloseAutoFocus={restoreTerminalFocus}>
         <DialogHeader className="gap-1.5">
-          <DialogTitle className="text-[14px] leading-normal">Add project</DialogTitle>
+          <DialogTitle>Add project</DialogTitle>
           <DialogDescription>A git repository on this Mac or a connected host.</DialogDescription>
         </DialogHeader>
         {shown && <AddProjectForm key={shown.hostId ?? ''} initialHost={shown.hostId} onDone={close} />}
@@ -134,7 +134,7 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
             setError(null)
           }}
         >
-          <SelectTrigger id="project-location" className="h-8 w-full text-[12.5px]">
+          <SelectTrigger id="project-location" className="h-8 w-full text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -155,7 +155,7 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
         <div className="flex gap-2">
           <Input
             id="project-path"
-            className="h-8 min-w-0 flex-1 rounded-[5px] border-border bg-field font-mono text-[12.5px] shadow-none md:text-[12.5px] dark:bg-field"
+            className="h-8 min-w-0 flex-1 rounded-[5px] border-border bg-field font-mono text-sm shadow-none dark:bg-field"
             placeholder={isLocal ? '~/src/project' : `~/src/project on ${hosts[hostId]?.label ?? hostId}`}
             value={path}
             spellCheck={false}
@@ -169,7 +169,7 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
             </Button>
           )}
         </div>
-        <p className="text-[11px] text-muted-foreground">Must be a git repository.</p>
+        <p className="text-2xs text-muted-foreground">Must be a git repository.</p>
       </div>
       {busy && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
@@ -208,7 +208,7 @@ export function ConfirmDialog() {
         onCloseAutoFocus={restoreTerminalFocus}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle className="text-[14px] leading-normal">{shown?.title}</AlertDialogTitle>
+          <AlertDialogTitle>{shown?.title}</AlertDialogTitle>
           <AlertDialogDescription>{shown?.body}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

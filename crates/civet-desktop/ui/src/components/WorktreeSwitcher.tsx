@@ -173,16 +173,16 @@ function SwitcherBody() {
               open(flat[sel])
             }
           }}
-          className="min-w-0 flex-1 border-none bg-transparent text-[14px] text-foreground outline-none placeholder:text-faint"
+          className="min-w-0 flex-1 border-none bg-transparent text-base text-foreground outline-none placeholder:text-faint"
         />
-        <span className="shrink-0 font-mono text-[10.5px] text-faint">
+        <span className="shrink-0 font-mono text-2xs text-faint">
           {flat.length} worktree{flat.length === 1 ? '' : 's'}
         </span>
       </div>
       <div ref={listRef} className="max-h-[min(440px,58vh)] overflow-y-auto p-1" role="listbox">
         {groups.map((g) => (
           <div key={`${g.label}:${g.sub}`} className="pb-1">
-            <div className="flex items-center gap-[7px] px-2 pt-2 pb-1 text-[11.5px] font-medium text-muted-foreground">
+            <div className="flex items-center gap-[7px] px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
               {g.tile && <ProjectTile name={g.tile} size={10} />}
               {g.label}
               <span className="font-normal text-dim">{g.sub}</span>
@@ -206,29 +206,29 @@ function SwitcherBody() {
                     <div className="flex items-center gap-[7px]">
                       <span
                         className={cn(
-                          'min-w-0 truncate',
-                          it.primaryIsTask ? 'text-[13px]' : 'font-mono text-[12.5px]'
+                          'min-w-0 truncate text-sm',
+                          !it.primaryIsTask && 'font-mono'
                         )}
                       >
                         <Hl text={it.primary} idxs={it.hits[0]!} base="text-body" />
                       </span>
                       {it.wt.isMain && (
-                        <span className="shrink-0 rounded-sm bg-muted px-[5px] text-[10px] leading-4 font-medium text-body">
+                        <span className="shrink-0 rounded-sm bg-muted px-[5px] text-2xs leading-4 font-medium text-body">
                           default
                         </span>
                       )}
                     </div>
                     <div
                       className={cn(
-                        'truncate text-[11px] leading-4',
+                        'truncate text-xs leading-4',
                         (it.primaryIsTask || it.wt.isMain) && 'font-mono'
                       )}
                     >
                       <Hl text={it.secondary} idxs={it.hits[1]!} base="text-faint" hit="text-body" />
                     </div>
                   </div>
-                  <span className="shrink-0 font-mono text-[10.5px] whitespace-nowrap text-faint">{meta}</span>
-                  <span className="w-3.5 shrink-0 text-right font-mono text-[10.5px] text-muted-foreground">
+                  <span className="shrink-0 font-mono text-2xs whitespace-nowrap text-faint">{meta}</span>
+                  <span className="w-3.5 shrink-0 text-right font-mono text-2xs text-muted-foreground">
                     {i === sel ? '⏎' : ''}
                   </span>
                 </div>
@@ -236,9 +236,9 @@ function SwitcherBody() {
             })}
           </div>
         ))}
-        {flat.length === 0 && <div className="p-[22px] text-center text-[13px] text-faint">No worktrees match.</div>}
+        {flat.length === 0 && <div className="p-[22px] text-center text-sm text-faint">No worktrees match.</div>}
       </div>
-      <div className="flex gap-4 border-t border-border px-3.5 py-2 font-mono text-[10.5px] text-faint">
+      <div className="flex gap-4 border-t border-border px-3.5 py-2 font-mono text-2xs text-faint">
         <span>↑↓ move</span>
         <span>⏎ open</span>
         <span>⌥` previous worktree</span>

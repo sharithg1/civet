@@ -65,12 +65,12 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
   }
   return (
     <>
-      <AlertDialogTitle className="text-[14px] leading-normal font-semibold">
+      <AlertDialogTitle>
         Remove {splitBranch(worktreeBranch(wt.info)).name}?
       </AlertDialogTitle>
       <AlertDialogDescription className="sr-only">{wt.info.path}</AlertDialogDescription>
       {checks.map((c) => (
-        <div key={c.text} className="flex gap-[9px] text-[12.5px] text-soft">
+        <div key={c.text} className="flex gap-[9px] text-sm text-soft">
           <span className={c.bad ? 'w-3 font-mono text-status-err' : 'w-3 font-mono text-status-ok'}>
             {c.bad ? '!' : '✓'}
           </span>

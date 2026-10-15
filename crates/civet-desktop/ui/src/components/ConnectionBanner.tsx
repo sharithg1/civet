@@ -14,7 +14,7 @@ import {
 } from '@/state/store'
 
 const actionBtn =
-  'h-[22px] shrink-0 cursor-pointer rounded-[5px] border border-border px-2 font-sans text-[11.5px] text-soft hover:bg-hover-strong'
+  'h-[22px] shrink-0 cursor-pointer rounded-[5px] border border-border px-2 font-sans text-xs text-soft hover:bg-hover-strong'
 
 export function ConnectionBanner({ hostId }: { hostId: string }) {
   const host = useStore((s) => s.hosts[hostId])
@@ -30,7 +30,7 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
       <div
         role="status"
         data-upgrade-banner
-        className="flex shrink-0 items-center gap-2 border-b border-border px-[18px] py-1 font-mono text-[11.5px] text-status-wait"
+        className="flex shrink-0 items-center gap-2 border-b border-border px-[18px] py-1 font-mono text-xs text-status-wait"
       >
         <span className="min-w-0 truncate">
           {upgradeSummary(hostId)}
@@ -47,7 +47,7 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
               dismissedUpgrades: { ...s.dismissedUpgrades, [hostId]: `${u.runningVersion}>${u.availableVersion}` }
             }))
           }
-          className="h-[22px] shrink-0 cursor-pointer px-1.5 font-sans text-[11.5px] text-faint hover:text-foreground"
+          className="h-[22px] shrink-0 cursor-pointer px-1.5 font-sans text-xs text-faint hover:text-foreground"
         >
           Later
         </button>
@@ -58,7 +58,7 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
     return (
       <div
         role="status"
-        className="shrink-0 border-b border-border px-[18px] py-1.5 font-mono text-[11.5px] text-muted-foreground"
+        className="shrink-0 border-b border-border px-[18px] py-1.5 font-mono text-xs text-muted-foreground"
       >
         reconnecting to {host.label}… sessions keep running on the host
       </div>
@@ -67,7 +67,7 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
   return (
     <div
       role="alert"
-      className="flex shrink-0 items-center gap-2 border-b border-border px-[18px] py-1 font-mono text-[11.5px] text-status-err-text"
+      className="flex shrink-0 items-center gap-2 border-b border-border px-[18px] py-1 font-mono text-xs text-status-err-text"
     >
       <span className="min-w-0 truncate" title={host.message ?? undefined}>
         {host.state === 'failed' ? `connection to ${host.label} failed` : `disconnected from ${host.label}`}

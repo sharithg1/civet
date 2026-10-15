@@ -74,7 +74,7 @@ export function Sidebar() {
           className="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg border border-border bg-white/[0.045] px-2.5 text-left hover:bg-muted"
         >
           <RingGlyph />
-          <span className="min-w-0 flex-1 truncate text-[13px] text-faint">Switch worktree…</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-faint">Switch worktree…</span>
           <Kbd>⌘K</Kbd>
         </button>
         <button
@@ -97,14 +97,14 @@ export function Sidebar() {
           type="button"
           title="Settings (⌘,)"
           onClick={() => useStore.setState({ settings: 'general' })}
-          className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           <span className="grid size-3 shrink-0 place-items-center rounded-full border-[1.5px] border-current">
             <span className="size-1 rounded-full bg-current" />
           </span>
           Settings
           <span className="flex-1" />
-          <span className="font-mono text-[10.5px] text-dim">⌘,</span>
+          <span className="font-mono text-2xs text-dim">⌘,</span>
         </button>
       </div>
     </aside>
@@ -186,20 +186,20 @@ function HostSection({ host, reorder, index }: { host: HostView; reorder: Reorde
         className="group flex cursor-default items-center gap-2 pt-2 pr-[18px] pb-1.5 pl-0.5"
       >
         <Chevron open={!collapsed} className={cn(!collapsed && 'opacity-0 group-hover:opacity-100')} />
-        <span className="-ml-1 text-[11.5px] text-quiet" title={host.hostId}>
+        <span className="-ml-1 text-xs text-quiet" title={host.hostId}>
           {host.label}
         </span>
         <HostStateDot host={host} />
         {host.upgrade && (
           <span
-            className="font-mono text-[10.5px] text-status-wait"
+            className="font-mono text-2xs text-status-wait"
             title={`civetd v${host.upgrade.runningVersion} running, v${host.upgrade.availableVersion} available: restart the daemon to upgrade`}
           >
             ↑ v{host.upgrade.availableVersion}
           </span>
         )}
         <span className="flex-1" />
-        <span className="font-mono text-[10.5px] text-dim">{hostMeta(host)}</span>
+        <span className="font-mono text-2xs text-dim">{hostMeta(host)}</span>
         <DropdownMenu>
           <DropdownMenuTrigger
             aria-label={`${host.label} actions`}
@@ -227,7 +227,7 @@ function HostSection({ host, reorder, index }: { host: HostView; reorder: Reorde
         </DropdownMenu>
       </div>
       {!collapsed && host.transport === 'stream' && (
-        <div className="px-[18px] pb-1 text-[10.5px] text-dim">via SSH tunnel (UDP unavailable)</div>
+        <div className="px-[18px] pb-1 text-2xs text-dim">via SSH tunnel (UDP unavailable)</div>
       )}
       {!collapsed && (
         <div ref={repoReorder.listRef}>
@@ -246,7 +246,7 @@ function HostSection({ host, reorder, index }: { host: HostView; reorder: Reorde
       {!collapsed && repos && repos.length === 0 && (
         <button
           type="button"
-          className="mx-[18px] cursor-pointer text-[12px] text-faint underline hover:text-foreground"
+          className="mx-[18px] cursor-pointer text-xs text-faint underline hover:text-foreground"
           onClick={() => useStore.setState({ addProject: { hostId: host.hostId } })}
         >
           Add a project…
@@ -296,7 +296,7 @@ function ProjectGroup({
         className="group mx-2 flex cursor-default items-center gap-[9px] rounded-md px-2.5 py-[7px] hover:bg-hover"
       >
         <ProjectTile name={name} />
-        <span className="truncate text-[13.5px] font-semibold text-foreground">{name}</span>
+        <span className="truncate text-base font-semibold text-foreground">{name}</span>
         <Chevron open={!collapsed} className={cn('-ml-1', !collapsed && 'opacity-0 group-hover:opacity-100')} />
         <span className="flex-1" />
         <button
@@ -308,7 +308,7 @@ function ProjectGroup({
             e.stopPropagation()
             useStore.setState({ newWorktree: { hostId, repo: repoId } })
           }}
-          className="-mr-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-sm text-[15px] leading-none text-quiet hover:bg-white/[0.08] hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          className="-mr-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-sm text-lg leading-none text-quiet hover:bg-white/[0.08] hover:text-foreground disabled:cursor-default disabled:opacity-40"
         >
           +
         </button>
@@ -324,11 +324,11 @@ function ProjectGroup({
                 type="button"
                 aria-expanded={showArchived}
                 onClick={() => setShowArchived((v) => !v)}
-                className="mt-0.5 flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[11.5px] text-faint hover:bg-hover hover:text-foreground"
+                className="mt-0.5 flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-faint hover:bg-hover hover:text-foreground"
               >
                 <ChevronRight className={cn('size-3 transition-transform', showArchived && 'rotate-90')} />
                 Archived
-                <span className="font-mono text-[10.5px] text-dim">{archived.length}</span>
+                <span className="font-mono text-2xs text-dim">{archived.length}</span>
               </button>
               {showArchived &&
                 archived.map((wt) => <WorktreeRow key={wt.id} host={host} wt={wt} archived />)}
@@ -428,23 +428,23 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
           <StatusDot kind={dot} showIdle={dot !== 'idle'} className="mt-1.5" />
         )}
         <div className="min-w-0 flex-1">
-          <div className="flex min-h-[19px] items-center gap-2">
+          <div className="flex min-h-5 items-center gap-2">
             <span
               className={cn(
-                'min-w-0 flex-1 truncate',
-                useTask ? 'text-[13px]' : 'font-mono text-[12px]',
+                'min-w-0 flex-1 truncate text-sm',
+                !useTask && 'font-mono',
                 selected || unread ? 'text-foreground' : 'text-soft',
                 selected && 'font-medium'
               )}
             >
               {title}
             </span>
-            {wt.isMain && <span className="shrink-0 text-[11px] text-faint">default</span>}
-            {wt.locked && <span className="shrink-0 text-[11px] text-faint">locked</span>}
-            {removing && <span className="shrink-0 text-[11px] text-faint">Removing…</span>}
+            {wt.isMain && <span className="shrink-0 text-2xs text-faint">default</span>}
+            {wt.locked && <span className="shrink-0 text-2xs text-faint">locked</span>}
+            {removing && <span className="shrink-0 text-2xs text-faint">Removing…</span>}
           </div>
           {selected && !wt.isMain && sub && (
-            <div className={cn('truncate text-[11px] leading-4 text-faint', useTask && 'font-mono')}>
+            <div className={cn('truncate text-xs text-faint', useTask && 'font-mono')}>
               {useTask && <span className="text-dim">{prefix}</span>}
               {sub}
             </div>
@@ -463,7 +463,7 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
                       if (t.id) activateTab(key, t.id)
                       else activateTabIndex(i)
                     }}
-                    className="flex h-[21px] cursor-default items-center gap-2 text-[12px] hover:opacity-80"
+                    className="flex h-[21px] cursor-default items-center gap-2 text-xs hover:opacity-80"
                   >
                     <span className={cn('shrink-0', isActive ? 'text-foreground' : 'text-muted-foreground')}>
                       {t.label}
@@ -471,7 +471,7 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
                     <span
                       className={cn(
                         'min-w-0 flex-1 truncate text-faint',
-                        t.what.mono ? 'font-mono text-[11px]' : 'text-[12px]'
+                        t.what.mono && 'font-mono'
                       )}
                     >
                       {t.what.text}

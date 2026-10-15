@@ -45,7 +45,7 @@ function ToastCard({ toast: t }: { toast: Toast }) {
       role={t.kind === 'error' ? 'alert' : 'status'}
       data-toast-kind={t.kind}
       className={cn(
-        'group/toast ml-auto flex w-max max-w-[400px] items-start gap-2.5 rounded-lg border border-border bg-muted px-[13px] py-[9px] text-[12.5px] text-body shadow-floating',
+        'group/toast ml-auto flex w-max max-w-[400px] items-start gap-2.5 rounded-lg border border-border bg-muted px-[13px] py-[9px] text-sm text-body shadow-floating',
         t.target && 'cursor-pointer hover:bg-[color-mix(in_srgb,white_4%,var(--muted))]'
       )}
       onClick={() => {
@@ -63,7 +63,7 @@ function ToastCard({ toast: t }: { toast: Toast }) {
       )}
       <div className="min-w-0 flex-1">
         <div className={cn(t.kind !== 'info' && 'font-medium text-foreground')}>{t.title}</div>
-        {t.body && <div className="mt-0.5 line-clamp-3 text-[12px] text-muted-foreground">{t.body}</div>}
+        {t.body && <div className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{t.body}</div>}
       </div>
       {t.kind !== 'info' && (
         <button

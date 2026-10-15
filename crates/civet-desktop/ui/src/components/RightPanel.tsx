@@ -29,7 +29,7 @@ export function RightPanel() {
             aria-selected={tab === id}
             onClick={() => useStore.setState({ rightTab: id })}
             className={cn(
-              'relative flex cursor-pointer items-center gap-1.5 px-2.5 text-[12px] hover:text-foreground',
+              'relative flex cursor-pointer items-center gap-1.5 px-2.5 text-xs hover:text-foreground',
               tab === id ? 'text-foreground' : 'text-quiet'
             )}
           >
@@ -48,7 +48,7 @@ export function RightPanel() {
 }
 
 function Note({ children }: { children: React.ReactNode }) {
-  return <div className="px-2 py-1.5 text-[12px] leading-[1.5] text-faint">{children}</div>
+  return <div className="px-2 py-1.5 text-xs leading-normal text-faint">{children}</div>
 }
 
 function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string; tab: RightTab }) {
@@ -65,10 +65,10 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   return (
     <>
       <div className="flex shrink-0 flex-col gap-2 px-3 pt-2.5 pb-2">
-        <div className="flex items-center gap-1.5 text-[12.5px]">
+        <div className="flex items-center gap-1.5 text-sm">
           <span className="shrink-0 font-medium whitespace-nowrap text-foreground">{repo.name}</span>
           <span className="text-dim">/</span>
-          <span className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
             {prefix}
             {name}
           </span>
@@ -84,11 +84,11 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
         {tab === 'changes' && (
           <Note>
             Git status and diffs aren&apos;t reported by civetd yet. Run{' '}
-            <span className="font-mono text-[11px] text-muted-foreground">git status</span> in a Terminal tab.
+            <span className="font-mono text-2xs text-muted-foreground">git status</span> in a Terminal tab.
           </Note>
         )}
         {tab === 'branch' && (
-          <div className="flex flex-col gap-2.5 px-2 py-0.5 text-[12.5px]">
+          <div className="flex flex-col gap-2.5 px-2 py-0.5 text-sm">
             <div className="flex flex-col gap-1.5">
               <div>
                 <span className="font-mono text-muted-foreground">{info.head ? info.head.slice(0, 7) : '—'}</span>{' '}
@@ -105,9 +105,9 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
                 const dot = paneDot(p, connected)
                 return (
                   <div key={p.id} className="flex items-center gap-2" title={DOT_LABEL[dot]}>
-                    {p.agent ? <StatusDot kind={dot} /> : <span className="font-mono text-[10px] text-faint">›_</span>}
+                    {p.agent ? <StatusDot kind={dot} /> : <span className="font-mono text-2xs text-faint">›_</span>}
                     <span className="min-w-0 truncate text-soft">{p.title || p.command.join(' ')}</span>
-                    <span className="ml-auto shrink-0 font-mono text-[10.5px] text-faint">
+                    <span className="ml-auto shrink-0 font-mono text-2xs text-faint">
                       {p.exited ? `exit ${p.exitCode ?? '?'}` : (p.agent ?? 'shell')}
                     </span>
                   </div>
@@ -122,7 +122,7 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
                   void navigator.clipboard?.writeText(info.path).catch(() => {})
                   pushToast({ kind: 'info', title: `Copied ${remote}` }, 3200)
                 }}
-                className="cursor-copy text-left font-mono text-[11.5px] break-all text-muted-foreground"
+                className="cursor-copy text-left font-mono text-xs break-all text-muted-foreground"
               >
                 {remote}
               </button>
@@ -135,7 +135,7 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
                 type="button"
                 disabled={!connected}
                 onClick={() => useStore.setState({ removeWorktree: { hostId, worktree } })}
-                className="h-[26px] cursor-pointer self-start rounded-[5px] border border-border px-2.5 text-[12px] text-soft hover:bg-hover disabled:cursor-default disabled:opacity-50"
+                className="h-[26px] cursor-pointer self-start rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover disabled:cursor-default disabled:opacity-50"
               >
                 Remove worktree…
               </button>
@@ -150,7 +150,7 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-[5px] border-t border-border pt-2.5">
-      <div className="text-[11.5px] text-faint">{title}</div>
+      <div className="text-xs text-faint">{title}</div>
       {children}
     </div>
   )

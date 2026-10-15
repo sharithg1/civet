@@ -167,21 +167,21 @@ export function SettingsView() {
         className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-3.5 select-none"
         style={inset ? { paddingLeft: inset } : undefined}
       >
-        <span className="text-[13px] font-semibold text-foreground">Civet</span>
+        <span className="text-sm font-semibold text-foreground">Civet</span>
         <span className="text-dim">/</span>
-        <span className="text-[13px] text-muted-foreground">Settings</span>
+        <span className="text-sm text-muted-foreground">Settings</span>
         <span className="flex-1" />
-        <span className="text-[12px] text-faint">{saved ? 'Saved' : 'Changes save automatically'}</span>
+        <span className="text-xs text-faint">{saved ? 'Saved' : 'Changes save automatically'}</span>
       </div>
       <div className="flex min-h-0 flex-1">
         <nav className="flex w-[220px] shrink-0 flex-col gap-0.5 border-r border-border p-2.5">
           <button
             type="button"
             onClick={close}
-            className="mb-1 flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+            className="mb-1 flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground hover:bg-hover hover:text-foreground"
           >
             ← Back to workspace<span className="flex-1" />
-            <span className="font-mono text-[10.5px] text-dim">esc</span>
+            <span className="font-mono text-2xs text-dim">esc</span>
           </button>
           <div className="mb-2 flex h-8 items-center gap-2 rounded-lg border border-border bg-white/[0.045] px-2.5">
             <RingGlyph />
@@ -194,7 +194,7 @@ export function SettingsView() {
               }}
               placeholder="Search settings"
               aria-label="Search settings"
-              className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 border-none bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
             />
           </div>
           {NAV.map(([id, label]) => (
@@ -206,7 +206,7 @@ export function SettingsView() {
                 useStore.setState({ settings: id })
               }}
               className={cn(
-                'flex h-7 cursor-pointer items-center rounded-md px-2.5 text-[13px]',
+                'flex h-7 cursor-pointer items-center rounded-md px-2.5 text-sm',
                 page === id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-hover'
               )}
             >
@@ -216,10 +216,10 @@ export function SettingsView() {
         </nav>
         <div className="min-h-0 flex-1 overflow-y-auto bg-background px-10 py-8">
           <div className="max-w-[640px]">
-            <h1 className="text-[20px] font-semibold text-foreground">
+            <h1 className="text-xl font-semibold text-foreground">
               {showGeneral ? 'General' : NAV.find((n) => n[0] === page)![1]}
             </h1>
-            <p className="mt-1 text-[13px] text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               {showGeneral
                 ? 'Switching, sidebar and defaults for new sessions.'
                 : page === 'hosts'
@@ -231,7 +231,7 @@ export function SettingsView() {
             {showGeneral &&
               sections.map((sec) => (
                 <section key={sec.title} className="mt-7">
-                  <h2 className="mb-2.5 text-[13px] font-semibold text-foreground">{sec.title}</h2>
+                  <h2 className="mb-2.5 text-sm font-semibold text-foreground">{sec.title}</h2>
                   <Card>
                     {sec.rows.map((r) => (
                       <SettingRow key={r.id} row={r} value={prefs[r.id]} onChange={(v) => set({ [r.id]: v } as Partial<Prefs>)} />
@@ -239,7 +239,7 @@ export function SettingsView() {
                   </Card>
                 </section>
               ))}
-            {showGeneral && !sections.length && <p className="mt-7 text-[13px] text-faint">No settings match.</p>}
+            {showGeneral && !sections.length && <p className="mt-7 text-sm text-faint">No settings match.</p>}
             {showGeneral && !query && (
               <button
                 type="button"
@@ -247,7 +247,7 @@ export function SettingsView() {
                   resetPrefs()
                   setSaved(true)
                 }}
-                className="mt-5 h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-[12px] text-soft hover:bg-hover"
+                className="mt-5 h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover"
               >
                 Reset to defaults
               </button>
@@ -257,10 +257,10 @@ export function SettingsView() {
             {!showGeneral && page === 'keyboard' && (
               <Card className="mt-7">
                 {KEYS.map(([k, label]) => (
-                  <div key={k} className="flex items-center px-4 py-2.5 text-[13px] text-body">
+                  <div key={k} className="flex items-center px-4 py-2.5 text-sm text-body">
                     {label}
                     <span className="flex-1" />
-                    <span className="font-mono text-[11.5px] text-muted-foreground">{k}</span>
+                    <span className="font-mono text-xs text-muted-foreground">{k}</span>
                   </div>
                 ))}
               </Card>
@@ -284,8 +284,8 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
   return (
     <div className="flex items-center gap-6 px-4 py-3.5">
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-foreground">{row.label}</div>
-        {row.desc && <div className="mt-1 text-[12px] leading-[1.55] text-muted-foreground">{row.desc}</div>}
+        <div className="text-sm font-medium text-foreground">{row.label}</div>
+        {row.desc && <div className="mt-1 text-xs leading-normal text-muted-foreground">{row.desc}</div>}
       </div>
       {row.kind === 'seg' && (
         <div className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5" role="radiogroup" aria-label={row.label}>
@@ -297,7 +297,7 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
               aria-checked={value === k}
               onClick={() => onChange(k)}
               className={cn(
-                'h-6 cursor-pointer rounded-sm px-2.5 text-[12.5px]',
+                'h-6 cursor-pointer rounded-sm px-2.5 text-sm',
                 value === k ? 'bg-field text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.4)]' : 'text-muted-foreground'
               )}
             >
@@ -311,7 +311,7 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
       )}
       {row.kind === 'select' && (
         <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>
-          <SelectTrigger aria-label={row.label} className="h-8 w-[170px] text-[12.5px]">
+          <SelectTrigger aria-label={row.label} className="h-8 w-[170px] text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -330,7 +330,7 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
           placeholder={row.ph}
           spellCheck={false}
           onChange={(e) => onChange(e.target.value)}
-          className="h-8 w-[240px] rounded-[5px] border-border bg-field font-mono text-[12.5px] shadow-none md:text-[12.5px] dark:bg-field"
+          className="h-8 w-[240px] rounded-[5px] border-border bg-field font-mono text-sm shadow-none dark:bg-field"
         />
       )}
     </div>
@@ -340,7 +340,7 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
 function HostsPage() {
   const hostOrder = useStore((s) => s.hostOrder)
   const hosts = useStore((s) => s.hosts)
-  const btn = 'h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-[12px] text-soft hover:bg-hover'
+  const btn = 'h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover'
   return (
     <>
       <Card className="mt-7">
@@ -351,14 +351,14 @@ function HostsPage() {
             <div key={id} className="flex items-center gap-3 px-4 py-3">
               <HostStateDot host={h} />
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-foreground">{h.label}</div>
-                <div className="font-mono text-[11.5px] text-faint">
+                <div className="text-sm font-medium text-foreground">{h.label}</div>
+                <div className="font-mono text-xs text-faint">
                   {h.hostId} · {h.state} · {hostMeta(h)}
                   {h.transport ? ` · ${h.transport === 'quic' ? 'QUIC' : 'SSH tunnel'}` : ''}
                   {h.daemonVersion ? ` · civetd ${h.daemonVersion}` : ''}
                 </div>
                 {h.upgrade && (
-                  <div className="mt-0.5 font-mono text-[11.5px] text-status-wait">{upgradeSummary(id)}</div>
+                  <div className="mt-0.5 font-mono text-xs text-status-wait">{upgradeSummary(id)}</div>
                 )}
               </div>
               {(h.state === 'failed' || h.state === 'disconnected') && (
@@ -380,7 +380,7 @@ function HostsPage() {
             </div>
           )
         })}
-        {hostOrder.length === 0 && <div className="px-4 py-3 text-[13px] text-faint">No hosts.</div>}
+        {hostOrder.length === 0 && <div className="px-4 py-3 text-sm text-faint">No hosts.</div>}
       </Card>
       <button type="button" className={cn(btn, 'mt-4')} onClick={() => useStore.setState({ showConnect: true })}>
         Connect a host…
@@ -403,14 +403,14 @@ function ProjectsPage() {
             <div key={`${h}:${r.id}`} className="flex items-center gap-3 px-4 py-3">
               <ProjectTile name={r.name} />
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-foreground">
+                <div className="text-sm font-medium text-foreground">
                   {r.name} <span className="font-normal text-faint">· {hosts[h]?.label ?? h}</span>
                 </div>
-                <div className="truncate font-mono text-[11.5px] text-faint">
+                <div className="truncate font-mono text-xs text-faint">
                   {r.path} · default {r.defaultBranch ?? 'HEAD'}
                 </div>
               </div>
-              <div className="max-w-[220px] truncate font-mono text-[11.5px] text-muted-foreground" title="Saved on-create steps">
+              <div className="max-w-[220px] truncate font-mono text-xs text-muted-foreground" title="Saved on-create steps">
                 {saved ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps' : 'default steps'}
               </div>
             </div>

@@ -18,7 +18,7 @@ export function Workspace() {
 
   if (!active) {
     return (
-      <main className="grid min-w-0 flex-1 place-items-center bg-background font-mono text-[12px] text-faint">
+      <main className="grid min-w-0 flex-1 place-items-center bg-background font-mono text-xs text-faint">
         select a worktree · ⌘K switch
       </main>
     )
@@ -41,12 +41,12 @@ export function Workspace() {
             multiPane={leaves(tab.root).length > 1}
           />
         ) : (
-          <div className="grid h-full place-items-center font-mono text-[12px] text-faint">
+          <div className="grid h-full place-items-center font-mono text-xs text-faint">
             no tabs · ⌥C claude · ⌥T terminal
           </div>
         )}
         {removing && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-background/70 text-[12.5px] text-faint">
+          <div className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-background/70 text-sm text-faint">
             <Spinner className="size-3.5" />
             Removing this worktree…
           </div>

@@ -33,7 +33,7 @@ export function Kbd({ children, className }: { children: React.ReactNode; classN
   return (
     <kbd
       className={cn(
-        'rounded-sm border border-border bg-muted px-[5px] font-mono text-[10.5px] leading-[17px] font-normal text-muted-foreground',
+        'rounded-sm border border-border bg-muted px-[5px] font-mono text-2xs leading-[17px] font-normal text-muted-foreground',
         className
       )}
     >

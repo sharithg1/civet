@@ -54,10 +54,10 @@ export function TitleBar() {
         className={cn('flex shrink-0 items-center gap-3 pr-3 pl-3.5', sidebarOpen && 'w-[260px]')}
         style={inset ? { paddingLeft: inset } : undefined}
       >
-        <span className="text-[13px] font-semibold text-foreground">Civet</span>
+        <span className="text-sm font-semibold text-foreground">Civet</span>
         {backendKind === 'mock' && (
           <span
-            className="font-mono text-[10.5px] text-status-wait"
+            className="font-mono text-2xs text-status-wait"
             title="Not running inside Tauri: using the in-browser mock backend"
           >
             mock
@@ -106,7 +106,7 @@ function WorktreeContext({ hostId, worktree }: { hostId: string; worktree: strin
       type="button"
       title="Switch worktree (⌘K)"
       onClick={() => useStore.setState({ switcherOpen: true })}
-      className="flex max-w-[320px] min-w-0 shrink cursor-pointer items-center gap-[7px] border-r border-border px-3 text-[12.5px] hover:bg-hover"
+      className="flex max-w-[320px] min-w-0 shrink cursor-pointer items-center gap-[7px] border-r border-border px-3 text-sm hover:bg-hover"
     >
       <ProjectTile name={repo.name} size={14} />
       <span className="shrink-0 whitespace-nowrap text-muted-foreground">{repo.name}</span>
@@ -114,7 +114,7 @@ function WorktreeContext({ hostId, worktree }: { hostId: string; worktree: strin
       <span
         className={cn(
           'min-w-0 truncate font-medium text-foreground',
-          useTask ? 'text-[12.5px]' : 'font-mono text-[12px]'
+          !useTask && 'font-mono'
         )}
       >
         {useTask ? title : <BranchText branch={title} />}
@@ -227,7 +227,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                 }
               }}
               className={cn(
-                'relative flex shrink-0 cursor-default items-center gap-2 border-r border-border-subtle pr-2.5 pl-3 text-[12.5px] select-none hover:text-foreground',
+                'relative flex shrink-0 cursor-default items-center gap-2 border-r border-border-subtle pr-2.5 pl-3 text-sm select-none hover:text-foreground',
                 isActive ? 'bg-background text-foreground' : 'text-muted-foreground',
                 dragging === id && 'z-10 cursor-grabbing bg-hover-strong text-foreground'
               )}
@@ -235,11 +235,11 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
               {t.agent ? (
                 <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} />
               ) : (
-                <span className="font-mono text-[11px] text-faint">›_</span>
+                <span className="font-mono text-2xs text-faint">›_</span>
               )}
               <span className="whitespace-nowrap">{t.label}</span>
               {count > 1 && (
-                <span className="font-mono text-[10.5px] text-faint" title={`${count} panes`}>
+                <span className="font-mono text-2xs text-faint" title={`${count} panes`}>
                   {count}
                 </span>
               )}
@@ -250,7 +250,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                   e.stopPropagation()
                   closeTab(key, id)
                 }}
-                className="size-4 cursor-pointer rounded-[3px] p-0 text-[12px] leading-none text-dim hover:bg-white/10 hover:text-foreground"
+                className="size-4 cursor-pointer rounded-[3px] p-0 text-xs leading-none text-dim hover:bg-white/10 hover:text-foreground"
               >
                 ×
               </button>
@@ -266,7 +266,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           title="New tab"
           aria-label="New tab"
           disabled={!connected || removing}
-          className="w-[34px] shrink-0 cursor-pointer text-[16px] text-faint outline-none hover:text-foreground disabled:opacity-40"
+          className="w-[34px] shrink-0 cursor-pointer text-lg text-faint outline-none hover:text-foreground disabled:opacity-40"
         >
           +
         </DropdownMenuTrigger>

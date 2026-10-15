@@ -102,7 +102,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
       data-host-id={hostId}
     >
       {multiPane ? (
-        <div className="flex h-[22px] shrink-0 items-center gap-1.5 px-3 font-mono text-[11px] text-faint">
+        <div className="flex h-[22px] shrink-0 items-center gap-1.5 px-3 font-mono text-2xs text-faint">
           {info?.agent && <StatusDot kind={paneDot(info, hostState === 'connected')} />}
           <span className={cn('min-w-0 flex-1 truncate', focused && 'text-muted-foreground')}>
             {title}
@@ -124,7 +124,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
         >
           {renderer?.kind === 'dom' && (
             <span
-              className="mr-1 font-mono text-[10.5px] text-dim opacity-0 group-hover/pane:opacity-100"
+              className="mr-1 font-mono text-2xs text-dim opacity-0 group-hover/pane:opacity-100"
               title={renderer.reason}
             >
               DOM renderer
@@ -138,7 +138,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
       )}
       <div ref={containerRef} className="terminal-host relative min-h-0 flex-1" />
       {exited && (
-        <div className="pointer-events-none absolute right-3 bottom-2 rounded-[5px] border border-border bg-chrome px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+        <div className="pointer-events-none absolute right-3 bottom-2 rounded-[5px] border border-border bg-chrome px-2 py-0.5 font-mono text-2xs text-muted-foreground">
           [process exited{info?.exitCode != null ? ` with code ${info.exitCode}` : ''}]
         </div>
       )}

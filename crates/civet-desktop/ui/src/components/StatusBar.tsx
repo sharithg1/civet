@@ -23,7 +23,7 @@ export function StatusBar() {
     right = `${pane.command.join(' ')} · ${duration(pane.createdAtMs)}`
   }
   return (
-    <footer className="flex h-6 shrink-0 items-center gap-3.5 overflow-hidden border-t border-border bg-chrome px-3 font-mono text-[10.5px] whitespace-nowrap text-faint">
+    <footer className="flex h-6 shrink-0 items-center gap-3.5 overflow-hidden border-t border-border bg-chrome px-3 font-mono text-2xs whitespace-nowrap text-faint">
       {host && hostId && <HostPopover hostId={hostId} />}
       {!host && <span>no host</span>}
       <span className="hidden sm:inline">⌘K switch · ⌥` previous · ⌥↑↓ next</span>
@@ -45,7 +45,7 @@ function HostPopover({ hostId }: { hostId: string }) {
   const transport = host.transport === 'quic' ? 'QUIC' : host.transport === 'stream' ? 'SSH tunnel' : 'no transport'
   const mock = backend && 'simulateNetworkDrop' in backend ? (backend as unknown as { simulateNetworkDrop(h: string): void }) : null
   const btn =
-    'h-[26px] cursor-pointer rounded-[5px] border border-border bg-transparent text-[11.5px] text-body hover:bg-white/10 disabled:cursor-default disabled:opacity-50'
+    'h-[26px] cursor-pointer rounded-[5px] border border-border bg-transparent text-xs text-body hover:bg-white/10 disabled:cursor-default disabled:opacity-50'
   return (
     <Popover>
       <PopoverTrigger className="flex cursor-pointer items-center gap-1.5 outline-none hover:text-foreground">
@@ -61,13 +61,13 @@ function HostPopover({ hostId }: { hostId: string }) {
         side="top"
         align="start"
         sideOffset={6}
-        className="flex w-[280px] flex-col gap-2 px-3.5 py-3 text-[12px]"
+        className="flex w-[280px] flex-col gap-2 px-3.5 py-3 text-xs"
         onCloseAutoFocus={restoreTerminalFocus}
       >
         <div className="font-mono text-foreground">
           {host.label} · {host.state}
         </div>
-        <div className="leading-[1.5] text-muted-foreground">
+        <div className="leading-normal text-muted-foreground">
           {host.hostId} · {transport}
           {host.rttMs != null ? ` · ${host.rttMs} ms` : ''}
           {host.daemonVersion ? ` · civetd ${host.daemonVersion}` : ''}
@@ -76,8 +76,8 @@ function HostPopover({ hostId }: { hostId: string }) {
           Closing Civet detaches; nothing stops.
         </div>
         {host.upgrade && (
-          <div className="rounded-[5px] border border-border px-2.5 py-2 leading-[1.5]">
-            <div className="font-mono text-[11.5px] text-status-wait">{upgradeSummary(hostId)}</div>
+          <div className="rounded-[5px] border border-border px-2.5 py-2 leading-normal">
+            <div className="font-mono text-xs text-status-wait">{upgradeSummary(hostId)}</div>
             <div className="mt-1 text-muted-foreground">
               The older daemon keeps running so your sessions survive. Restarting upgrades it and closes them.
             </div>

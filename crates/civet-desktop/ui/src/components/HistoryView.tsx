@@ -115,7 +115,7 @@ export function HistoryView({ controller, gaps, onClose }: Props) {
 
   return (
     <div className="flex h-[45%] min-h-24 flex-col border-b border-border bg-chrome">
-      <div className="flex h-7 shrink-0 items-center gap-2 px-3 font-mono text-[11px] text-faint">
+      <div className="flex h-7 shrink-0 items-center gap-2 px-3 font-mono text-2xs text-faint">
         <History className="size-3.5" aria-hidden />
         {gapView ? (
           <span>
