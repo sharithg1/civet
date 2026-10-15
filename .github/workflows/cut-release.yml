@@ -1,0 +1,73 @@
+name: Cut release
+
+# Actions → Cut release → Run workflow: does what `scripts/release.sh X.Y.Z`
+# plus the push do on a laptop (bump Cargo.toml / tauri.conf.json /
+# Cargo.lock, commit "Release vX.Y.Z" on main, tag, push both), then starts
+# the Release workflow on the new tag. A tag pushed with GITHUB_TOKEN does
+# not trigger other workflows; a workflow_dispatch does, so Release is
+# dispatched explicitly. See docs/RELEASING.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.1.5 or 0.2.0-rc.1 (no leading v)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run: show the bump, push nothing'
+        type: boolean
+        default: false
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the release commit and tag
+  actions: write # dispatch the Release workflow
+
+jobs:
+  cut:
+    name: bump, tag, push
+    runs-on: ubuntu-latest
+    steps:
+      - name: only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow on main (got $GITHUB_REF)."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable # cargo, to refresh Cargo.lock
+      - name: git identity
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+      - name: release.sh
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          flags=()
+          [ "$DRY_RUN" = true ] && flags+=(--dry-run)
+          scripts/release.sh "$VERSION" "${flags[@]}"
+      - name: push
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          tag="v${VERSION#v}"
+          git push --atomic origin main "$tag"
+          echo "Pushed main and $tag." >> "$GITHUB_STEP_SUMMARY"
+      - name: start the Release workflow
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          tag="v${VERSION#v}"
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag"
+          echo "Started Release on $tag: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"

@@ -1,9 +1,11 @@
 name: Release
 
 # Pushing a tag vX.Y.Z (scripts/release.sh creates it) builds the daemons and
-# the macOS app and publishes a GitHub Release. Pull requests that touch the
-# release machinery, and manual runs, do the same builds without publishing
-# (the artifacts are kept on the workflow run). See docs/RELEASING.md.
+# the macOS app and publishes a GitHub Release; so does a manual run on a
+# tag (the Cut release workflow starts it that way). Pull requests that touch
+# the release machinery, and manual runs on a branch, do the same builds
+# without publishing (the artifacts are kept on the workflow run). See
+# docs/RELEASING.md.
 
 on:
   push:

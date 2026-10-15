@@ -16,7 +16,15 @@ the previous tag; edit them on the release page afterwards if needed.
 
 ## Cutting a release
 
-On an up-to-date, clean `main` with green CI:
+**From GitHub:** Actions → **Cut release** → Run workflow (on `main`), enter
+the version (`0.1.5`; tick "Dry run" to only see the bump). It runs
+`scripts/release.sh` on `main`, pushes the "Release vX.Y.Z" commit and the
+tag, and starts the Release workflow on the tag (a tag pushed by a workflow
+does not trigger `push: tags` itself, so it is dispatched explicitly). If
+`main` gets branch protection that blocks pushes from Actions, this needs a
+bypass for the workflow or a personal token instead of `GITHUB_TOKEN`.
+
+**From a laptop**, on an up-to-date, clean `main` with green CI:
 
 ```sh
 scripts/release.sh 0.1.5 --dry-run   # show what changes, touch nothing
@@ -52,8 +60,9 @@ The workflow then:
    failed run replaces the assets of an existing release.
 
 Pull requests that change `release.yml`, `scripts/build-remote.sh`,
-`scripts/check-version.sh` or `tauri.conf.json`, and manual runs (Actions →
-Release → Run workflow), do steps 1–3 without publishing; the app and daemon
+`scripts/check-version.sh` or `tauri.conf.json`, and manual runs on a branch
+(Actions → Release → Run workflow), do steps 1–3 without publishing (a
+manual run on a tag publishes, which is how Cut release starts it); the app and daemon
 builds are kept as workflow artifacts.
 
 If the tag check fails (tagged the wrong commit, forgot the bump): delete the
