@@ -48,7 +48,7 @@ export type HostView = HostSummary & {
 
 export type Toast = {
   id: number
-  kind: 'attention' | 'error' | 'info'
+  kind: 'attention' | 'error'
   title: string
   body?: string
   status?: 'done' | 'needsInput'
@@ -270,12 +270,13 @@ export function onAgentAttention(e: AgentAttentionEvent): void {
   })
 }
 
-/** A pane's program copied text (OSC 52); the Rust side already wrote the clipboard. */
+/**
+ * A pane's program copied text (OSC 52); the Rust side already wrote the
+ * clipboard. Success is silent (the program shows its own feedback); only a
+ * failed write is surfaced.
+ */
 export function onClipboard(e: ClipboardEvent): void {
-  if (e.ok) {
-    const n = e.chars === 1 ? '1 character' : `${e.chars} characters`
-    pushToast({ kind: 'info', title: 'Copied to clipboard', body: n }, 1500)
-  } else {
+  if (!e.ok) {
     pushToast({ kind: 'error', title: 'Copy failed', body: `Pane ${e.pane} could not set the clipboard` }, 6000)
   }
 }
