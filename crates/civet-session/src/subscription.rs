@@ -150,6 +150,11 @@ impl Subscription {
                 .chain(st.inflight.iter())
                 .find(|snap| snap.state() == s)
                 .cloned()
+                // Not held by this subscription (fresh session after the old
+                // one expired, or acks lost with the old connection): fall
+                // back to the pane's ring of recent snapshots, the same base
+                // `PaneTerminal::encode_update_since` uses.
+                .or_else(|| lock(&self.inner.pane.term).snapshot_at(s))
         });
         if found.is_some() {
             // The client says it shows this state: it is effectively acked.
