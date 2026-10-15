@@ -35,7 +35,9 @@ git push --atomic origin main v0.1.5 # the script prints this; it never pushes
 `scripts/release.sh` sets the version in the root `Cargo.toml`
 (`[workspace.package]`, inherited by every crate including `civetd`) and in
 `crates/civet-desktop/tauri.conf.json`, refreshes `Cargo.lock`, commits and
-creates an annotated tag. It refuses a dirty tree, a branch other than
+creates an annotated tag. It refuses a version that is not newer than the
+current one (features are gated on each side's version, so going backwards
+turns them off), a dirty tree, a branch other than
 `main` (unless `--allow-branch`), an existing tag, or a `main` behind
 `origin/main`. To undo before pushing: `git tag -d v0.1.5 && git reset --hard HEAD~1`.
 (`crates/civet-desktop/ui/package.json` has its own unused `0.1.0`; it is not

@@ -42,6 +42,14 @@ die() { echo "error: $*" >&2; exit 1; }
 # --- preconditions ---------------------------------------------------------
 current=$(scripts/check-version.sh) || die "versions disagree before the bump; fix that first"
 [ "$current" != "$version" ] || die "already at $version"
+# Never go backwards: clients and daemons gate features on each other's
+# version (civet-proto *_MIN_*_VERSION), so a lower number turns them off.
+# Same X.Y.Z only from a prerelease (0.2.0-rc.1 -> 0.2.0 or -rc.2).
+core() { local c=${1%%-*}; IFS=. read -r a b d <<<"$c"; printf '%05d%05d%05d' "$a" "$b" "$d"; }
+if [[ "$(core "$version")" < "$(core "$current")" ]] ||
+    { [ "$(core "$version")" = "$(core "$current")" ] && [ "$current" = "${current%%-*}" ]; }; then
+    die "$version is not newer than the current $current"
+fi
 [ -z "$(git status --porcelain)" ] || die "working tree is not clean"
 branch=$(git symbolic-ref --quiet --short HEAD) || die "detached HEAD"
 if [ "$branch" != main ] && [ "$allow_branch" = 0 ]; then
