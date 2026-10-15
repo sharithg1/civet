@@ -25,7 +25,7 @@ describe('MockBackend', () => {
     expect(repos.map((r) => r.id)).toEqual(['civet', 'orca'])
     expect((await b.listWorktrees('devbox', 'civet')).length).toBe(5)
     const panes = await b.listPanes('devbox')
-    expect(panes.length).toBe(6)
+    expect(panes.length).toBe(7)
     expect(panes.map((p) => p.status)).toContain('needsInput')
     expect(panes.some((p) => p.exited && p.exitCode === 1)).toBe(true)
   })
@@ -84,7 +84,7 @@ describe('MockBackend', () => {
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
     await vi.runAllTimersAsync()
     const s = await p
-    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.2', livePanes: 6 })
+    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.2', livePanes: 7 })
     expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
     // Reconnect keeps the stored target and transport.
     b.simulateFailure('old-box', 'lost')

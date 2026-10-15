@@ -119,8 +119,8 @@ function isOptionShortcut(e: KeyboardEvent): boolean {
 /**
  * Cmd/Ctrl+T new terminal, +D split right, +Shift+D split down, +W close
  * focused pane, +K / +P switcher, +, settings; ⌥` previous worktree, ⌥↑↓
- * next/previous worktree, ⌥1-9 tab, ⌥C Claude tab, ⌥T terminal tab, ⌥N new
- * worktree, ⌥B sidebar, ⌥E right panel.
+ * next/previous worktree, ⌥1-9 tab, ⌥C Claude tab, ⌥X Codex tab, ⌥T terminal
+ * tab, ⌥N new worktree, ⌥B sidebar, ⌥E right panel.
  */
 function useShortcuts() {
   useEffect(() => {
@@ -179,6 +179,8 @@ function useShortcuts() {
         action = () => useStore.setState({ newWorktree: { hostId: active.hostId, repo } })
       } else if (active && connected && c === 'KeyT') action = () => void newTerminalTab(active.hostId, active.worktree)
       else if (active && connected && c === 'KeyC') action = () => void newAgentTab(active.hostId, active.worktree)
+      else if (active && connected && c === 'KeyX')
+        action = () => void newAgentTab(active.hostId, active.worktree, 'codex')
       if (!action) return
       e.preventDefault()
       e.stopPropagation()

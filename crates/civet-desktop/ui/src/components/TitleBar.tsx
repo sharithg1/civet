@@ -1,7 +1,7 @@
 // Header of the main column (Cursor-style: the sidebar and the right panel
 // each have their own header row, so this one only spans the work area). It
 // holds the current worktree's title (opens the switcher), the worktree's
-// tabs as pills, a "+" menu (Claude Code / Terminal / splits), a "…" menu of
+// tabs as pills, a "+" menu (Claude Code / Codex / Terminal / splits), a "…" menu of
 // worktree actions and, when the right panel is closed, its toggle. With the
 // sidebar closed it also takes the traffic-light inset and the sidebar
 // toggle. Tabs keep the old TabBar's activate / close / middle-click-close
@@ -42,7 +42,7 @@ import { useWorktreeInfo, useWorktreeTabs } from './chrome'
 import { IconButton } from './IconButton'
 import { SidebarToggle } from './Sidebar'
 import { StatusDot } from './StatusDot'
-import { ClaudeLogo } from './ClaudeLogo'
+import { AgentLogo, hasAgentLogo } from './AgentLogo'
 
 export function TitleBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen)
@@ -257,8 +257,8 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                 dragging === id && 'z-10 cursor-grabbing bg-hover-strong text-foreground'
               )}
             >
-              {t.agent?.agent === 'claude' ? (
-                <ClaudeTabIcon dot={paneDot(panes?.[t.agent.id], connected)} active={isActive} />
+              {t.agent && hasAgentLogo(t.agent.agent) ? (
+                <AgentTabIcon agent={t.agent.agent} dot={paneDot(panes?.[t.agent.id], connected)} active={isActive} />
               ) : t.agent ? (
                 <span className="grid size-3.5 shrink-0 place-items-center">
                   <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} size={6} />
@@ -303,6 +303,9 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>
             Claude Code<DropdownMenuShortcut>⌥C</DropdownMenuShortcut>
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree, 'codex')}>
+            Codex<DropdownMenuShortcut>⌥X</DropdownMenuShortcut>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void newTerminalTab(hostId, worktree)}>
             Terminal<DropdownMenuShortcut>⌥T</DropdownMenuShortcut>
           </DropdownMenuItem>
@@ -319,11 +322,11 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   )
 }
 
-/** Claude's logo with the agent's status as a corner badge (none when idle). */
-function ClaudeTabIcon({ dot, active }: { dot: DotKind; active: boolean }) {
+/** The agent's logo with its status as a corner badge (none when idle). */
+function AgentTabIcon({ agent, dot, active }: { agent: string | null; dot: DotKind; active: boolean }) {
   return (
     <span className="relative grid size-3.5 shrink-0 place-items-center">
-      <ClaudeLogo className="size-3.5" />
+      <AgentLogo agent={agent} className="size-3.5" />
       {dot !== 'idle' && (
         <StatusDot
           kind={dot}

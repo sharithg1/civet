@@ -350,6 +350,7 @@ class MockHost {
       status: 'needsInput'
     })
     this.addPane({ worktree: v3.id, cwd: v3.path, title: 'Draft the PR description', agent: 'claude', status: 'idle' })
+    this.addPane({ worktree: v3.id, cwd: v3.path, title: 'Review the tab layout', agent: 'codex', command: ['codex'], status: 'idle' })
     this.addPane({ worktree: v3.id, cwd: v3.path, title: 'zsh', agent: null })
     // An agent that stopped with an error.
     const fl = this.worktrees.get('civet')![4]!

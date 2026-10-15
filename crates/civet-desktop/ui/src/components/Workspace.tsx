@@ -51,7 +51,7 @@ export function Workspace() {
             <div className="flex flex-col items-center gap-2">
               No tabs open
               <span className="flex items-center gap-1.5 text-dim">
-                <Kbd>⌥C</Kbd> Claude Code · <Kbd>⌥T</Kbd> Terminal
+                <Kbd>⌥C</Kbd> Claude Code · <Kbd>⌥X</Kbd> Codex · <Kbd>⌥T</Kbd> Terminal
               </span>
             </div>
           </div>
