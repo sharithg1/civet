@@ -27,6 +27,7 @@ pub mod predict;
 pub mod records;
 pub mod wake;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -143,6 +144,24 @@ fn init_logging() {
         .try_init();
 }
 
+/// State dir of debug builds (`~/.civet-dev`, on this Mac and on remotes),
+/// so a dev build runs its own daemons next to the installed app instead of
+/// reattaching to (or replacing) the installed app's daemons and panes.
+const DEV_STATE_DIR_NAME: &str = ".civet-dev";
+
+/// `$CIVET_STATE_DIR` if set, else `~/.civet-dev` in debug builds and
+/// `~/.civet` in release builds.
+fn desktop_state_dir() -> PathBuf {
+    if !cfg!(debug_assertions)
+        || std::env::var_os(civet_proto::ENV_STATE_DIR).is_some_and(|d| !d.is_empty())
+    {
+        return civetd::paths::default_state_dir();
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(DEV_STATE_DIR_NAME)
+}
+
 /// Run the app (blocks until exit).
 ///
 /// # Panics
@@ -158,10 +177,11 @@ pub fn run() {
     // Commands and our background tasks share one runtime.
     tauri::async_runtime::set(handle.clone());
 
+    let state_dir = desktop_state_dir();
     // Its own id (not civet-cli's): two clients sharing an id kick each
     // other off the daemon (REPLACED) in a reconnect storm.
     let client_id = civetd::paths::load_or_create_client_id_file(
-        &civetd::paths::default_state_dir(),
+        &state_dir,
         civetd::paths::DESKTOP_CLIENT_ID_FILE,
     )
     .unwrap_or_else(|e| {
@@ -181,8 +201,14 @@ pub fn run() {
             // In dev the dir is empty and the search falls through to
             // $CIVET_DIST_DIR, ~/.civet/dist and the workspace civetd.
             let resource_dir = app.path().resource_dir().ok();
-            let connector = Arc::new(SshConnector::new(client_id, resource_dir.as_deref()));
+            let mut connector = SshConnector::new(client_id, resource_dir.as_deref());
+            if cfg!(debug_assertions) {
+                connector.local_state_dir = Some(state_dir.clone());
+                connector.remote_state_dir = Some(format!("~/{DEV_STATE_DIR_NAME}"));
+            }
+            let connector = Arc::new(connector);
             tracing::info!(
+                state_dir = %state_dir.display(),
                 bundled = ?connector.bundled_dist,
                 "daemon binaries: bundled dir, then $CIVET_DIST_DIR, ~/.civet/dist"
             );

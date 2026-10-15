@@ -39,6 +39,8 @@ pub struct SshConnector {
     pub local_civetd: Option<PathBuf>,
     /// State dir of the local daemon; None = its default (`~/.civet`).
     pub local_state_dir: Option<PathBuf>,
+    /// State dir on remotes; None = the remote default (`~/.civet`).
+    pub remote_state_dir: Option<String>,
     /// The app's bundled `civet-dist` resource dir (`civetd-<triple>` for
     /// Linux remotes and this Mac), searched first; None in tests / when the
     /// app has no resources (dev builds fall back to `$CIVET_DIST_DIR`,
@@ -53,6 +55,7 @@ impl SshConnector {
             client_id,
             local_civetd: None,
             local_state_dir: None,
+            remote_state_dir: None,
             bundled_dist: resource_dir.map(|d| d.join(BUNDLED_DIST_DIR)),
         }
     }
@@ -214,6 +217,7 @@ impl SshConnector {
         let mut opts = BootstrapOptions::new(target);
         opts.binary = BinarySource::with_bundled(self.bundled_dist.clone());
         opts.replace = replace;
+        opts.remote_state_dir = self.remote_state_dir.clone();
         let p = progress.clone();
         let b: Bootstrapped = bootstrap_ssh(&opts, &move |s| p(step(s), None))
             .await
