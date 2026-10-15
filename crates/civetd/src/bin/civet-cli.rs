@@ -25,14 +25,13 @@ use civet_proto::{
     Request, Response, ScrollbackPage, ScrollbackQuery, SpawnPaneRequest, TermSize, WorktreeId,
 };
 use civet_transport::{
-    ClientSession, ClientSessionConfig, Dialer, LinkState, QuicClient, QuicClientConfig,
-    QuicDialer, SessionEvent, StreamDialer, TransportError,
+    ClientSession, ClientSessionConfig, Dialer, FailoverConfig, FailoverDialer, LinkState,
+    QuicClient, QuicClientConfig, QuicDialer, SessionEvent, StreamDialer, TransportError,
 };
 use civetd::bootstrap::{
     self, BinarySource, BootstrapOptions, BootstrapStep, SshTarget, open_local_tunnel,
     open_ssh_tunnel,
 };
-use civetd::paths::{default_state_dir, load_or_create_client_id};
 use clap::{Args, Parser, Subcommand};
 use tokio::sync::mpsc;
 
@@ -49,7 +48,9 @@ const QUIC_FALLBACK_AFTER: Duration = Duration::from_secs(3);
 struct Cli {
     #[command(flatten)]
     conn: ConnectArgs,
-    /// Client id (hex); default persisted in ~/.civet/client-id.
+    /// Client id (hex); default: a fresh random id per run. Two clients
+    /// sharing an id kick each other off the daemon (one live connection
+    /// per id), so only pass one to resume a specific client's state.
     #[arg(long, global = true)]
     client_id: Option<String>,
     /// Call notify_network_change (UDP rebind) every SECS seconds while
@@ -257,7 +258,7 @@ async fn quic_dialer(addr: SocketAddr, info: &BootstrapInfo) -> anyhow::Result<A
 async fn connect(cli: &Cli, conn: &ConnectArgs) -> anyhow::Result<Conn> {
     let client_id = match &cli.client_id {
         Some(h) => civet_proto::ClientId::from_hex(h)?,
-        None => load_or_create_client_id(&default_state_dir())?,
+        None => civet_proto::ClientId::generate()?,
     };
     let session_for = |info: &BootstrapInfo| {
         ClientSessionConfig::new(
@@ -308,22 +309,28 @@ async fn connect(cli: &Cli, conn: &ConnectArgs) -> anyhow::Result<Conn> {
                 }
             }
         };
-        if !conn.stdio {
-            let dialer = quic_dialer(b.dial_addr, &b.info).await?;
-            match ClientSession::connect(session_for(&b.info), dialer).await {
-                Ok((session, events)) => return Ok(Conn { session, events }),
-                Err(e) if e.is_fatal() => return Err(e.into()),
-                Err(e) => eprintln!("civet-cli: QUIC failed ({e}); falling back to the SSH tunnel"),
-            }
-        }
-        let dialer: Arc<dyn Dialer> = Arc::new(StreamDialer { factory: tunnel });
+        let tunnel: Arc<dyn Dialer> = Arc::new(StreamDialer { factory: tunnel });
+        let dialer: Arc<dyn Dialer> = if conn.stdio {
+            tunnel
+        } else {
+            // QUIC, failing over to the SSH tunnel when UDP is (or becomes)
+            // blocked, and moving back once QUIC works again.
+            let quic = quic_dialer(b.dial_addr, &b.info).await?;
+            Arc::new(FailoverDialer::new(quic, tunnel, FailoverConfig::default()))
+        };
         let (session, events) = ClientSession::connect(session_for(&b.info), dialer).await?;
+        if cli.verbose
+            && let LinkState::Connected { transport, .. } = &*session.link_state().borrow()
+        {
+            eprintln!("civet-cli: connected over {transport:?}");
+        }
         return Ok(Conn { session, events });
     }
 
     // Local (default).
     let civetd = local_civetd(conn);
-    let b = bootstrap::bootstrap_local(&civetd, conn.state_dir.as_deref()).await?;
+    let b =
+        bootstrap::bootstrap_local_with(&civetd, conn.state_dir.as_deref(), conn.replace).await?;
     if cli.verbose {
         eprintln!(
             "civet-cli: local civetd {} (udp {}, reattached: {})",

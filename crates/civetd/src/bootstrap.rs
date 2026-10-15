@@ -4,10 +4,15 @@
 //! and ControlMaster all behave as the user expects) to
 //!
 //! 1. **probe** the remote (`uname`, `$HOME`, whether
-//!    `~/.civet/bin/civetd-<our version>` exists; if it does, run its
-//!    `bootstrap` in the same round trip),
+//!    `~/.civet/bin/civetd-<our version>` exists, is ours, and its
+//!    `version` really prints our version; if so, run its `bootstrap` in the
+//!    same round trip; a stale, truncated or wrong-arch file is replaced),
 //! 2. **upload** the matching static binary if missing (version-suffixed, so
-//!    a running daemon's file is never overwritten),
+//!    a running daemon's file is never overwritten). The local file is
+//!    checked first (embedded version marker, executable format and
+//!    architecture: [`BootstrapError::WrongBinary`]), and the uploaded copy
+//!    must print the right `version` on the remote before it is moved into
+//!    place ([`BootstrapError::UploadRejected`]),
 //! 3. **start** it (`civetd bootstrap` starts or reattaches the daemon and
 //!    prints one JSON line),
 //! 4. **resolve** the address to dial QUIC at (`ssh -G` → `hostname`).
@@ -23,12 +28,25 @@
 //! (no local shell is involved, and a destination starting with `-` is
 //! refused), and the remote command is a POSIX `sh -c '<script>'` whose
 //! user-supplied parts are single-quoted, so the remote login shell (bash,
-//! zsh, fish…) only ever sees one quoted word.
+//! zsh, fish…) only ever sees one quoted word. Remote paths containing
+//! characters that some login shells interpret even inside single quotes
+//! (`!` for csh/tcsh history, `\` for fish) or quotes and control
+//! characters are refused ([`BootstrapError::InvalidRemotePath`]), and the
+//! scripts refuse a remote state dir (or its `bin/`) that is a symlink or
+//! not owned by the login user ([`BootstrapError::UnsafeRemoteDir`]).
+//!
+//! The ControlPath is quoted for ssh's config parser (spaces) with `%`
+//! escaped; when the socket path would exceed the platform's unix socket
+//! limit, connection sharing is turned off for the call (with a warning)
+//! instead of failing every ssh call.
 //!
 //! # Building the binaries to upload
 //!
-//! The client looks for `civetd-<target-triple>` in a directory
-//! ([`BinarySource::Dir`], default `$CIVET_DIST_DIR` or `~/.civet/dist`).
+//! The client looks for `civetd-<target-triple>` (see
+//! [`BinarySource::from_env`] for the search order: an app-bundled
+//! `civet-dist` resource dir, `$CIVET_DIST_DIR`, `~/.civet/dist`, then the
+//! `civetd` next to the running executable). `scripts/build-remote.sh
+//! --install` builds and installs the Linux ones.
 //! Linux remotes want static musl binaries. They cross-compile from macOS
 //! with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)
 //! (optional; not needed for local development):
@@ -107,21 +125,70 @@ pub enum BinarySource {
     File(PathBuf),
     /// `civetd` next to the current executable (dev: same-OS remotes only).
     CurrentExeSibling,
+    /// Try these in order; the first one that has a file for the remote's
+    /// triple with the right embedded version wins (a stale file is skipped
+    /// with a warning; if every candidate is stale the first one's
+    /// [`BootstrapError::WrongBinary`] is returned).
+    Search(Vec<BinarySource>),
 }
 
+/// Name of the directory of `civetd-<triple>` files an app bundle ships
+/// (macOS: `<App>.app/Contents/Resources/civet-dist`; elsewhere next to
+/// the executable).
+pub const BUNDLED_DIST_DIR: &str = "civet-dist";
+
 impl BinarySource {
-    /// `$CIVET_DIST_DIR` if set, else `~/.civet/dist` if it exists, else
-    /// [`BinarySource::CurrentExeSibling`].
+    /// The default search order: an app-bundled [`BUNDLED_DIST_DIR`] (if
+    /// present), `$CIVET_DIST_DIR` (if set), `~/.civet/dist` (if present),
+    /// then [`BinarySource::CurrentExeSibling`].
     pub fn from_env() -> Self {
+        Self::with_bundled(bundled_dist_dir())
+    }
+
+    /// Like [`BinarySource::from_env`] with an explicit bundled resource dir
+    /// (e.g. Tauri's resource directory) searched first.
+    pub fn with_bundled(bundled: Option<PathBuf>) -> Self {
+        let mut chain = Vec::new();
+        if let Some(d) = bundled.filter(|d| d.is_dir()) {
+            chain.push(Self::Dir(d));
+        }
         if let Some(d) = std::env::var_os("CIVET_DIST_DIR").filter(|d| !d.is_empty()) {
-            return Self::Dir(PathBuf::from(d));
+            chain.push(Self::Dir(PathBuf::from(d)));
         }
         let dist = StatePaths::new(default_state_dir()).dist_dir();
         if dist.is_dir() {
-            return Self::Dir(dist);
+            chain.push(Self::Dir(dist));
         }
-        Self::CurrentExeSibling
+        chain.push(Self::CurrentExeSibling);
+        Self::Search(chain)
     }
+
+    /// Short description for logs and errors.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Dir(d) => format!("dir {}", d.display()),
+            Self::File(f) => format!("file {}", f.display()),
+            Self::CurrentExeSibling => "civetd next to the running executable".into(),
+            Self::Search(v) => v
+                .iter()
+                .map(Self::describe)
+                .collect::<Vec<_>>()
+                .join(", then "),
+        }
+    }
+}
+
+/// `<exe dir>/../Resources/civet-dist` (macOS app bundle) or
+/// `<exe dir>/civet-dist`, if either exists.
+fn bundled_dist_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    [
+        dir.join("../Resources").join(BUNDLED_DIST_DIR),
+        dir.join(BUNDLED_DIST_DIR),
+    ]
+    .into_iter()
+    .find(|d| d.is_dir())
 }
 
 /// Options for [`bootstrap_ssh`] / [`open_ssh_tunnel`].
@@ -204,6 +271,38 @@ pub enum BootstrapError {
     /// An ssh call exceeded [`BootstrapOptions::timeout`].
     #[error("timed out: {0}")]
     Timeout(&'static str),
+    /// The local `civetd-<triple>` file is not this client's version (or
+    /// not an executable for the remote's platform). Nothing was uploaded.
+    #[error(
+        "{path} is civetd {got}, expected {expected}: rebuild it with \
+         `scripts/build-remote.sh --install` (or point CIVET_DIST_DIR at a matching build)"
+    )]
+    WrongBinary {
+        /// The local file.
+        path: String,
+        /// This client's version (and platform).
+        expected: String,
+        /// What the file is.
+        got: String,
+    },
+    /// The uploaded binary did not print the expected `version` on the
+    /// remote (truncated upload, wrong architecture, missing loader...). It
+    /// was removed again.
+    #[error("uploaded civetd failed its check on the remote (expected civetd {expected}): {got}")]
+    UploadRejected {
+        /// Expected version.
+        expected: String,
+        /// What `civetd version` printed (or why it failed).
+        got: String,
+    },
+    /// The remote state dir or its `bin/` is a symlink or not owned by the
+    /// login user.
+    #[error("unsafe remote state directory: {0}")]
+    UnsafeRemoteDir(String),
+    /// A remote path contains characters the remote login shell could
+    /// misinterpret (`!`, `\`, quotes, control characters).
+    #[error("unsupported remote path {0:?}: it must not contain ! \\ ' \" ` or control characters")]
+    InvalidRemotePath(String),
 }
 
 /// Progress callback steps (the desktop shows them).
@@ -218,6 +317,103 @@ pub enum BootstrapStep {
     Start,
     /// Resolving the dial address.
     Resolve,
+}
+
+/// Version marker embedded in the `civetd` binary (a `#[used]` static in
+/// `main.rs`): `\0CIVETD_VERSION=<version>\0`.
+pub const VERSION_MARKER: &str = concat!("\0CIVETD_VERSION=", env!("CARGO_PKG_VERSION"), "\0");
+
+/// [`VERSION_MARKER`] as a byte array (for the static in `main.rs`).
+pub const fn version_marker_bytes() -> [u8; VERSION_MARKER.len()] {
+    let src = VERSION_MARKER.as_bytes();
+    let mut out = [0u8; VERSION_MARKER.len()];
+    let mut i = 0;
+    while i < src.len() {
+        out[i] = src[i];
+        i += 1;
+    }
+    out
+}
+
+/// The version embedded in a `civetd` binary (its [`VERSION_MARKER`]), or
+/// None if the file has no marker (a build from before markers existed, or
+/// not civetd at all).
+pub fn binary_version(data: &[u8]) -> Option<String> {
+    const PREFIX: &[u8] = b"\0CIVETD_VERSION=";
+    let start = data.windows(PREFIX.len()).position(|w| w == PREFIX)? + PREFIX.len();
+    let len = data[start..].iter().take(64).position(|&b| b == 0)?;
+    let v = std::str::from_utf8(&data[start..start + len]).ok()?;
+    (!v.is_empty() && v.bytes().all(|b| b.is_ascii_graphic())).then(|| v.to_owned())
+}
+
+/// (os, arch) of an executable from its header: ELF (`linux`) or Mach-O
+/// (`darwin`, `None` arch for universal binaries).
+fn executable_platform(data: &[u8]) -> Option<(&'static str, Option<&'static str>)> {
+    if data.len() >= 20 && data[..4] == [0x7f, b'E', b'L', b'F'] {
+        let machine = if data[5] == 2 {
+            u16::from_be_bytes([data[18], data[19]])
+        } else {
+            u16::from_le_bytes([data[18], data[19]])
+        };
+        let arch = match machine {
+            62 => Some("x86_64"),
+            183 => Some("aarch64"),
+            _ => Some("other"),
+        };
+        return Some(("linux", arch));
+    }
+    if data.len() >= 8 {
+        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        if magic == 0xfeed_facf {
+            let cpu = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            let arch = match cpu {
+                0x0100_0007 => Some("x86_64"),
+                0x0100_000c => Some("aarch64"),
+                _ => Some("other"),
+            };
+            return Some(("darwin", arch));
+        }
+        if data[..4] == [0xca, 0xfe, 0xba, 0xbe] {
+            return Some(("darwin", None));
+        }
+    }
+    None
+}
+
+/// Check a local `civetd` file before uploading it for `triple`: it must
+/// carry this client's [`VERSION_MARKER`] and be an executable for the
+/// triple's OS and architecture.
+pub fn check_binary(path: &Path, data: &[u8], triple: &str) -> Result<(), BootstrapError> {
+    let wrong = |got: String| BootstrapError::WrongBinary {
+        path: path.display().to_string(),
+        expected: format!("{} for {triple}", crate::VERSION),
+        got,
+    };
+    match binary_version(data) {
+        Some(v) if v == crate::VERSION => {}
+        Some(v) => return Err(wrong(v)),
+        None => return Err(wrong("of an unknown version (no version marker)".into())),
+    }
+    let want_arch = triple.split('-').next().unwrap_or("");
+    let want_os = if triple.contains("linux") {
+        "linux"
+    } else if triple.contains("darwin") {
+        "darwin"
+    } else {
+        "other"
+    };
+    match executable_platform(data) {
+        Some((os, arch)) if os == want_os && arch.is_none_or(|a| a == want_arch) => Ok(()),
+        Some((os, arch)) => Err(wrong(format!(
+            "{} built for {os} {}",
+            crate::VERSION,
+            arch.unwrap_or("?")
+        ))),
+        None => Err(wrong(format!(
+            "{} but not an executable for {triple}",
+            crate::VERSION
+        ))),
+    }
 }
 
 /// Map `uname -s` + `uname -m` to a target triple.
@@ -251,34 +447,86 @@ pub fn sh_quote(s: &str) -> String {
     }
 }
 
+/// Refuse remote paths with characters a remote login shell may interpret
+/// even inside our single quotes: `!` (csh/tcsh history expansion), `\`
+/// (fish), quotes, backquotes, control characters (a newline ends a csh
+/// command). Such paths are never needed in practice.
+fn check_remote_path(path: &str) -> Result<(), BootstrapError> {
+    let bad = path.is_empty()
+        || path
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '!' | '\\' | '\'' | '"' | '`'));
+    if bad {
+        Err(BootstrapError::InvalidRemotePath(path.to_owned()))
+    } else {
+        Ok(())
+    }
+}
+
 /// Shell expression for a remote path; a leading `~/` becomes `"$HOME"/`.
-fn remote_path_expr(path: &str) -> String {
-    if path == "~" {
+fn remote_path_expr(path: &str) -> Result<String, BootstrapError> {
+    check_remote_path(path)?;
+    Ok(if path == "~" {
         "\"$HOME\"".into()
     } else if let Some(rest) = path.strip_prefix("~/") {
         format!("\"$HOME\"/{}", sh_quote(rest))
     } else {
         sh_quote(path)
+    })
+}
+
+/// Remote exit code: the uploaded binary failed its `version` check.
+const EXIT_UPLOAD_REJECTED: i32 = 86;
+/// Remote exit code: the state dir or bin/ is a symlink / not ours.
+const EXIT_UNSAFE_DIR: i32 = 87;
+
+/// POSIX sh function `ok DIR`: DIR is a real directory (not a symlink)
+/// owned by the login user. No `!` (csh history) in it.
+const SH_DIR_OK: &str =
+    "ok() { if [ -L \"$1\" ]; then return 1; fi; [ -d \"$1\" ] && [ -O \"$1\" ]; }; ";
+
+/// Unix socket path limit (`sun_path`, including the NUL).
+#[cfg(target_os = "linux")]
+const SUN_PATH_MAX: usize = 108;
+#[cfg(not(target_os = "linux"))]
+const SUN_PATH_MAX: usize = 104;
+
+/// `ControlPath=...` for ssh's config parser (double-quoted for spaces,
+/// `%` escaped), or why it cannot work: ssh's socket is `<dir>/<40 hex>`
+/// and while the master starts it binds `<that>.<16 random chars>`, which
+/// must fit `sun_path`.
+fn control_path_option(ssh_dir: &Path) -> Result<String, String> {
+    let dir = ssh_dir.to_string_lossy();
+    if dir.contains(['"', '\'']) || dir.chars().any(char::is_control) {
+        return Err(format!("{dir} contains quotes or control characters"));
     }
+    let len = dir.len() + 1 + 40 + 17 + 1;
+    if len > SUN_PATH_MAX {
+        return Err(format!(
+            "the ssh control socket path in {dir} would be {len} bytes, over the \
+             {SUN_PATH_MAX}-byte unix socket limit (use a shorter CIVET_STATE_DIR)"
+        ));
+    }
+    Ok(format!("ControlPath=\"{}/%C\"", dir.replace('%', "%%")))
 }
 
 impl BootstrapOptions {
     /// Shell expression for the remote state dir.
-    fn state_expr(&self) -> String {
+    fn state_expr(&self) -> Result<String, BootstrapError> {
         remote_path_expr(self.remote_state_dir.as_deref().unwrap_or("~/.civet"))
     }
 
     /// `civetd bootstrap` arguments (already quoted).
-    fn bootstrap_args(&self) -> String {
+    fn bootstrap_args(&self) -> Result<String, BootstrapError> {
         let mut s = String::from("bootstrap");
         if let Some(d) = &self.remote_state_dir {
             s.push_str(" --state-dir ");
-            s.push_str(&remote_path_expr(d));
+            s.push_str(&remote_path_expr(d)?);
         }
         if self.replace {
             s.push_str(" --replace");
         }
-        s
+        Ok(s)
     }
 
     /// Base ssh arguments up to and including the destination.
@@ -294,12 +542,20 @@ impl BootstrapOptions {
         if batch {
             let ssh_dir = StatePaths::new(default_state_dir()).ssh_dir();
             create_private_dir(&ssh_dir)?;
-            for opt in [
-                "BatchMode=yes".to_string(),
-                "ControlMaster=auto".to_string(),
-                format!("ControlPath={}/%C", ssh_dir.display()),
-                "ControlPersist=60".to_string(),
-            ] {
+            let mut opts = vec!["BatchMode=yes".to_string()];
+            match control_path_option(&ssh_dir) {
+                Ok(cp) => {
+                    opts.push("ControlMaster=auto".into());
+                    opts.push(cp);
+                    opts.push("ControlPersist=60".into());
+                }
+                Err(why) => {
+                    tracing::warn!("ssh connection sharing disabled: {why}");
+                    opts.push("ControlMaster=no".into());
+                    opts.push("ControlPath=none".into());
+                }
+            }
+            for opt in opts {
                 args.push("-o".into());
                 args.push(opt.into());
             }
@@ -399,6 +655,8 @@ struct ProbeResult {
     home: Option<String>,
     have_binary: bool,
     bootstrap_exit: Option<i32>,
+    /// `version` output of a present but mismatching remote binary.
+    stale: Option<String>,
 }
 
 fn parse_probe(stdout: &str) -> ProbeResult {
@@ -416,14 +674,82 @@ fn parse_probe(stdout: &str) -> ProbeResult {
             r.have_binary = true;
         } else if let Some(rest) = line.strip_prefix("CIVET_EXIT=") {
             r.bootstrap_exit = rest.trim().parse().ok();
+        } else if let Some(rest) = line.strip_prefix("CIVET_STALE=") {
+            r.stale = Some(rest.to_string());
         }
     }
     r
 }
 
 /// Remote binary path expression (shell) for our version.
-fn bin_expr(opts: &BootstrapOptions) -> String {
-    format!("{}/bin/civetd-{}", opts.state_expr(), crate::VERSION)
+fn bin_expr(opts: &BootstrapOptions) -> Result<String, BootstrapError> {
+    Ok(format!(
+        "{}/bin/civetd-{}",
+        opts.state_expr()?,
+        crate::VERSION
+    ))
+}
+
+/// The probe script: platform, `$HOME`, and, if `bin/civetd-<ver>` exists in
+/// an owned (non-symlink) state dir and its `version` prints exactly our
+/// version, its `bootstrap` output in the same round trip. A stale, broken
+/// or foreign binary is reported as `CIVET_HAVE=0` (+ `CIVET_STALE=`), so
+/// it gets reinstalled.
+fn probe_script(opts: &BootstrapOptions) -> Result<String, BootstrapError> {
+    Ok(format!(
+        "echo \"CIVET_UNAME=$(uname -s) $(uname -m)\"; echo \"CIVET_HOME=$HOME\"; {ok}\
+         S={state}; B=\"$S/bin/civetd-{ver}\"; V=\"\"; \
+         if ok \"$S\" && ok \"$S/bin\" && [ -f \"$B\" ] && [ -x \"$B\" ] && [ -O \"$B\" ]; then \
+         V=$(\"$B\" version 2>/dev/null) || V=\"\"; fi; \
+         case \"$V\" in \"civetd {ver} \"*) echo CIVET_HAVE=1; \"$B\" {args}; echo \"CIVET_EXIT=$?\" ;; \
+         *) echo CIVET_HAVE=0; echo \"CIVET_STALE=$V\" ;; esac",
+        ok = SH_DIR_OK,
+        state = opts.state_expr()?,
+        ver = crate::VERSION,
+        args = opts.bootstrap_args()?,
+    ))
+}
+
+/// The upload script (binary on stdin): refuse an unsafe state dir (exit
+/// 87), write a temp file, require its `version` to print our version (else
+/// remove it, exit 86), then move it into place.
+fn upload_script(opts: &BootstrapOptions) -> Result<String, BootstrapError> {
+    Ok(format!(
+        "umask 077; {ok}S={state}; \
+         for d in \"$S\" \"$S/bin\"; do mkdir -p \"$d\" 2>/dev/null; if ok \"$d\"; then :; else \
+         echo \"civet: $d is a symlink or not a directory owned by $(id -un)\" >&2; exit {unsafe_dir}; fi; done; \
+         T=\"$S/bin/.civetd-{ver}.tmp.$$\"; \
+         if cat > \"$T\"; then :; else rm -f \"$T\"; exit 1; fi; chmod 755 \"$T\"; \
+         V=$(\"$T\" version 2>&1) || V=\"exit $?: $V\"; \
+         case \"$V\" in \"civetd {ver} \"*) ;; *) rm -f \"$T\"; echo \"CIVET_BADBIN=$V\" >&2; exit {rejected} ;; esac; \
+         mv -f \"$T\" \"$S/bin/civetd-{ver}\" && ln -sf civetd-{ver} \"$S/bin/civetd\"",
+        ok = SH_DIR_OK,
+        state = opts.state_expr()?,
+        ver = crate::VERSION,
+        unsafe_dir = EXIT_UNSAFE_DIR,
+        rejected = EXIT_UPLOAD_REJECTED,
+    ))
+}
+
+/// Map an upload script failure to an error.
+fn upload_error(out: &SshOutput) -> BootstrapError {
+    match out.code {
+        Some(EXIT_UPLOAD_REJECTED) => BootstrapError::UploadRejected {
+            expected: crate::VERSION.to_owned(),
+            got: out
+                .stderr
+                .lines()
+                .find_map(|l| l.strip_prefix("CIVET_BADBIN="))
+                .unwrap_or("no output")
+                .trim()
+                .to_owned(),
+        },
+        Some(EXIT_UNSAFE_DIR) => BootstrapError::UnsafeRemoteDir(out.stderr.trim().to_owned()),
+        code => BootstrapError::Ssh {
+            code,
+            stderr: hint(&out.stderr),
+        },
+    }
 }
 
 /// Turn a remote bootstrap exit code + output into a result.
@@ -449,14 +775,7 @@ pub async fn bootstrap_ssh(
 ) -> Result<Bootstrapped, BootstrapError> {
     // 1. Probe (+ bootstrap if the binary is present), one round trip.
     progress(BootstrapStep::Probe);
-    let probe_script = format!(
-        "echo \"CIVET_UNAME=$(uname -s) $(uname -m)\"; echo \"CIVET_HOME=$HOME\"; \
-         B={bin}; if [ -x \"$B\" ]; then echo CIVET_HAVE=1; \"$B\" {args}; echo \"CIVET_EXIT=$?\"; \
-         else echo CIVET_HAVE=0; fi",
-        bin = bin_expr(opts),
-        args = opts.bootstrap_args(),
-    );
-    let out = run_ssh(opts, &probe_script, None, "ssh probe").await?;
+    let out = run_ssh(opts, &probe_script(opts)?, None, "ssh probe").await?;
     let probe = parse_probe(&out.stdout);
     let Some((uname_s, uname_m)) = probe.uname.clone() else {
         return Err(BootstrapError::Ssh {
@@ -466,37 +785,42 @@ pub async fn bootstrap_ssh(
     };
     let home = probe.home.clone().unwrap_or_default();
     let remote_binary = absolute_remote_binary(opts, &home);
+    check_remote_path(&remote_binary)?;
 
     let mut installed = false;
     let info = match (probe.have_binary, probe.bootstrap_exit) {
-        // 126/127: present but not runnable (wrong arch, corrupt): reinstall.
+        // 126/127: present but not runnable after all: reinstall.
         (true, Some(code)) if code != 126 && code != 127 => {
             bootstrap_result(Some(code), &out.stdout, &out.stderr)?
         }
         _ => {
+            if let Some(stale) = probe.stale.as_deref().filter(|s| !s.is_empty()) {
+                tracing::info!(
+                    remote = %remote_binary,
+                    found = stale,
+                    "remote civetd binary is not {}; reinstalling",
+                    crate::VERSION
+                );
+            }
             // 2. Upload.
             progress(BootstrapStep::Upload);
             let triple = target_triple(&uname_s, &uname_m)?;
-            let local = find_binary(&opts.binary, &triple)?;
-            let data = tokio::fs::read(&local).await?;
-            let upload_script = format!(
-                "set -e; umask 077; S={state}; mkdir -p \"$S/bin\"; \
-                 T=\"$S/bin/.civetd-{ver}.tmp.$$\"; cat > \"$T\"; chmod 755 \"$T\"; \
-                 mv -f \"$T\" \"$S/bin/civetd-{ver}\"; ln -sf civetd-{ver} \"$S/bin/civetd\"",
-                state = opts.state_expr(),
-                ver = crate::VERSION,
+            let (local, data) = find_binary(&opts.binary, &triple).await?;
+            tracing::info!(
+                triple,
+                path = %local.display(),
+                source = %opts.binary.describe(),
+                "uploading civetd {}",
+                crate::VERSION
             );
-            let up = run_ssh(opts, &upload_script, Some(data), "ssh upload").await?;
+            let up = run_ssh(opts, &upload_script(opts)?, Some(data), "ssh upload").await?;
             if up.code != Some(0) {
-                return Err(BootstrapError::Ssh {
-                    code: up.code,
-                    stderr: hint(&up.stderr),
-                });
+                return Err(upload_error(&up));
             }
             installed = true;
             // 3. Start.
             progress(BootstrapStep::Start);
-            let start_script = format!("exec {} {}", bin_expr(opts), opts.bootstrap_args());
+            let start_script = format!("exec {} {}", bin_expr(opts)?, opts.bootstrap_args()?);
             let st = run_ssh(opts, &start_script, None, "ssh bootstrap").await?;
             bootstrap_result(st.code, &st.stdout, &st.stderr)?
         }
@@ -526,43 +850,67 @@ fn absolute_remote_binary(opts: &BootstrapOptions, home: &str) -> String {
     format!("{state}/bin/civetd-{}", crate::VERSION)
 }
 
-/// Locate the binary to upload for `triple`.
-fn find_binary(source: &BinarySource, triple: &str) -> Result<PathBuf, BootstrapError> {
-    let no = |searched: String| BootstrapError::NoBinary {
+/// Locate the binary to upload for `triple` and check it
+/// ([`check_binary`]); returns its path and contents.
+async fn find_binary(
+    source: &BinarySource,
+    triple: &str,
+) -> Result<(PathBuf, Vec<u8>), BootstrapError> {
+    let mut searched = Vec::new();
+    let mut wrong = None;
+    for candidate in flatten(source) {
+        let path = match candidate_path(candidate, triple) {
+            Ok(p) => p,
+            Err(why) => {
+                searched.push(why);
+                continue;
+            }
+        };
+        let data = tokio::fs::read(&path).await?;
+        match check_binary(&path, &data, triple) {
+            Ok(()) => return Ok((path, data)),
+            Err(e) => {
+                tracing::warn!("skipping {}: {e}", path.display());
+                searched.push(format!("{} (wrong version)", path.display()));
+                wrong.get_or_insert(e);
+            }
+        }
+    }
+    Err(wrong.unwrap_or_else(|| BootstrapError::NoBinary {
         triple: triple.to_string(),
-        searched,
-    };
+        searched: searched.join(", "),
+    }))
+}
+
+fn flatten(source: &BinarySource) -> Vec<&BinarySource> {
     match source {
-        BinarySource::Dir(dir) => {
-            let p = dir.join(format!("civetd-{triple}"));
-            if p.is_file() {
-                Ok(p)
-            } else {
-                Err(no(p.display().to_string()))
-            }
-        }
-        BinarySource::File(p) => {
-            if p.is_file() {
-                Ok(p.clone())
-            } else {
-                Err(no(p.display().to_string()))
-            }
-        }
+        BinarySource::Search(v) => v.iter().flat_map(flatten).collect(),
+        other => vec![other],
+    }
+}
+
+/// The file a single (non-Search) source names for `triple`, or why not.
+fn candidate_path(source: &BinarySource, triple: &str) -> Result<PathBuf, String> {
+    let p = match source {
+        BinarySource::Dir(dir) => dir.join(format!("civetd-{triple}")),
+        BinarySource::File(p) => p.clone(),
         BinarySource::CurrentExeSibling => {
-            let p = sibling_civetd()?;
+            let p = sibling_civetd().map_err(|e| format!("civetd next to this program ({e})"))?;
             if !same_platform(crate::TARGET, triple) {
-                return Err(no(format!(
+                return Err(format!(
                     "{} (built for {}, set CIVET_DIST_DIR for other targets)",
                     p.display(),
                     crate::TARGET
-                )));
+                ));
             }
-            if p.is_file() {
-                Ok(p)
-            } else {
-                Err(no(p.display().to_string()))
-            }
+            p
         }
+        BinarySource::Search(_) => return Err("nested search".into()),
+    };
+    if p.is_file() {
+        Ok(p)
+    } else {
+        Err(p.display().to_string())
     }
 }
 
@@ -634,16 +982,30 @@ async fn resolve(host: &str, port: u16) -> Result<SocketAddr, BootstrapError> {
         })
 }
 
-/// Run `<civetd> bootstrap [--state-dir]` as a local child (no ssh); dial
-/// address 127.0.0.1. Used by `civet-cli --local` and desktop "Local".
+/// Run `<civetd> bootstrap --bind 127.0.0.1 [--state-dir]` as a local
+/// child (no ssh); dial address 127.0.0.1. Used by `civet-cli --local` and
+/// desktop "Local". A daemon it starts listens on loopback only.
 pub async fn bootstrap_local(
     civetd: &Path,
     state_dir: Option<&Path>,
 ) -> Result<Bootstrapped, BootstrapError> {
+    bootstrap_local_with(civetd, state_dir, false).await
+}
+
+/// [`bootstrap_local`] with `replace` (`--replace`: restart a running
+/// daemon even if it has live panes, e.g. after `upgrade_available`).
+pub async fn bootstrap_local_with(
+    civetd: &Path,
+    state_dir: Option<&Path>,
+    replace: bool,
+) -> Result<Bootstrapped, BootstrapError> {
     let mut cmd = Command::new(civetd);
-    cmd.arg("bootstrap");
+    cmd.arg("bootstrap").arg("--bind").arg("127.0.0.1");
     if let Some(d) = state_dir {
         cmd.arg("--state-dir").arg(d);
+    }
+    if replace {
+        cmd.arg("--replace");
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -753,10 +1115,10 @@ pub async fn open_ssh_tunnel(
     opts: &BootstrapOptions,
     remote_binary: &str,
 ) -> Result<SshTunnel, BootstrapError> {
-    let mut script = format!("exec {} stdio-tunnel", remote_path_expr(remote_binary));
+    let mut script = format!("exec {} stdio-tunnel", remote_path_expr(remote_binary)?);
     if let Some(d) = &opts.remote_state_dir {
         script.push_str(" --state-dir ");
-        script.push_str(&remote_path_expr(d));
+        script.push_str(&remote_path_expr(d)?);
     }
     let mut cmd = Command::new(&opts.ssh_program);
     cmd.args(opts.ssh_args(true)?)
@@ -814,9 +1176,9 @@ mod tests {
         assert_eq!(sh_quote("a b"), "'a b'");
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
         assert_eq!(sh_quote("$(rm -rf /)"), "'$(rm -rf /)'");
-        assert_eq!(remote_path_expr("~/.civet"), "\"$HOME\"/.civet");
-        assert_eq!(remote_path_expr("~/my dir"), "\"$HOME\"/'my dir'");
-        assert_eq!(remote_path_expr("/tmp/x;y"), "'/tmp/x;y'");
+        assert_eq!(remote_path_expr("~/.civet").unwrap(), "\"$HOME\"/.civet");
+        assert_eq!(remote_path_expr("~/my dir").unwrap(), "\"$HOME\"/'my dir'");
+        assert_eq!(remote_path_expr("/tmp/x;y").unwrap(), "'/tmp/x;y'");
     }
 
     #[test]
@@ -876,6 +1238,7 @@ mod tests {
         );
         assert!(
             opts.bootstrap_args()
+                .unwrap()
                 .contains("--state-dir \"$HOME\"/state")
         );
     }
@@ -894,5 +1257,248 @@ mod tests {
             "aarch64-apple-darwin",
             "aarch64-unknown-linux-musl"
         ));
+    }
+
+    /// Paths with characters a csh/tcsh or fish login shell would interpret
+    /// inside single quotes are refused; nothing else is.
+    #[test]
+    fn remote_paths_are_validated() {
+        for bad in [
+            "~/a!b", "~/a\\b", "/x/it's", "/x/\"q\"", "/x/`id`", "/x/a\nb", "/x/\t", "",
+        ] {
+            assert!(
+                matches!(
+                    remote_path_expr(bad),
+                    Err(BootstrapError::InvalidRemotePath(_))
+                ),
+                "{bad:?}"
+            );
+        }
+        for good in [
+            "~",
+            "~/.civet",
+            "~/my dir",
+            "/srv/civet-state_1.2",
+            "/x/$HOME;rm",
+        ] {
+            assert!(remote_path_expr(good).is_ok(), "{good:?}");
+        }
+        let mut opts = BootstrapOptions::new(SshTarget::new("h"));
+        opts.remote_state_dir = Some("~/x!y".into());
+        assert!(probe_script(&opts).is_err());
+        assert!(upload_script(&opts).is_err());
+    }
+
+    /// The remote command (`sh -c '<script>'`) must survive csh/tcsh and
+    /// fish login shells: no `!`, no newline, and backslashes only in the
+    /// `'\''` sequences outside single quotes.
+    #[test]
+    fn remote_commands_are_login_shell_neutral() {
+        let mut opts = BootstrapOptions::new(SshTarget::new("h"));
+        opts.remote_state_dir = Some("~/my state".into());
+        opts.replace = true;
+        for script in [
+            probe_script(&opts).unwrap(),
+            upload_script(&opts).unwrap(),
+            format!(
+                "exec {} {}",
+                bin_expr(&opts).unwrap(),
+                opts.bootstrap_args().unwrap()
+            ),
+        ] {
+            let cmd = format!("sh -c {}", sh_quote(&script));
+            assert!(!cmd.contains('!'), "{cmd}");
+            assert!(!cmd.contains('\n'), "{cmd}");
+            assert_eq!(
+                cmd.matches('\\').count(),
+                cmd.matches("'\\''").count(),
+                "stray backslash: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_path_quoting_and_length() {
+        let cp = control_path_option(Path::new("/Users/a b/100%/.civet/ssh")).unwrap();
+        assert_eq!(cp, "ControlPath=\"/Users/a b/100%%/.civet/ssh/%C\"");
+        let long = format!("/{}", "x".repeat(60));
+        let err = control_path_option(Path::new(&long)).unwrap_err();
+        assert!(err.contains("unix socket limit"), "{err}");
+        assert!(control_path_option(Path::new("/a\"b")).is_err());
+    }
+
+    /// A real ssh accepts the quoted ControlPath (parsed with `-G`, no
+    /// connection is made).
+    #[test]
+    fn control_path_parses_with_real_ssh() {
+        let cp = control_path_option(Path::new("/tmp/a b/50%")).unwrap();
+        let Ok(out) = std::process::Command::new("ssh")
+            .args(["-G", "-o", &cp, "civet-test.invalid"])
+            .output()
+        else {
+            return; // no ssh installed
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let line = stdout
+            .lines()
+            .find(|l| l.starts_with("controlpath "))
+            .unwrap_or_else(|| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+        assert!(line.starts_with("controlpath /tmp/a b/50%/"), "{line}");
+    }
+
+    fn fake_elf(machine: u16, marker: Option<&str>) -> Vec<u8> {
+        let mut d = vec![0x7f, b'E', b'L', b'F', 2, 1, 1, 0];
+        d.resize(18, 0);
+        d.extend_from_slice(&machine.to_le_bytes());
+        d.resize(256, 0);
+        if let Some(v) = marker {
+            d.extend_from_slice(format!("\0CIVETD_VERSION={v}\0").as_bytes());
+        }
+        d.resize(512, 0);
+        d
+    }
+
+    #[test]
+    fn local_binary_check() {
+        let p = Path::new("/d/civetd-x86_64-unknown-linux-musl");
+        let t = "x86_64-unknown-linux-musl";
+        assert!(check_binary(p, &fake_elf(62, Some(crate::VERSION)), t).is_ok());
+        // Stale version: refused with the versions in the message.
+        let e = check_binary(p, &fake_elf(62, Some("0.0.1")), t).unwrap_err();
+        let msg = e.to_string();
+        assert!(matches!(&e, BootstrapError::WrongBinary { got, .. } if got == "0.0.1"));
+        assert!(msg.contains("build-remote.sh"), "{msg}");
+        assert!(msg.contains(crate::VERSION), "{msg}");
+        // No marker (built before markers existed).
+        assert!(matches!(
+            check_binary(p, &fake_elf(62, None), t),
+            Err(BootstrapError::WrongBinary { .. })
+        ));
+        // Wrong architecture / format.
+        assert!(check_binary(p, &fake_elf(183, Some(crate::VERSION)), t).is_err());
+        assert!(
+            check_binary(
+                p,
+                &fake_elf(183, Some(crate::VERSION)),
+                "aarch64-unknown-linux-musl"
+            )
+            .is_ok()
+        );
+        let mut text = b"#!/bin/sh\n".to_vec();
+        text.extend_from_slice(VERSION_MARKER.as_bytes());
+        assert!(check_binary(p, &text, t).is_err());
+        assert!(check_binary(p, &text, "aarch64-apple-darwin").is_err());
+    }
+
+    #[test]
+    fn marker_roundtrip() {
+        let bytes = version_marker_bytes();
+        assert_eq!(&bytes[..], VERSION_MARKER.as_bytes());
+        let mut data = vec![1u8; 100];
+        data.extend_from_slice(&bytes);
+        data.extend_from_slice(&[2u8; 100]);
+        assert_eq!(binary_version(&data).as_deref(), Some(crate::VERSION));
+        assert_eq!(binary_version(b"\0CIVETD_VERSION="), None);
+    }
+
+    /// Search order: the first candidate with the right version wins; a
+    /// stale one is skipped; all stale → WrongBinary; none → NoBinary.
+    #[tokio::test]
+    async fn search_skips_stale_candidates() {
+        let t = "x86_64-unknown-linux-musl";
+        let dir = tempfile::tempdir().unwrap();
+        let (stale, good, empty) = (
+            dir.path().join("stale"),
+            dir.path().join("good"),
+            dir.path().join("empty"),
+        );
+        for d in [&stale, &good, &empty] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(
+            stale.join(format!("civetd-{t}")),
+            fake_elf(62, Some("0.0.1")),
+        )
+        .unwrap();
+        std::fs::write(
+            good.join(format!("civetd-{t}")),
+            fake_elf(62, Some(crate::VERSION)),
+        )
+        .unwrap();
+        let src = BinarySource::Search(vec![
+            BinarySource::Dir(empty.clone()),
+            BinarySource::Dir(stale.clone()),
+            BinarySource::Dir(good.clone()),
+        ]);
+        let (path, _) = find_binary(&src, t).await.unwrap();
+        assert_eq!(path, good.join(format!("civetd-{t}")));
+        let src = BinarySource::Search(vec![
+            BinarySource::Dir(empty.clone()),
+            BinarySource::Dir(stale.clone()),
+        ]);
+        assert!(matches!(
+            find_binary(&src, t).await,
+            Err(BootstrapError::WrongBinary { .. })
+        ));
+        assert!(matches!(
+            find_binary(&BinarySource::Dir(empty), t).await,
+            Err(BootstrapError::NoBinary { .. })
+        ));
+        // A bundled dir comes first in the default order.
+        let chain = BinarySource::with_bundled(Some(good.clone()));
+        assert!(matches!(&chain, BinarySource::Search(v) if v[0] == BinarySource::Dir(good)));
+    }
+
+    /// The upload script refuses (exit 86, temp file removed) a binary
+    /// whose `version` is not ours, and installs a good one.
+    #[test]
+    fn upload_script_checks_remote_version() {
+        use std::io::Write;
+        let home = tempfile::tempdir().unwrap();
+        let mut opts = BootstrapOptions::new(SshTarget::new("h"));
+        opts.remote_state_dir = Some("~/st".into());
+        let script = upload_script(&opts).unwrap();
+        let run = |body: &str| {
+            let mut child = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .env("HOME", home.path())
+                .stdin(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(body.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
+            SshOutput {
+                code: out.status.code(),
+                stdout: String::new(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            }
+        };
+        let bin = home.path().join("st/bin");
+        let out = run("#!/bin/sh\necho 'civetd 0.0.1 (proto 1, x)'\n");
+        assert_eq!(out.code, Some(EXIT_UPLOAD_REJECTED), "{}", out.stderr);
+        assert!(matches!(
+            upload_error(&out),
+            BootstrapError::UploadRejected { got, .. } if got.starts_with("civetd 0.0.1")
+        ));
+        assert_eq!(
+            std::fs::read_dir(&bin).unwrap().count(),
+            0,
+            "temp file left"
+        );
+        // Truncated / not executable at all.
+        let out = run("\x7fELF");
+        assert_eq!(out.code, Some(EXIT_UPLOAD_REJECTED), "{}", out.stderr);
+        let good = format!("#!/bin/sh\necho 'civetd {} (proto 1, x)'\n", crate::VERSION);
+        let out = run(&good);
+        assert_eq!(out.code, Some(0), "{}", out.stderr);
+        assert!(bin.join(format!("civetd-{}", crate::VERSION)).is_file());
+        assert!(bin.join("civetd").exists());
     }
 }

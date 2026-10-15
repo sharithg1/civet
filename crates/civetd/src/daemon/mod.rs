@@ -253,12 +253,28 @@ fn random_u64() -> anyhow::Result<u64> {
     Ok(u64::from_le_bytes(b))
 }
 
+/// At most this many connections may be in their (unauthenticated) TLS
+/// handshake + hello at once; more are refused until one finishes.
+pub const MAX_PENDING_HANDSHAKES: usize = 32;
+
+fn handshake_slots() -> Arc<tokio::sync::Semaphore> {
+    Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_HANDSHAKES))
+}
+
 async fn accept_quic(server: Arc<server::Server>, quic: Arc<QuicServer>) {
+    let slots = handshake_slots();
     while let Some(incoming) = quic.accept().await {
+        let remote = incoming.remote_addr();
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            // Dropping the incoming connection refuses it.
+            tracing::debug!(%remote, "too many pending handshakes; refusing");
+            continue;
+        };
         let server = server.clone();
         tokio::spawn(async move {
-            let remote = incoming.remote_addr();
-            match incoming.handshake().await {
+            let r = incoming.handshake().await;
+            drop(permit);
+            match r {
                 Ok(conn) => server.handle_connection(conn).await,
                 Err(e) => tracing::info!(%remote, error = %e, "QUIC handshake failed"),
             }
@@ -267,12 +283,19 @@ async fn accept_quic(server: Arc<server::Server>, quic: Arc<QuicServer>) {
 }
 
 async fn accept_unix(server: Arc<server::Server>, listener: UnixListener) {
+    let slots = handshake_slots();
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                let Ok(permit) = slots.clone().try_acquire_owned() else {
+                    tracing::debug!("too many pending unix socket hellos; refusing");
+                    continue;
+                };
                 let server = server.clone();
                 tokio::spawn(async move {
-                    match civet_transport::accept_stream(stream, &server.key).await {
+                    let r = civet_transport::accept_stream(stream, &server.key).await;
+                    drop(permit);
+                    match r {
                         Ok(conn) => server.handle_connection(conn).await,
                         Err(e) => tracing::info!(error = %e, "unix socket hello failed"),
                     }
@@ -295,7 +318,10 @@ async fn housekeeping(server: Arc<server::Server>) {
             ev = events.recv() => match ev {
                 Ok(Event::PaneClosed { pane }) => server.pane_closed(pane),
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                // Missed PaneClosed events: prune against the live panes.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    server.prune_closed_panes();
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             },
             _ = reap.tick() => {

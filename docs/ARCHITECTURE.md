@@ -194,7 +194,10 @@ client that all panes are gone.
 
 **Case 5: UDP blocked.** The initial QUIC dial times out after 3 s → stdio
 tunnel over SSH, same protocol, same resume logic (each re-dial spawns a new
-`ssh … stdio-tunnel`, reusing the ControlMaster connection).
+`ssh … stdio-tunnel`, reusing the ControlMaster connection). If UDP gets
+blocked mid-session, the stalled session's re-dial fails over to the tunnel
+(resume, nothing lost); while on the tunnel it probes QUIC every 10 s and
+moves back when it works (`FailoverDialer`).
 
 ### Why the user sees nothing
 
@@ -245,8 +248,9 @@ is off (password prompts: keystrokes not echoed recently). Target: keystroke
 Per pane, the daemon derives `Unknown | Running | NeedsInput | Done | Idle`
 from, in order of trust: process exit; the pane's hook file
 (`$CIVET_STATUS_FILE`, written by agent hooks such as Claude Code's
-`Stop`/`Notification`; the daemon passes generated hook settings to `claude`
-automatically); terminal escape codes (OSC 9 / OSC 777 notifications,
+`Stop`/`Notification`; PATH shims for `claude` and `codex`, first on every
+pane's PATH, add Civet's hook settings automatically without touching the
+user's agent config); terminal escape codes (OSC 9 / OSC 777 notifications,
 OSC 133 prompt marks); and heuristics for known agent CLIs (output activity,
 BEL followed by quiet, idle timeout). Changes are pushed as
 `Event::AgentStatus`; the desktop turns transitions into Done/NeedsInput
@@ -275,7 +279,7 @@ into a sidebar badge and, when unfocused, a native notification.
 | Daemon crash / host reboot | Panes lost; bootstrap starts a new daemon |
 | UDP blocked | SSH stdio tunnel, same features, more latency under loss |
 | Huge output burst | Coalesced to ≤ 1 update / 8 ms per pane; history replay capped, rest fetchable |
-| Daemon upgrade | New binary installed side by side; running compatible daemon is reattached; incompatible one replaced only when it has no panes (or `--replace`) |
+| Daemon upgrade | New binary installed side by side (version-checked locally and on the remote); running compatible daemon with panes is reattached and the bootstrap line reports `upgrade_available` + `live_panes` so the UI can offer "Restart daemon" (`replace`); idle older or incompatible daemons are replaced only when they have no panes (or `--replace`) |
 
 ## Open questions carried from the plan
 

@@ -1,6 +1,8 @@
 //! The app's [`Connector`]: bootstrap over SSH (or a local `civetd`), then
 //! QUIC with a 3 s connect timeout, falling back to the stdio tunnel when
-//! UDP is blocked or when forced (docs/INTERFACES.md §6.5).
+//! UDP is blocked or when forced (docs/INTERFACES.md §6.5). With `Auto` the
+//! session uses a [`FailoverDialer`], so it also fails over when UDP gets
+//! blocked mid-session and moves back to QUIC once it works again.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,8 +10,8 @@ use std::time::Duration;
 
 use civet_proto::{CertFingerprint, ClientId, SessionKey};
 use civet_transport::{
-    ClientSession, ClientSessionConfig, Dialer, QuicClient, QuicClientConfig, QuicDialer,
-    StreamDialer, TransportKind,
+    ClientSession, ClientSessionConfig, Dialer, FailoverConfig, FailoverDialer, LinkState,
+    QuicClient, QuicClientConfig, QuicDialer, StreamDialer, TransportKind,
 };
 use civetd::bootstrap::{
     BootstrapError, BootstrapOptions, BootstrapStep, Bootstrapped, SshTarget, bootstrap_local,
@@ -30,7 +32,7 @@ pub const CLIENT_NAME: &str = "civet-desktop";
 /// Bootstraps with `civetd::bootstrap` and dials.
 #[derive(Debug, Clone)]
 pub struct SshConnector {
-    /// Stable per installation (`~/.civet/client-id`).
+    /// Stable per installation (`~/.civet/client-id-desktop`).
     pub client_id: ClientId,
     /// `civetd` for the local host; None = search (see [`find_local_civetd`]).
     pub local_civetd: Option<PathBuf>,
@@ -90,8 +92,9 @@ pub fn session_config(key: SessionKey, client_id: ClientId) -> ClientSessionConf
     ClientSessionConfig::new(key, client_id, CLIENT_NAME, env!("CARGO_PKG_VERSION"))
 }
 
-/// Dial QUIC (unless `choice` is `Ssh`), falling back to `tunnel` on a
-/// non-fatal failure when `choice` is `Auto`.
+/// Dial according to `choice`: `Quic` = QUIC only, `Ssh` = the tunnel only,
+/// `Auto` = a [`FailoverDialer`] (QUIC first; the tunnel when UDP is blocked
+/// at connect time or later; back to QUIC when it works again).
 pub async fn dial(
     config: ClientSessionConfig,
     choice: TransportChoice,
@@ -100,49 +103,56 @@ pub async fn dial(
     daemon_version: String,
     progress: &Progress,
 ) -> Result<Established, CmdError> {
-    if choice != TransportChoice::Ssh
-        && let Some((addr, fingerprint)) = quic
-    {
-        progress(ProgressStep::Dial, Some(format!("QUIC {addr}")));
-        let client = Arc::new(QuicClient::new(addr.is_ipv6())?);
-        let mut cfg = QuicClientConfig::new(addr, fingerprint);
-        cfg.connect_timeout = QUIC_DIAL_TIMEOUT;
-        let dialer = Arc::new(QuicDialer {
-            client,
-            config: cfg,
-        });
-        match ClientSession::connect(config.clone(), dialer).await {
-            Ok((session, events)) => {
-                return Ok(Established {
-                    session,
-                    events,
-                    transport: TransportKind::Quic,
-                    daemon_version,
-                    choice,
-                });
-            }
-            Err(e) if choice == TransportChoice::Quic || e.is_fatal() => {
-                return Err(CmdError::transport(format!("QUIC to {addr}: {e}")));
-            }
-            Err(e) => {
-                tracing::info!(%addr, error = %e, "QUIC failed; falling back to the stdio tunnel");
-                progress(
-                    ProgressStep::Fallback,
-                    Some(format!("UDP unreachable ({e}); using the SSH tunnel")),
-                );
-            }
+    let quic = match quic {
+        Some((addr, fingerprint)) if choice != TransportChoice::Ssh => {
+            progress(ProgressStep::Dial, Some(format!("QUIC {addr}")));
+            let client = Arc::new(QuicClient::new(addr.is_ipv6())?);
+            let mut cfg = QuicClientConfig::new(addr, fingerprint);
+            cfg.connect_timeout = QUIC_DIAL_TIMEOUT;
+            let dialer: Arc<dyn Dialer> = Arc::new(QuicDialer {
+                client,
+                config: cfg,
+            });
+            Some((addr, dialer))
         }
-    }
-    let (session, events) = ClientSession::connect(config, tunnel)
+        _ => None,
+    };
+    let (dialer, what): (Arc<dyn Dialer>, String) = match (choice, quic) {
+        (TransportChoice::Quic, Some((addr, q))) => (q, format!("QUIC to {addr}")),
+        (TransportChoice::Auto, Some((addr, q))) => {
+            let failover = FailoverConfig {
+                primary_timeout: QUIC_DIAL_TIMEOUT,
+                ..FailoverConfig::default()
+            };
+            (
+                Arc::new(FailoverDialer::new(q, tunnel, failover)),
+                format!("QUIC to {addr} (or the stdio tunnel)"),
+            )
+        }
+        _ => (tunnel, "stdio tunnel".to_string()),
+    };
+    let (session, events) = ClientSession::connect(config, dialer)
         .await
-        .map_err(|e| CmdError::transport(format!("stdio tunnel: {e}")))?;
+        .map_err(|e| CmdError::transport(format!("{what}: {e}")))?;
+    let transport = match &*session.link_state().borrow() {
+        LinkState::Connected { transport, .. } => *transport,
+        _ => TransportKind::Stream,
+    };
+    if choice == TransportChoice::Auto && transport == TransportKind::Stream {
+        tracing::info!("QUIC unreachable; connected over the stdio tunnel");
+        progress(
+            ProgressStep::Fallback,
+            Some("UDP unreachable; using the SSH tunnel".into()),
+        );
+    }
     Ok(Established {
         session,
         events,
-        transport: TransportKind::Stream,
+        transport,
         daemon_version,
-        // Remember the fallback for the rest of the app session.
-        choice: TransportChoice::Ssh,
+        // The failover dialer handles fallback and recovery itself, so the
+        // choice is kept for re-bootstraps.
+        choice,
     })
 }
 

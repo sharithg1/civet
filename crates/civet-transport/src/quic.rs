@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use civet_proto::frame::read_raw_frame;
+use civet_proto::frame::{
+    MAX_HELLO_LEN, MAX_STREAM_OPEN_LEN, read_raw_frame, read_raw_frame_limited,
+};
 use civet_proto::{
     ALPN, CertFingerprint, ClientHello, ClientMessage, HelloReject, HelloReply, RpcError,
     ScrollbackPage, ScrollbackRequest, ServerMessage, SessionKey, StreamOpen, decode,
@@ -39,6 +41,10 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// mosh-style default daemon UDP port range.
 pub const DEFAULT_PORT_RANGE: std::ops::RangeInclusive<u16> = 60001..=60999;
+
+/// After the daemon finished the control stream, how long the client waits
+/// for the connection close that carries the reason code.
+const CLOSE_REASON_WAIT: Duration = Duration::from_millis(250);
 
 const MAX_BIDI_STREAMS: u32 = 64;
 const MAX_UNI_STREAMS: u32 = 1024;
@@ -106,11 +112,74 @@ impl fmt::Debug for QuicServer {
     }
 }
 
+/// Label for deriving the QUIC stateless-reset key from the TLS identity.
+const RESET_KEY_LABEL: &[u8] = b"civet quic stateless reset key v1";
+/// Label for deriving the connection-ID generator key.
+const CID_KEY_LABEL: &[u8] = b"civet quic connection id key v1";
+
+/// Endpoint config whose stateless-reset key is derived from the persisted
+/// TLS identity key (HMAC-SHA256 with a fixed label), never from the
+/// per-start session key. A restarted daemon (same identity) then sends
+/// resets that the clients of the previous instance recognize, so they
+/// notice at once that their connection is gone instead of waiting for a
+/// timeout.
+///
+/// The connection-ID generator's key is derived the same way: quinn drops
+/// short-header packets whose connection ID fails the generator's check
+/// *before* considering a reset, so a random per-start key would make the
+/// new instance ignore the old connection's packets.
+pub(crate) fn endpoint_config(identity: &ServerIdentity) -> quinn::EndpointConfig {
+    use ring::hmac;
+    let reset_key = hmac::Key::new(hmac::HMAC_SHA256, &reset_key_material(identity));
+    let mut config = quinn::EndpointConfig::new(Arc::new(reset_key));
+    let cid_key = cid_key(identity);
+    config.cid_generator(move || {
+        Box::new(quinn_proto::HashedConnectionIdGenerator::from_key(cid_key))
+    });
+    config
+}
+
+/// HMAC-SHA256(TLS identity private key, [`RESET_KEY_LABEL`]).
+fn reset_key_material(identity: &ServerIdentity) -> Vec<u8> {
+    derive(identity, RESET_KEY_LABEL)
+}
+
+/// Key of the connection-ID generator (see [`endpoint_config`]).
+fn cid_key(identity: &ServerIdentity) -> u64 {
+    let d = derive(identity, CID_KEY_LABEL);
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&d[..8]);
+    u64::from_le_bytes(b)
+}
+
+fn derive(identity: &ServerIdentity, label: &[u8]) -> Vec<u8> {
+    use ring::hmac;
+    let master = hmac::Key::new(hmac::HMAC_SHA256, identity.key_der());
+    hmac::sign(&master, label).as_ref().to_vec()
+}
+
+/// `quinn::Endpoint::server` with [`endpoint_config`].
+fn server_endpoint(
+    identity: &ServerIdentity,
+    server_config: quinn::ServerConfig,
+    addr: SocketAddr,
+) -> std::io::Result<quinn::Endpoint> {
+    let socket = std::net::UdpSocket::bind(addr)?;
+    let runtime =
+        quinn::default_runtime().ok_or_else(|| std::io::Error::other("no async runtime found"))?;
+    quinn::Endpoint::new(
+        endpoint_config(identity),
+        Some(server_config),
+        socket,
+        runtime,
+    )
+}
+
 impl QuicServer {
     /// Bind on `config.bind`.
     pub fn bind(config: QuicServerConfig) -> Result<Self, TransportError> {
         let server_config = server_crypto(&config.identity)?;
-        let endpoint = quinn::Endpoint::server(server_config, config.bind)?;
+        let endpoint = server_endpoint(&config.identity, server_config, config.bind)?;
         Ok(Self {
             endpoint,
             fingerprint: config.identity.fingerprint(),
@@ -130,7 +199,7 @@ impl QuicServer {
         let server_config = server_crypto(&identity)?;
         let mut last_err = None;
         for port in range.clone() {
-            match quinn::Endpoint::server(server_config.clone(), SocketAddr::new(ip, port)) {
+            match server_endpoint(&identity, server_config.clone(), SocketAddr::new(ip, port)) {
                 Ok(endpoint) => {
                     return Ok(Self {
                         endpoint,
@@ -215,7 +284,7 @@ impl IncomingConnection {
         tokio::time::timeout(HELLO_TIMEOUT, async move {
             let conn = connecting.await.map_err(|e| from_conn_error(&e))?;
             let (send, mut recv) = conn.accept_bi().await.map_err(|e| from_conn_error(&e))?;
-            let open = read_raw_frame(&mut recv)
+            let open = read_raw_frame_limited(&mut recv, MAX_STREAM_OPEN_LEN)
                 .await
                 .map_err(|e| frame_error(&conn, e))?
                 .ok_or_else(|| TransportError::ProtocolViolation("control stream ended".into()))?;
@@ -225,7 +294,7 @@ impl IncomingConnection {
                     "first stream is not a control stream".into(),
                 ));
             }
-            let payload = read_raw_frame(&mut recv)
+            let payload = read_raw_frame_limited(&mut recv, MAX_HELLO_LEN)
                 .await
                 .map_err(|e| frame_error(&conn, e))?
                 .ok_or_else(|| TransportError::ProtocolViolation("no hello".into()))?;
@@ -354,7 +423,7 @@ async fn read_scrollback_request(
     mut recv: quinn::RecvStream,
 ) -> Result<ScrollbackRequest, TransportError> {
     tokio::time::timeout(HELLO_TIMEOUT, async move {
-        let open = read_raw_frame(&mut recv)
+        let open = read_raw_frame_limited(&mut recv, MAX_STREAM_OPEN_LEN)
             .await?
             .ok_or_else(|| TransportError::ProtocolViolation("empty stream".into()))?;
         if decode::<StreamOpen>(&open)? != StreamOpen::Scrollback {
@@ -575,8 +644,24 @@ fn start_client(
                             }
                         },
                         Ok(None) => {
+                            // The daemon finishes the control stream right
+                            // before closing the connection; wait briefly for
+                            // the close so its code (e.g. REPLACED) is seen.
+                            let item = match tokio::time::timeout(CLOSE_REASON_WAIT, conn.closed())
+                                .await
+                            {
+                                Ok(quinn::ConnectionError::ApplicationClosed(c))
+                                    if c.error_code.into_inner()
+                                        != u64::from(close_code::NORMAL) =>
+                                {
+                                    RxItem::Failed(from_conn_error(
+                                        &quinn::ConnectionError::ApplicationClosed(c),
+                                    ))
+                                }
+                                _ => RxItem::End,
+                            };
                             closer.close("control stream finished by daemon");
-                            let _ = itx.send(RxItem::End);
+                            let _ = itx.send(item);
                             return;
                         }
                         Err(e) => {
@@ -600,7 +685,8 @@ fn start_client(
                 while let Ok(mut uni) = conn.accept_uni().await {
                     let itx = itx.clone();
                     let h = tokio::spawn(async move {
-                        let pane = match read_raw_frame(&mut uni).await {
+                        let pane = match read_raw_frame_limited(&mut uni, MAX_STREAM_OPEN_LEN).await
+                        {
                             Ok(Some(p)) => match decode::<StreamOpen>(&p) {
                                 Ok(StreamOpen::Screen { pane }) => pane,
                                 other => {
@@ -681,4 +767,26 @@ pub(crate) async fn fetch_scrollback(
         .map_err(|e| frame_error(conn, e))?
         .ok_or_else(|| TransportError::Closed("scrollback stream ended without a reply".into()))?;
     Ok(decode::<Result<ScrollbackPage, RpcError>>(&payload)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_key_is_derived_from_the_persisted_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = ServerIdentity::load_or_generate(dir.path()).unwrap();
+        // A restarted daemon loads the same identity: same reset key.
+        let b = ServerIdentity::load_or_generate(dir.path()).unwrap();
+        assert_eq!(reset_key_material(&a), reset_key_material(&b));
+        assert_eq!(reset_key_material(&a).len(), 32);
+        // A different identity gets a different key, and the key is not the
+        // identity key itself.
+        let c = ServerIdentity::generate().unwrap();
+        assert_ne!(reset_key_material(&a), reset_key_material(&c));
+        assert_ne!(reset_key_material(&a).as_slice(), a.key_der());
+        assert_eq!(cid_key(&a), cid_key(&b));
+        assert_ne!(cid_key(&a), cid_key(&c));
+    }
 }

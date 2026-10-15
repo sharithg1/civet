@@ -40,6 +40,10 @@ enum Cmd {
         /// Stop a running daemon even if it has live panes.
         #[arg(long)]
         replace: bool,
+        /// QUIC bind address for a daemon this call starts (default
+        /// 0.0.0.0; local clients pass 127.0.0.1).
+        #[arg(long)]
+        bind: Option<IpAddr>,
     },
     /// Pipe stdin/stdout to the running daemon's unix socket.
     StdioTunnel {
@@ -125,11 +129,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
             r
         }
-        Cmd::Bootstrap { state_dir, replace } => {
+        Cmd::Bootstrap {
+            state_dir,
+            replace,
+            bind,
+        } => {
             init_stderr_logging("warn");
             let state_dir = state_dir_or_default(state_dir.as_deref());
             let state_dir = std::path::absolute(&state_dir).unwrap_or(state_dir);
-            let info = runtime()?.block_on(daemon::bootstrap(&state_dir, replace))?;
+            let info = runtime()?.block_on(daemon::bootstrap(&state_dir, replace, bind))?;
             use std::io::Write;
             let mut out = std::io::stdout().lock();
             out.write_all(info.to_json_line().as_bytes())?;
@@ -160,7 +168,16 @@ fn exit_with(e: anyhow::Error) -> ! {
     std::process::exit(code);
 }
 
+/// `\0CIVETD_VERSION=<version>\0`, kept in the binary so a client can check
+/// a `civetd-<triple>` file's version before uploading it (see
+/// `civetd::bootstrap::binary_version`).
+#[used]
+static VERSION_MARKER: [u8; civetd::bootstrap::VERSION_MARKER.len()] =
+    civetd::bootstrap::version_marker_bytes();
+
 fn main() {
+    // Keep the marker even under aggressive dead-code elimination.
+    std::hint::black_box(&VERSION_MARKER);
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
         exit_with(e);

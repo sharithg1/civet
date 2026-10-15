@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -19,8 +20,17 @@ use tokio::sync::{broadcast, watch};
 use crate::status::{Change, FeedSignals, Mark, StatusTracker};
 use crate::{InputOutcome, SessionError, sys};
 
-/// Read buffer size for PTY output.
+/// Read buffer size for PTY output; also the most bytes one `on_output`
+/// batch carries.
 const READ_CHUNK: usize = 64 * 1024;
+/// Terminal-generated replies (DA, DSR, ...) are dropped while the PTY
+/// writer backlog is above this: a program that floods queries without
+/// reading its stdin must not grow the daemon without bound.
+pub(crate) const REPLY_BACKLOG_BUDGET: usize = 64 * 1024;
+/// Client input is refused with [`SessionError::Busy`] (not applied, not
+/// acked) while the backlog is above this. A single input larger than the
+/// budget is still accepted when the queue is empty (big pastes).
+pub(crate) const INPUT_BACKLOG_BUDGET: usize = 1024 * 1024;
 /// After the process exits, how long to wait for the reader to drain the
 /// remaining output before reporting the exit.
 const EXIT_DRAIN_WAIT: Duration = Duration::from_millis(500);
@@ -78,6 +88,10 @@ pub(crate) struct InputRecord {
     acked: u64,
     /// Recent writes not yet echo-acked: (seq, written at).
     recent: VecDeque<(u64, Instant)>,
+    /// Set when an input was refused for backpressure: until `last_seq + 1`
+    /// arrives again, later seqs are refused too, so nothing is ever applied
+    /// out of order around the refused one.
+    refused: bool,
 }
 
 impl InputRecord {
@@ -114,11 +128,17 @@ pub(crate) struct Pane {
     /// mutex orders PaneCreated before every other event of the pane.
     announced: Mutex<bool>,
     writer: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// Bytes queued for the PTY writer thread and not yet written. Reset to
+    /// 0 when the writer thread ends (wakes `wait_input_capacity`).
+    backlog: Arc<watch::Sender<usize>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     pid: Option<u32>,
     events: broadcast::Sender<Event>,
     pub status_file: PathBuf,
-    hook_sig: Mutex<Option<(SystemTime, u64)>>,
+    /// (inode, mtime, len) of the hook file when last read. Hooks write a
+    /// temp file and rename it, so every write gets a new inode: same-length
+    /// rewrites (`done` -> `idle`) are seen even with coarse mtimes.
+    hook_sig: Mutex<Option<(u64, SystemTime, u64)>>,
 }
 
 impl std::fmt::Debug for Pane {
@@ -209,6 +229,17 @@ impl Pane {
         });
         let initial_state = term.state();
         let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>();
+        let backlog = Arc::new(watch::Sender::new(0usize));
+        // A dup of the master fd for `poll` in the reader (batched reads).
+        // Owned by the reader thread, so its number can never be reused by
+        // an unrelated file while the reader polls it.
+        let poll_fd = master.as_raw_fd().and_then(|fd| match sys::dup_fd(fd) {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                tracing::debug!(pane = p.id.0, "dup pty fd failed: {e}");
+                None
+            }
+        });
         let pane = Arc::new(Pane {
             id: p.id,
             term: Mutex::new(term),
@@ -230,6 +261,7 @@ impl Pane {
             closed: AtomicBool::new(false),
             announced: Mutex::new(false),
             writer: Mutex::new(Some(write_tx)),
+            backlog: backlog.clone(),
             master: Mutex::new(Some(master)),
             pid: child.process_id(),
             events,
@@ -247,7 +279,7 @@ impl Pane {
 
         spawn_thread(
             format!("pty-writer-{id}"),
-            Box::new(move || writer_loop(writer, write_rx)),
+            Box::new(move || writer_loop(writer, write_rx, &backlog)),
         )?;
 
         let (done_tx, done_rx) = mpsc::channel::<()>();
@@ -255,7 +287,7 @@ impl Pane {
         spawn_thread(
             format!("pty-reader-{id}"),
             Box::new(move || {
-                reader_loop(&rp, reader);
+                reader_loop(&rp, reader, poll_fd);
                 let _ = done_tx.send(());
             }),
         )?;
@@ -320,11 +352,37 @@ impl Pane {
         }
     }
 
-    /// Queue bytes for the PTY (input or terminal replies).
+    /// Queue bytes for the PTY (input or terminal replies) and count them in
+    /// the backlog.
     fn send_to_pty(&self, data: Vec<u8>) -> bool {
-        match lock(&self.writer).as_ref() {
-            Some(tx) => tx.send(data).is_ok(),
-            None => false,
+        let len = data.len();
+        let writer = lock(&self.writer);
+        let Some(tx) = writer.as_ref() else {
+            return false;
+        };
+        // Count before sending so the writer thread never subtracts first.
+        self.backlog.send_modify(|b| *b += len);
+        if tx.send(data).is_ok() {
+            true
+        } else {
+            self.backlog.send_modify(|b| *b = b.saturating_sub(len));
+            false
+        }
+    }
+
+    /// Bytes queued for the PTY and not yet written.
+    pub(crate) fn pty_backlog(&self) -> usize {
+        *self.backlog.borrow()
+    }
+
+    /// Resolves once the PTY backlog is at or below half the input budget,
+    /// or the pane's writer is gone (exit / kill). Use after
+    /// [`SessionError::Busy`] from `write_input`, then retry the same input.
+    pub(crate) fn wait_input_capacity(&self) -> impl std::future::Future<Output = ()> + use<> {
+        let mut rx = self.backlog.subscribe();
+        async move {
+            // Err = sender gone (pane dropped): nothing left to wait for.
+            let _ = rx.wait_for(|&b| b <= INPUT_BACKLOG_BUDGET / 2).await;
         }
     }
 
@@ -337,10 +395,26 @@ impl Pane {
             (outcome, term.state())
         };
         if !outcome.pty_replies.is_empty() {
-            self.send_to_pty(outcome.pty_replies.clone());
+            if self.pty_backlog() + outcome.pty_replies.len() > REPLY_BACKLOG_BUDGET {
+                tracing::trace!(
+                    pane = self.id.0,
+                    len = outcome.pty_replies.len(),
+                    "pty backlog full: terminal reply dropped"
+                );
+            } else {
+                self.send_to_pty(outcome.pty_replies.clone());
+            }
         }
         if outcome.changed {
             self.state_tx.send_replace(state);
+        }
+        // Status first: with batched reads one chunk may carry both the
+        // activity that makes an agent Running and a later BEL / title, and
+        // subscribers expect them in output order.
+        let sig = signals(&outcome);
+        let changes = lock(&self.status).on_output(now, bytes.len(), &sig);
+        if !self.is_closed() {
+            self.emit_status(changes);
         }
         if let Some(title) = &outcome.title {
             lock(&self.meta).title = title.clone();
@@ -364,11 +438,6 @@ impl Pane {
                 pane: self.id,
                 text: text.clone(),
             });
-        }
-        let sig = signals(&outcome);
-        let changes = lock(&self.status).on_output(now, bytes.len(), &sig);
-        if !self.is_closed() {
-            self.emit_status(changes);
         }
     }
 
@@ -422,8 +491,25 @@ impl Pane {
             if seq <= rec.last_seq {
                 return Ok(InputOutcome::Duplicate);
             }
+            if rec.refused && seq != rec.last_seq + 1 {
+                // An earlier seq was refused for backpressure and has not
+                // been re-sent yet: applying this one would reorder input.
+                return Err(SessionError::Busy(format!(
+                    "{} input seq {seq} waits for seq {}",
+                    self.id,
+                    rec.last_seq + 1
+                )));
+            }
             if seq != rec.last_seq + 1 {
                 tracing::debug!(pane = self.id.0, last = rec.last_seq, seq, "input seq gap");
+            }
+            let backlog = self.pty_backlog();
+            if backlog > 0 && backlog + data.len() > INPUT_BACKLOG_BUDGET {
+                rec.refused = true;
+                return Err(SessionError::Busy(format!(
+                    "{} pty input backlog full ({backlog} bytes)",
+                    self.id
+                )));
             }
             if !self.send_to_pty(data.to_vec()) {
                 return Err(SessionError::InvalidArgument(format!(
@@ -432,6 +518,7 @@ impl Pane {
                 )));
             }
             rec.last_seq = seq;
+            rec.refused = false;
             rec.recent.push_back((seq, now));
         }
         tracing::trace!(pane = self.id.0, seq, len = data.len(), "input");
@@ -562,7 +649,11 @@ impl Pane {
         let Ok(md) = std::fs::metadata(&self.status_file) else {
             return;
         };
-        let sig = (md.modified().unwrap_or(SystemTime::UNIX_EPOCH), md.len());
+        let sig = (
+            std::os::unix::fs::MetadataExt::ino(&md),
+            md.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            md.len(),
+        );
         {
             let mut cur = lock(&self.hook_sig);
             if *cur == Some(sig) {
@@ -573,9 +664,17 @@ impl Pane {
         if md.len() == 0 {
             return;
         }
-        let Ok(text) = std::fs::read_to_string(&self.status_file) else {
+        // Read at most MAX_STATUS_FILE_BYTES: a huge file must not become an
+        // oversized event. A cut inside a UTF-8 sequence is replaced lossily.
+        let mut raw = Vec::new();
+        let read = std::fs::File::open(&self.status_file).and_then(|f| {
+            f.take(civet_proto::MAX_STATUS_FILE_BYTES)
+                .read_to_end(&mut raw)
+        });
+        if read.is_err() {
             return;
-        };
+        }
+        let text = String::from_utf8_lossy(&raw);
         if let Some((status, message)) = civet_proto::parse_status_file(&text) {
             self.emit_status(vec![Change {
                 status,
@@ -599,24 +698,58 @@ impl Pane {
     }
 }
 
-fn writer_loop(mut writer: Box<dyn Write + Send>, rx: mpsc::Receiver<Vec<u8>>) {
+fn writer_loop(
+    mut writer: Box<dyn Write + Send>,
+    rx: mpsc::Receiver<Vec<u8>>,
+    backlog: &watch::Sender<usize>,
+) {
     for data in rx {
-        if let Err(e) = writer.write_all(&data).and_then(|()| writer.flush()) {
+        let res = writer.write_all(&data).and_then(|()| writer.flush());
+        backlog.send_modify(|b| *b = b.saturating_sub(data.len()));
+        if let Err(e) = res {
             tracing::debug!("pty write failed: {e}");
             break;
         }
     }
+    // Anything still queued is dropped with the receiver; wake waiters.
+    backlog.send_replace(0);
 }
 
-fn reader_loop(pane: &Pane, mut reader: Box<dyn Read + Send>) {
+fn reader_loop(pane: &Pane, mut reader: Box<dyn Read + Send>, poll_fd: Option<OwnedFd>) {
     let mut buf = vec![0u8; READ_CHUNK];
     loop {
-        match reader.read(&mut buf) {
+        let mut n = match reader.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => pane.on_output(&buf[..n]),
+            Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             // EIO once the slave side is closed (Linux); normal end.
             Err(_) => break,
+        };
+        // Batch: while more output is already waiting (zero-timeout poll),
+        // keep reading into the same buffer so a burst becomes one
+        // `on_output` (one emulator lock, one state bump) instead of many
+        // small ones. Never waits, so latency is unchanged; the fd stays
+        // blocking (it is shared with the writer).
+        let mut eof = false;
+        if let Some(fd) = poll_fd.as_ref() {
+            while n < buf.len() && sys::poll_readable(fd.as_fd()) {
+                match reader.read(&mut buf[n..]) {
+                    Ok(0) => {
+                        eof = true;
+                        break;
+                    }
+                    Ok(m) => n += m,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        eof = true;
+                        break;
+                    }
+                }
+            }
+        }
+        pane.on_output(&buf[..n]);
+        if eof {
+            break;
         }
     }
     tracing::debug!(pane = pane.id.0, "pty reader finished");
@@ -625,6 +758,154 @@ fn reader_loop(pane: &Pane, mut reader: Box<dyn Read + Send>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spawn_test_pane(argv: &[&str], dir: &std::path::Path) -> Arc<Pane> {
+        let (events, _) = broadcast::channel(64);
+        Pane::spawn(
+            SpawnParams {
+                id: PaneId(1),
+                argv: argv.iter().map(|s| s.to_string()).collect(),
+                display_command: vec![],
+                cwd: dir.to_path_buf(),
+                env: vec![],
+                size: TermSize::new(80, 24),
+                title: String::new(),
+                agent: None,
+                is_agent: false,
+                worktree: None,
+                idle_after: Duration::from_secs(60),
+                scrollback_limit: 100,
+                status_file: dir.join("status"),
+            },
+            events,
+        )
+        .unwrap()
+    }
+
+    /// A program that floods terminal queries (DA) without reading stdin:
+    /// the emulator's replies must not pile up in the writer queue.
+    #[test]
+    fn reply_flood_backlog_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        // Raw mode: the line discipline blocks the writer when the input
+        // queue is full instead of discarding (canonical mode on macOS).
+        let pane = spawn_test_pane(
+            &["sh", "-c", r#"stty raw -echo; yes "$(printf '\033[c')""#],
+            dir.path(),
+        );
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        let mut max = 0;
+        while Instant::now() < deadline {
+            max = max.max(pane.pty_backlog());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let state = *pane.state_tx.borrow();
+        pane.kill(civet_proto::KillSignal::Kill);
+        assert!(state > 1, "pane produced no output");
+        assert!(
+            max <= REPLY_BACKLOG_BUDGET,
+            "reply backlog grew to {max} bytes (budget {REPLY_BACKLOG_BUDGET})"
+        );
+    }
+
+    /// A huge hook status file is read only up to MAX_STATUS_FILE_BYTES and
+    /// its message is truncated, so the event stays small.
+    #[test]
+    fn huge_status_file_is_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (events, mut rx) = broadcast::channel(64);
+        let pane = Pane::spawn(
+            SpawnParams {
+                id: PaneId(2),
+                argv: vec!["sleep".into(), "30".into()],
+                display_command: vec![],
+                cwd: dir.path().to_path_buf(),
+                env: vec![],
+                size: TermSize::new(80, 24),
+                title: String::new(),
+                agent: None,
+                is_agent: true,
+                worktree: None,
+                idle_after: Duration::from_secs(60),
+                scrollback_limit: 100,
+                status_file: dir.path().join("status"),
+            },
+            events,
+        )
+        .unwrap();
+        pane.announce();
+        let mut contents = b"needs_input\n".to_vec();
+        contents.resize(20 * 1024 * 1024, b'x');
+        std::fs::write(&pane.status_file, &contents).unwrap();
+        pane.poll_hook_file();
+        pane.kill(civet_proto::KillSignal::Kill);
+        let mut found = None;
+        while let Ok(e) = rx.try_recv() {
+            if let Event::AgentStatus(e) = e
+                && e.source == AgentStatusSource::Hook
+            {
+                found = Some(e);
+            }
+        }
+        let e = found.expect("no hook status event");
+        assert_eq!(e.status, AgentStatus::NeedsInput);
+        let msg = e.message.unwrap();
+        assert_eq!(msg.chars().count(), civet_proto::MAX_STATUS_MESSAGE_CHARS);
+    }
+
+    /// Client input over the budget is refused (not applied, seq not
+    /// recorded), later seqs wait for it, and waiters wake on kill.
+    #[test]
+    fn input_backpressure() {
+        let dir = tempfile::tempdir().unwrap();
+        // Raw mode so the line discipline blocks the writer instead of
+        // discarding; `sleep` never reads stdin.
+        let pane = spawn_test_pane(&["sh", "-c", "stty raw -echo; exec sleep 30"], dir.path());
+        std::thread::sleep(Duration::from_millis(300));
+        let client = ClientId([7; 16]);
+        let chunk = vec![b'a'; 128 * 1024];
+        let mut refused_at = None;
+        for seq in 1..=64u64 {
+            match pane.write_input(client, seq, &chunk) {
+                Ok(InputOutcome::Applied) => {}
+                Err(SessionError::Busy(_)) => {
+                    refused_at = Some(seq);
+                    break;
+                }
+                other => panic!("seq {seq}: {other:?}"),
+            }
+        }
+        let refused = refused_at.expect("input was never refused");
+        assert!(pane.pty_backlog() <= INPUT_BACKLOG_BUDGET + chunk.len());
+        assert_eq!(pane.last_input_seq(client), refused - 1);
+        // A later seq must not jump the refused one, even a tiny one.
+        assert!(matches!(
+            pane.write_input(client, refused + 1, b"x"),
+            Err(SessionError::Busy(_))
+        ));
+        assert_eq!(pane.last_input_seq(client), refused - 1);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let wait = pane.wait_input_capacity();
+        // Still full: the wait must not resolve on its own.
+        rt.block_on(async {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), pane.wait_input_capacity())
+                    .await
+                    .is_err()
+            );
+        });
+        pane.kill(civet_proto::KillSignal::Kill);
+        rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), wait)
+                .await
+                .expect("wait_input_capacity did not wake after kill");
+        });
+        assert_eq!(pane.pty_backlog(), 0);
+    }
 
     #[test]
     fn echo_ack_window() {

@@ -49,6 +49,11 @@ pub struct TestDaemon {
     pub bogus_diff_next: AtomicBool,
     pub subscribe_requests: Mutex<Vec<(PaneId, Option<u64>)>>,
     pub connections: AtomicU64,
+    /// Panes that no longer exist (SubscribePane -> NotFound).
+    pub closed_panes: Mutex<HashSet<PaneId>>,
+    /// Ignore (neither apply nor ack) this many next input frames, like a
+    /// daemon refusing input under PTY backpressure.
+    pub refuse_inputs: Mutex<u64>,
 }
 
 pub fn hello_template() -> (SessionKey, ClientId) {
@@ -76,6 +81,8 @@ impl TestDaemon {
             bogus_diff_next: AtomicBool::new(false),
             subscribe_requests: Mutex::new(Vec::new()),
             connections: AtomicU64::new(0),
+            closed_panes: Mutex::new(HashSet::new()),
+            refuse_inputs: Mutex::new(0),
         })
     }
 
@@ -171,9 +178,11 @@ impl TestDaemon {
             entry.prev = entry.token.replace(token.clone());
             let states = self.pane_state.lock().unwrap();
             let infos: Vec<SubscribeInfo> = if resumed {
+                let closed = self.closed_panes.lock().unwrap();
                 entry
                     .subs
                     .iter()
+                    .filter(|p| !closed.contains(p))
                     .map(|p| SubscribeInfo {
                         pane: *p,
                         state: states.get(p).copied().unwrap_or(1),
@@ -222,6 +231,14 @@ impl TestDaemon {
                         Request::ListRepos => {
                             let _ = tx.send(ServerMessage::Event(Event::ReposChanged)).await;
                             Ok(Response::Repos(vec![]))
+                        }
+                        Request::SubscribePane { pane, .. }
+                            if self.closed_panes.lock().unwrap().contains(&pane) =>
+                        {
+                            if let Some(st) = self.clients.lock().unwrap().get_mut(&cid) {
+                                st.subs.remove(&pane);
+                            }
+                            Err(RpcError::not_found(pane))
                         }
                         Request::SubscribePane { pane, known_state } => {
                             self.subscribe_requests
@@ -285,6 +302,22 @@ impl TestDaemon {
                     }
                 }
                 ServerIncoming::Message(ClientMessage::Input(InputMessage { pane, seq, data })) => {
+                    let refuse = {
+                        let mut n = self.refuse_inputs.lock().unwrap();
+                        let r = *n > 0;
+                        *n = n.saturating_sub(1);
+                        r
+                    };
+                    if refuse {
+                        self.clients
+                            .lock()
+                            .unwrap()
+                            .get_mut(&cid)
+                            .unwrap()
+                            .received
+                            .push((pane, seq));
+                        continue;
+                    }
                     let drop_now = {
                         let mut d = self.drop_at_seq.lock().unwrap();
                         if *d == Some(seq) {

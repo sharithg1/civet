@@ -108,6 +108,11 @@ impl ServerIdentity {
         self.cert.clone()
     }
 
+    /// PKCS#8 DER of the private key (secret; never log it).
+    pub(crate) fn key_der(&self) -> &[u8] {
+        self.key.secret_pkcs8_der()
+    }
+
     pub(crate) fn key(&self) -> PrivateKeyDer<'static> {
         PrivateKeyDer::Pkcs8(self.key.clone_key())
     }

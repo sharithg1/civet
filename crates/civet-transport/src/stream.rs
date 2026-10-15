@@ -8,7 +8,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use civet_proto::frame::read_raw_frame;
+use civet_proto::frame::{
+    MAX_HELLO_LEN, MAX_STREAM_OPEN_LEN, read_raw_frame, read_raw_frame_limited,
+};
 use civet_proto::{
     ClientHello, ClientMessage, HelloReject, HelloReply, ServerMessage, SessionKey, StreamOpen,
     decode,
@@ -41,7 +43,7 @@ where
     let mut read: BoxedRead = Box::new(read);
     let write: BoxedWrite = Box::new(write);
     let payload = tokio::time::timeout(HELLO_TIMEOUT, async {
-        let open = read_raw_frame(&mut read)
+        let open = read_raw_frame_limited(&mut read, MAX_STREAM_OPEN_LEN)
             .await?
             .ok_or_else(|| TransportError::ProtocolViolation("stream ended before hello".into()))?;
         if decode::<StreamOpen>(&open).ok() != Some(StreamOpen::Control) {
@@ -49,7 +51,7 @@ where
                 "stream link must start with StreamOpen::Control".into(),
             ));
         }
-        read_raw_frame(&mut read)
+        read_raw_frame_limited(&mut read, MAX_HELLO_LEN)
             .await?
             .ok_or_else(|| TransportError::ProtocolViolation("stream ended before hello".into()))
     })

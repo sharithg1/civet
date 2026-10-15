@@ -17,7 +17,7 @@ use tokio::sync::broadcast;
 use crate::git::{
     Git, branch_dir_name, canonical_or_same, parse_worktree_porcelain, path_string, repo_id_for,
 };
-use crate::hooks::{self, HookFiles, basename, sh_quote};
+use crate::hooks::{self, HookFiles, ShellKind, basename};
 use crate::pane::{Pane, SpawnParams, lock};
 use crate::subscription::Subscription;
 use crate::{ENV_WORKTREE, InputOutcome, KNOWN_AGENTS, SessionConfig, SessionError};
@@ -327,11 +327,15 @@ impl SessionManager {
         self.worktrees_of(&r).await
     }
 
-    /// `git worktree add [-b branch] <path> [base]`. Default path:
+    /// `git worktree add [-b branch] -- <path> [base]`. Default path:
     /// `<parent of main worktree>/<repo name>-worktrees/<branch, '/' -> '-'>`.
-    /// With `base`: create `branch` from it (AlreadyExists if the branch
-    /// exists; the new branch does not track `base`). Without: check out
-    /// `branch` if it exists, else create it from HEAD. Emits
+    /// With `base` (must resolve to a commit: `git rev-parse --verify
+    /// --end-of-options <base>^{commit}`, else InvalidArgument): create
+    /// `branch` from it (AlreadyExists if the branch exists; the new branch
+    /// does not track `base`). Without: check out `branch` if it exists, else
+    /// create it from HEAD. A newly created branch gets
+    /// `branch.<b>.remote=origin` / `branch.<b>.merge=refs/heads/<b>` when
+    /// an `origin` remote exists (no repo-wide config). Emits
     /// WorktreesChanged.
     pub async fn create_worktree(
         &self,
@@ -374,36 +378,41 @@ impl SessionManager {
         }
         let target_s = path_string(&target);
         let exists = git.branch_exists(&main, branch).await?;
+        // `base` is user input: it must name a commit, never an option.
+        let base = match base.map(str::trim) {
+            Some(b) => {
+                git.verify_commit(&main, b).await?;
+                Some(b.to_owned())
+            }
+            None => None,
+        };
         let mut args: Vec<&str> = vec!["worktree", "add"];
-        let created_branch = match base {
+        let created_branch = match &base {
             Some(b) => {
                 if exists {
                     return Err(SessionError::AlreadyExists(format!("branch {branch}")));
                 }
-                args.extend(["--no-track", "-b", branch, &target_s, b]);
+                args.extend(["--no-track", "-b", branch, "--", &target_s, b]);
                 true
             }
             None if exists => {
-                args.extend([&target_s, branch]);
+                args.extend(["--", &target_s, branch]);
                 false
             }
             None => {
-                args.extend(["-b", branch, &target_s]);
+                args.extend(["-b", branch, "--", &target_s]);
                 true
             }
         };
         git.run(&main, &args).await?;
         if created_branch {
-            // Like Orca: with no upstream, let a plain `git push` publish the
-            // branch (git >= 2.37). Best effort.
-            if let Err(e) = git
-                .run(
-                    &target,
-                    &["config", "--local", "push.autoSetupRemote", "true"],
-                )
-                .await
-            {
-                tracing::debug!("push.autoSetupRemote: {e}");
+            // Let a plain `git push` / `git status` in the new worktree use
+            // origin/<branch>: per-branch upstream config only (never
+            // repo-wide push.* settings, which would change `git push` in
+            // the user's other checkouts). Best effort; nothing without an
+            // origin remote.
+            if let Err(e) = git.set_branch_upstream(&main, branch, "origin").await {
+                tracing::debug!(branch, "branch upstream config: {e}");
             }
         }
         let canonical = path_string(&canonical_or_same(&target));
@@ -504,8 +513,15 @@ impl SessionManager {
     ///   args whose `program` contains whitespace is treated as a shell
     ///   command string: `[$SHELL, -lc, program]`.
     /// * env: daemon env + TERM, COLORTERM, CIVET_PANE_ID,
-    ///   CIVET_STATUS_FILE, CIVET_WORKTREE, then `req.env`.
-    /// * Claude Code gets `--settings <state>/hooks/claude-settings.json`.
+    ///   CIVET_STATUS_FILE, CIVET_SHIM_DIR, PATH (shim dir first),
+    ///   TERM_PROGRAM=civet, shell integration (zsh `ZDOTDIR`, bash
+    ///   `PROMPT_COMMAND`, fish `-C`) keeping the shim dir first after the
+    ///   user's rc files, CIVET_WORKTREE, then `req.env`. `-lc` commands are
+    ///   prefixed with `PATH="$CIVET_SHIM_DIR:$PATH"; `.
+    /// * Claude Code / Codex get their hooks from the PATH shims
+    ///   (`<state>/hooks/bin`); an explicit-path `claude` program (or the
+    ///   `claude` agent hint on another launcher) gets `--settings` appended
+    ///   to its argv.
     pub async fn spawn_pane(&self, req: SpawnPaneRequest) -> Result<PaneInfo, SessionError> {
         if self.inner.shutdown.load(Ordering::SeqCst) {
             return Err(SessionError::Spawn(
@@ -530,28 +546,32 @@ impl SessionManager {
             )));
         }
         let shell = self.inner.shell.clone();
+        let kind = ShellKind::of(&shell);
+        let setup = hooks::shell_setup(&shell, &self.inner.hook_files, |k| std::env::var(k).ok());
+        // Runs after the login files, so the agent shims stay first on PATH
+        // even if they prepend their own directories.
+        let prefix = kind.path_prefix();
         let agent = req.agent.clone().filter(|a| !a.trim().is_empty());
         let (argv, display, program_base) = match &req.command {
-            None => (
-                vec![shell.clone(), "-l".to_owned()],
-                vec![shell.clone(), "-l".to_owned()],
-                basename(&shell).to_owned(),
-            ),
+            None => {
+                let mut argv = vec![shell.clone(), "-l".to_owned()];
+                argv.extend(setup.interactive_args.iter().cloned());
+                (
+                    argv,
+                    vec![shell.clone(), "-l".to_owned()],
+                    basename(&shell).to_owned(),
+                )
+            }
             Some(cmd) if cmd.program.trim().is_empty() => {
                 return Err(SessionError::InvalidArgument("empty command".into()));
             }
             Some(cmd) if is_command_string(cmd) => {
+                // `claude`, `FOO=1 claude`, `cd x && claude` all reach the
+                // PATH shim, which adds the hook settings.
                 let base = basename(first_word(&cmd.program)).to_owned();
-                let mut line = cmd.program.trim().to_owned();
-                let is_claude = base == "claude" || agent.as_deref().is_some_and(|a| a == "claude");
-                if is_claude && !line.contains("--settings") {
-                    line.push_str(" --settings ");
-                    line.push_str(&sh_quote(
-                        &self.inner.hook_files.claude_settings.to_string_lossy(),
-                    ));
-                }
+                let line = cmd.program.trim().to_owned();
                 (
-                    vec![shell.clone(), "-lc".to_owned(), line.clone()],
+                    vec![shell.clone(), "-lc".to_owned(), format!("{prefix}{line}")],
                     vec![line],
                     base,
                 )
@@ -566,7 +586,7 @@ impl SessionManager {
                 let mut argv = vec![
                     shell.clone(),
                     "-lc".to_owned(),
-                    "exec \"$0\" \"$@\"".to_owned(),
+                    format!("{prefix}exec \"$0\" \"$@\""),
                     cmd.program.clone(),
                 ];
                 argv.extend(args.iter().cloned());
@@ -596,6 +616,7 @@ impl SessionManager {
                 status_file.to_string_lossy().into_owned(),
             ),
         ];
+        env.extend(setup.env);
         if let Some(w) = &req.worktree {
             env.push((ENV_WORKTREE.into(), w.0.clone()));
         }
@@ -745,6 +766,16 @@ impl SessionManager {
         msg: &InputMessage,
     ) -> Result<InputOutcome, SessionError> {
         self.pane(msg.pane)?.write_input(client, msg.seq, &msg.data)
+    }
+
+    /// After [`SessionError::Busy`] from `write_input`: resolves once the
+    /// pane's PTY input queue has room again (or the pane is gone); then
+    /// retry the same message. Awaiting this in the connection's input path
+    /// is the backpressure (the client's sends block on flow control).
+    pub async fn wait_input_capacity(&self, pane: PaneId) {
+        if let Ok(p) = self.pane(pane) {
+            p.wait_input_capacity().await;
+        }
     }
 
     /// Highest applied input seq from `client` for `pane` (0 if none).

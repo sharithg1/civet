@@ -91,13 +91,20 @@ map. Everything is re-exported from the crate root.
   `FrameDecoder` (push bytes, pull frames; use in `select!` loops), and with the
   default `tokio` feature: `read_frame` / `write_frame` / `read_raw_frame` /
   `write_raw_frame`. `read_frame` is **not cancel-safe**: use it in a dedicated
-  reader task.
+  reader task. `read_raw_frame_limited(r, max)` caps the payload length
+  (claimed lengths above it fail with `FrameTooLarge` straight from the
+  header); frames read before authentication use `MAX_STREAM_OPEN_LEN`
+  (64 B) for `StreamOpen` and `MAX_HELLO_LEN` (64 KiB) for the hello. Read
+  buffers grow as bytes arrive; the claimed length is never pre-allocated.
 - Postcard is positional: within protocol v1, enum variants may only be
   appended; struct fields may not change. No `#[serde(tag/untagged/flatten/
   skip_serializing_if)]` in proto types.
 - JSON form (for the desktop UI) is serde's default external tagging with
   camelCase names: unit variants are strings (`"listPanes"`), others are
-  one-key objects (`{"agentStatus": {...}}`); struct fields are camelCase;
+  one-key objects (`{"agentStatus": {...}}`); struct fields are camelCase,
+  including the fields of struct variants (`rename_all_fields` on `Request`,
+  `Response`, `Event`, `StreamOpen`, `ServerMessage`, e.g.
+  `{"paneExited": {"pane": 3, "exitCode": 1}}`); postcard is unaffected;
   `SessionKey` / `CertFingerprint` / `ResumeToken` / `ClientId` are lowercase
   hex strings; `Vec<u8>` payload fields serialize as JSON arrays of numbers
   (avoid sending those over JSON; see the desktop binary channel).
@@ -107,7 +114,7 @@ map. Everything is re-exported from the crate root.
 
 | Purpose | Types |
 |---|---|
-| Bootstrap JSON line | `BootstrapInfo { civet_bootstrap, daemon_version, proto_version, udp_port, session_key, cert_fingerprint, pid, reattached }`, `to_json_line`, `find_in_output` (skips MOTD noise, takes the last valid line), `BOOTSTRAP_FORMAT` |
+| Bootstrap JSON line | `BootstrapInfo { civet_bootstrap, daemon_version, proto_version, udp_port, session_key, cert_fingerprint, pid, reattached, available_version?, live_panes?, upgrade_available }` (the last three are set only in `civetd bootstrap` output; null/false otherwise), `to_json_line`, `find_in_output` (skips MOTD noise, takes the last valid line), `BOOTSTRAP_FORMAT` |
 | Secrets/ids | `SessionKey` (32 B, `ct_eq`), `CertFingerprint` (SHA-256 of cert DER), `ResumeToken` (32 B, `ct_eq`), `ClientId` (16 B, per installation), `PaneId(u64)`, `RepoId(String)`, `WorktreeId(String)` (= canonical path), `RequestId = u64` |
 | Handshake | `ClientHello { magic, proto_version, session_key, client_id, client_name, client_version, resume: Option<ResumeToken> }`, `ClientHello::validate(&key) -> Result<(), HelloReject>`, `hello::peek_hello_version(&payload)`, `HelloReply::{Accepted(ServerHello), Rejected(HelloReject)}`, `ServerHello { proto_version, daemon_version, instance_id, resumed, server_time_ms, resume_token, resumed_subscriptions: Vec<SubscribeInfo> }`, `RejectReason::{BadKey, VersionMismatch, BadMagic, ShuttingDown}` |
 | Stream header | `StreamOpen::{Control, Screen { pane }, Scrollback}`: first frame on every QUIC stream (and on the stdio link: `Control`) |
@@ -117,7 +124,7 @@ map. Everything is re-exported from the crate root.
 | Spawn | `SpawnPaneRequest { worktree, cwd, command: Option<CommandSpec>, env: Vec<(String,String)>, size: TermSize, title, agent }`, `CommandSpec { program, args }`, `LaunchAgentRequest { repo, branch, base, worktree_path, command, env, size, title, agent }`, `KillSignal::{Hangup (default), Terminate, Kill}` |
 | Info | `RepoInfo`, `WorktreeInfo`, `PaneInfo { id, worktree, cwd, command, title, size, agent, status, exit_code, exited, created_at_ms, state }`, `DaemonInfo`, `SubscribeInfo { pane, state, size, history_lines, last_input_seq }` |
 | Events (pushed to every client) | `Event::{PaneCreated(PaneInfo), PaneExited{pane, exit_code}, PaneClosed{pane}, PaneTitle{pane, title}, PaneResized{pane, size}, AgentStatus(AgentStatusEvent), Bell{pane}, ReposChanged, WorktreesChanged{repo}, Clipboard{pane, text}}`, `Event::pane()`. `Clipboard` (OSC 52 set, appended in 0.1.1 within protocol 1) is the exception: only sent to clients subscribed to the pane whose `client_version` is at least `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` (older clients cannot decode it), at most `MAX_CLIPBOARD_BYTES` (1 MiB), never replayed on resume / Full |
-| Terminal | `TermSize { cols, rows, pixel_width, pixel_height }`, `InputMessage { pane, seq, data }`, `ScreenUpdate { pane, state, base_state, kind: UpdateKind::{Full, Diff}, acked_input_seq, size, history_lines, history_start, payload }`, `ScreenAck { pane, state }` |
+| Terminal | `TermSize { cols, rows, pixel_width, pixel_height }` (`sanitized()` clamps to 1x1..=`MAX_TERM_COLS` x `MAX_TERM_ROWS` = 1000 x 500), `InputMessage { pane, seq, data }`, `ScreenUpdate { pane, state, base_state, kind: UpdateKind::{Full, Diff}, acked_input_seq, size, history_lines, history_start, payload }`, `ScreenAck { pane, state }` |
 | Scrollback | `ScrollbackRequest { req_id, pane, query }`, `ScrollbackQuery::{Before { end: Option<u64>, limit }, Range { start, end }}`, `ScrollbackPage { req_id, pane, start, lines: Vec<ScrollbackLine>, oldest_available, end_available }`, `ScrollbackLine { vt, wrapped }` |
 | Agent status | `AgentStatus::{Unknown (default), Running, NeedsInput, Done, Idle}` (`FromStr` is lenient), `AgentStatusSource::{EscapeCode, Hook, Heuristic, ProcessExit, Client}`, `AgentStatusEvent { pane, status, previous, source, message, at_ms }`, `parse_status_file(&str) -> Option<(AgentStatus, Option<String>)>` |
 | Constants | `PROTOCOL_VERSION = 1`, `MIN_PROTOCOL_VERSION`, `MAGIC = b"CIVT"`, `ALPN = b"civet/1"`, `MAX_INFLIGHT_UPDATES = 8`, `MAX_REPLAY_LINES = 2000`, `FULL_REPLAY_LINES = 1000`, `ECHO_ACK_DELAY_MS = 50`, `ENV_PANE_ID`, `ENV_STATUS_FILE`, `ENV_STATE_DIR`, `STATE_DIR_NAME`, `MAX_CLIPBOARD_BYTES` (1 MiB), `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` ("0.1.1"), `now_ms()`, `is_compatible(v)` |
@@ -183,6 +190,10 @@ pub enum TransportError {
     /// gone; ClientSession reconnects on its own.
     #[error("connection closed: {0}")]
     Closed(String),
+    /// The daemon closed the connection with code 3: a newer connection with
+    /// the same ClientId took over.
+    #[error("connection taken over by another connection of this client: {0}")]
+    Replaced(String),
 }
 
 impl TransportError {
@@ -235,10 +246,19 @@ verification). TLS 1.3 only, ALPN `civet_proto::ALPN`. Use quinn's
 | Connect (handshake + hello) timeout | 5 s (client config) | |
 | Daemon hello read timeout | 10 s | Then drop the connection. |
 
-Errors mapping quinn close reasons into `TransportError::Closed`. Application
-close codes: 0 = normal (`Goodbye`), 1 = hello rejected, 2 = protocol
-violation, 3 = replaced by a newer connection of the same client, 4 = daemon
-shutting down.
+Errors mapping quinn close reasons into `TransportError::Closed`
+(`Replaced` for code 3). Application close codes: 0 = normal (`Goodbye`),
+1 = hello rejected, 2 = protocol violation, 3 = replaced by a newer
+connection of the same client, 4 = daemon shutting down. The daemon keeps
+one live connection per `ClientId`, so every client app needs its own id
+(desktop: `client-id-desktop`; civet-cli: random per run unless
+`--client-id`).
+
+Stateless resets: the daemon's endpoint uses a reset key derived from the
+persisted TLS identity key (HMAC-SHA256 with a fixed label; never the
+per-start session key), so a restarted daemon's stateless resets are
+recognized by clients of the previous instance and they notice the dead
+connection at once instead of after a timeout.
 
 ### 2.4 Server side
 
@@ -281,7 +301,8 @@ impl IncomingConnection {
     /// key with `ClientHello::validate`. On failure it sends
     /// `HelloReply::Rejected` itself, closes, and returns `Err(Rejected)`.
     /// On success the hello is NOT yet answered: the daemon decides about
-    /// resume and calls `ServerConnection::accept`.
+    /// resume and calls `ServerConnection::accept`. Pre-auth frames are
+    /// size-limited (`MAX_STREAM_OPEN_LEN`, `MAX_HELLO_LEN`).
     pub async fn handshake(self) -> Result<ServerConnection, TransportError>;
 }
 
@@ -479,8 +500,43 @@ pub trait Dialer: Send + Sync + 'static {
     ) -> futures::future::BoxFuture<'_, Result<Connected, TransportError>>;
     /// Called on network change; QUIC rebinds its endpoint. Default: Ok(()).
     fn rebind(&self) -> std::io::Result<()> { Ok(()) }
+    /// Kind produced (failover dialer: the preferred kind).
     fn kind(&self) -> TransportKind;
+    /// Session hint: link in trouble since `since` (stall / loss), or
+    /// recovered (None). Default: ignored.
+    fn link_trouble(&self, since: Option<std::time::Instant>) {}
+    /// While connected over a link whose kind != `kind()` (a fallback), the
+    /// session calls `dial_preferred` this often and adopts the result on
+    /// success (resume). Default None.
+    fn upgrade_interval(&self) -> Option<std::time::Duration> { None }
+    /// Dial only the preferred link. Default: `dial`.
+    fn dial_preferred(&self, hello: ClientHello, pipelined: Vec<ClientMessage>)
+        -> BoxFuture<'_, Result<Connected, TransportError>>;
 }
+
+/// QUIC first, fallback (SSH stdio tunnel) when it fails; back to QUIC when
+/// it works again (`failover.rs`).
+pub struct FailoverDialer { /* .. */ }
+impl FailoverDialer {
+    pub fn new(primary: Arc<dyn Dialer>, fallback: Arc<dyn Dialer>, config: FailoverConfig) -> Self;
+    pub fn on_fallback(&self) -> bool;
+}
+pub struct FailoverConfig {
+    pub primary_timeout: Duration,         // 3 s, bound on one primary dial
+    pub fail_over_after_attempts: u32,     // 2 consecutive failed primary dials
+    pub fail_over_after: Duration,         // 3 s of trouble (or one 3 s attempt)
+    pub probe_interval: Duration,          // 10 s, retry the primary while on the fallback
+}
+```
+
+`FailoverDialer::dial`: on the fallback → fallback. Otherwise the primary;
+after `fail_over_after_attempts` failures or an attempt that took
+`fail_over_after`, the fallback in the same call (so a first connect with
+UDP blocked also succeeds). Once the session reports trouble lasting
+`fail_over_after`, it races primary and fallback (first hello wins).
+Fatal errors (`is_fatal`, `Rejected`) are returned as-is.
+
+```rust
 
 pub struct QuicDialer { pub client: std::sync::Arc<QuicClient>, pub config: QuicClientConfig }
 impl Dialer for QuicDialer { /* .. */ }
@@ -587,7 +643,8 @@ impl ClientSession {
     pub async fn unsubscribe(&self, pane: PaneId) -> Result<(), RequestError>;
 
     /// Assign the next seq for this pane, buffer the bytes until acked, and
-    /// send. Never blocks on the network; returns the seq.
+    /// send. Never blocks on the network; returns the seq, or 0 (nothing
+    /// buffered or sent) for a pane known to be closed.
     pub fn send_input(&self, pane: PaneId, data: Vec<u8>) -> u64;
 
     pub async fn fetch_scrollback(&self, pane: PaneId, query: ScrollbackQuery)
@@ -629,7 +686,29 @@ Required behavior:
    - `instance_id` changed: daemon restarted; clear all pane state, emit
      `Connected { instance_changed: true, .. }`.
    - `Rejected(BadKey)`: `LinkState::Failed { needs_bootstrap: true }`, stop.
+   - A pipelined re-subscribe answered `NotFound` (the pane closed while
+     the client was away, so its `PaneClosed` was never delivered): drop the
+     pane's state and emit `SessionEvent::Event(Event::PaneClosed)`; later
+     `send_input` for it returns 0 without buffering.
    Always store the new `resume_token`.
+   - **Replaced** (QUIC close code 3) while no dial of its own is in flight:
+     another connection with this `ClientId` took over. The session redials
+     once after `REPLACED_RETRY_DELAY` (1 s); a second takeover within
+     `REPLACED_WINDOW` (30 s) ends it with `LinkState::Failed { reason:
+     REPLACED_REASON, needs_bootstrap: false }`, so two clients sharing an
+     id cannot reconnect-storm. From the second consecutive connection lost
+     less than 500 ms after it was established, the reconnect backoff
+     escalates instead of redialing at once (covers stream links, which
+     carry no close code).
+   - **Input retransmit.** Unacked input of a pane that saw no ack progress
+     for `INPUT_RETRANSMIT_AFTER` (1 s) is resent on the same connection
+     (at most 64 KiB per period; the daemon dedups by seq). This is how
+     input refused under daemon PTY backpressure gets applied.
+   - **Failover.** With a dialer whose `upgrade_interval()` is Some (the
+     `FailoverDialer`), while connected over a non-preferred link the
+     session periodically dials `dial_preferred` (resume token + pipelined
+     re-subscribes) and adopts it on success. `LinkState::Connected.transport`
+     is the kind of the current connection.
 5. **Stall detection.** Track `last_rx` (any frame). If nothing was received
    for `heartbeat`, send `Ping`. If a ping is unanswered for `stall_after`,
    go `Recovering` and call `dialer.rebind()`. If still recovering after
@@ -683,7 +762,10 @@ impl PaneTerminal {
     pub fn state(&self) -> u64;
     pub fn size(&self) -> TermSize;
     /// Resize the emulator (reflow as alacritty does). Bumps state if changed.
-    /// Returns Err for 0 cols/rows.
+    /// Sizes are clamped to at least 2x1 and at most
+    /// `civet_proto::{MAX_TERM_COLS, MAX_TERM_ROWS}` (1000 x 500); Err for 0
+    /// cols/rows. `new()`
+    /// clamps `TermConfig::size` the same way.
     pub fn resize(&mut self, size: TermSize) -> Result<bool, TermError>;
     pub fn title(&self) -> &str;
     pub fn alt_screen(&self) -> bool;
@@ -697,6 +779,10 @@ impl PaneTerminal {
     /// Diff from `base` to the current state (or Full when `base` is None or
     /// cannot be diffed). Takes a snapshot internally.
     pub fn encode_update(&mut self, base: Option<&Snapshot>) -> EncodedUpdate;
+    /// Recent snapshots by state (ring of `DEFAULT_SNAPSHOT_RING` = 2; only
+    /// the last fallback of `Subscription::reset_baseline`, a miss is a Full).
+    pub fn snapshot_at(&self, state: u64) -> Option<std::sync::Arc<Snapshot>>;
+    pub fn set_snapshot_retention(&mut self, n: usize);
 
     pub fn scrollback(&self) -> &ScrollbackStore;
     /// Serve a ScrollbackQuery (clamped to what is retained).
@@ -870,6 +956,14 @@ Payload contract (what `encode_full` / `encode_diff` must produce; see also
   into the scrollback, then set modes, paint every visible cell, set title
   (OSC 2), cursor shape (DECSCUSR), position and visibility; SGR reset at the
   end. `history_start` = first replayed line.
+- **Byte budget** (both kinds): the replay is also capped at
+  `civet_term::MAX_REPLAY_BYTES` (8 MiB, VT bytes); the *oldest* lines are
+  dropped first and `history_start` advances, so the client sees a gap it
+  fills with a scrollback fetch. Every payload is at most
+  `civet_term::MAX_UPDATE_BYTES` (12 MiB, below `MAX_FRAME_LEN`): a Diff over
+  it is replaced by a Full; a Full over it drops the replay, then as a last
+  resort repaints text only (no SGR/hyperlinks/combining marks, title cut to
+  1 KiB). Callers can rely on `encode_*` output always fitting in a frame.
 - **Diff** (`from` → `to`): applied to an xterm.js whose *visible buffer*
   equals `from`, results in `to`, and appends to scrollback exactly lines
   `history_start..to.history_lines`, where `history_start =
@@ -958,9 +1052,14 @@ pub enum SessionError {
     Spawn(String),
     #[error("i/o: {0}")]
     Io(#[from] std::io::Error),
+    /// Backpressure from `write_input`: the pane's PTY queue is full. The
+    /// input was not applied or recorded; await `wait_input_capacity` and
+    /// retry the same message.
+    #[error("busy: {0}")]
+    Busy(String),
 }
 
-impl From<&SessionError> for RpcError { /* NotFound->NotFound, ..., Io->Io */ }
+impl From<&SessionError> for RpcError { /* NotFound->NotFound, ..., Io->Io, Busy->Internal */ }
 impl From<SessionError> for RpcError { /* same */ }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1024,7 +1123,18 @@ impl SessionManager {
     /// seq and the time written (for echo-ack). Gaps are allowed (logged).
     /// Writes go through a per-pane writer thread/channel (never block the
     /// caller on a full PTY). Error if the pane exited.
+    /// Byte budget: while more than 1 MiB is queued for the PTY (the process
+    /// is not reading stdin), returns `Err(Busy)` without recording the seq;
+    /// after a Busy, later seqs from that client are also Busy until the
+    /// refused seq (`last_input_seq + 1`) is retried, so input is never
+    /// reordered or lost. A single message larger than the budget is
+    /// accepted when the queue is empty.
     pub fn write_input(&self, client: ClientId, msg: &InputMessage) -> Result<InputOutcome, SessionError>;
+    /// Resolves once the pane's PTY queue is at or below 512 KiB, or the
+    /// pane's writer is gone (exit/kill/unknown pane). The daemon awaits this
+    /// in the connection's input path and then retries: that stalls reading
+    /// the client's control stream, so flow control pushes back to the client.
+    pub async fn wait_input_capacity(&self, pane: PaneId);
     pub fn last_input_seq(&self, client: ClientId, pane: PaneId) -> u64;
     /// Forget all per-client input seqs (fresh, non-resumed session).
     pub fn reset_client(&self, client: ClientId);
@@ -1097,9 +1207,13 @@ Process launch (`spawn_pane`):
   `req.env` (overrides).
 - The child gets its own session/process group (portable-pty does setsid);
   `KillPane` signals the group (`libc::killpg`).
-- One reader thread per pane: `read()` up to 64 KiB → lock terminal →
-  `feed()` → write `pty_replies` back → handle title/bell/OSC → publish new
-  state on a `watch::Sender<u64>` → run status detection. A waiter thread
+- One reader thread per pane: blocking `read()`, then keep reading while a
+  zero-timeout `poll()` says more is ready (no timers, fd stays blocking),
+  up to 64 KiB per batch → lock terminal → `feed()` → write `pty_replies`
+  back (dropped while more than 64 KiB is queued for the PTY, so a program
+  flooding DA/DSR queries without reading stdin cannot grow the daemon) →
+  run status detection → handle title/bell/OSC → publish new state on a
+  `watch::Sender<u64>`. A waiter thread
   `wait()`s for exit → `PaneExited`, status Done.
 - Exited panes stay listed (screen and scrollback readable) until
   `kill_pane`.
@@ -1110,27 +1224,46 @@ updates `PaneInfo.status`):
 | Signal | Applies to | Result | Source |
 |---|---|---|---|
 | Process exit | all panes | `Done` (message `"exit <code>"`) | ProcessExit |
-| Hook file `$CIVET_STATUS_FILE` changed (poll mtime+len every 250 ms, parse with `civet_proto::parse_status_file`) | all panes | parsed status + message | Hook |
-| OSC 9 / OSC 777 notification | all panes | `NeedsInput` if body matches `/permission\|approve\|allow\|waiting\|input\|confirm\|\?$/i`, else `Done`; message = body | EscapeCode |
+| Hook file `$CIVET_STATUS_FILE` changed (poll inode+mtime+len every 250 ms, read at most `MAX_STATUS_FILE_BYTES` = 4 KiB, parse with `civet_proto::parse_status_file`: message control chars stripped, truncated to `MAX_STATUS_MESSAGE_CHARS` = 500) | all panes (makes the pane an agent pane) | parsed status + message | Hook |
+| OSC 9 / OSC 777 notification | panes without hook reports | `NeedsInput` if body matches `/permission\|approve\|allow\|waiting\|input\|confirm\|\?$/i`, else `Done`; message = body | EscapeCode |
 | OSC 133;C | all panes | `Running` | EscapeCode |
 | OSC 133;D / 133;A | non-agent panes | `Idle` | EscapeCode |
 | BEL, then no output for 1 s | agent panes, status Running | `NeedsInput` | Heuristic |
 | Output not attributable to echo (more than 64 bytes within 1 s, ignoring output within 150 ms after input) | agent panes | `Running` | Heuristic |
-| No output for `idle_after` | agent panes, status Running | `Idle` | Heuristic |
+| No output for `idle_after` | agent panes without hooks, status Running | `Done` if the run lasted ≥ 10 s and the pane never had a hook report, else `Idle` | Heuristic |
+| No output for 30 s | panes with a hook `running`/`needs_input`, status Running | `Idle` (interrupted turn) | Heuristic |
+| Input, then > 64 bytes of output within 2 s | agent panes, status NeedsInput | `Running` (prompt answered) | Heuristic |
 | `SetAgentStatus` | all | given | Client |
 
-Precedence: once a pane has received a Hook status, heuristics stop
-applying to it (EscapeCode, ProcessExit and Client still apply). "Agent
+Precedence: once a pane has received a Hook `running` or `needs_input`, heuristics stop
+applying to it except the two fallbacks above (EscapeCode marks,
+ProcessExit and Client still apply). A pane with only `done` hook reports
+(Codex `notify`) keeps the heuristics. "Agent
 pane" = `agent.is_some()` or the program basename is one of `claude`,
 `codex`, `gemini`, `aider`, `opencode`, `amp`, `cursor-agent`, `goose`.
 
-Agent hook installation (MVP): for `agent == Some("claude")` (or program
-basename `claude`) and no `--settings` in args, append
-`--settings <state_dir>/hooks/claude-settings.json` (written by the session
-at startup) that registers Claude Code hooks writing to
-`$CIVET_STATUS_FILE`: `UserPromptSubmit`/`PreToolUse` → `running`,
-`Notification` → `needs_input` + message, `Stop` → `done`. Other agents rely
-on OSC/heuristics for now.
+Agent hook installation: the session writes `<state_dir>/hooks/`
+(`civet-status-hook.sh`, `claude-settings.json`, PATH shims `bin/claude` and
+`bin/codex`, zsh `ZDOTDIR` shim `zsh/.zshenv`). Every pane gets
+`CIVET_SHIM_DIR=<state_dir>/hooks/bin` first on `PATH`, `TERM_PROGRAM=civet`,
+and shell integration that keeps the shim dir first after the user's rc
+files (zsh `ZDOTDIR` + `precmd`, bash `PROMPT_COMMAND`, fish `-C`; `-lc`
+commands are prefixed with `PATH="$CIVET_SHIM_DIR:$PATH"; `). The `claude`
+shim execs the real `claude --settings <claude-settings.json>` unless
+`--settings` is given; the `codex` shim adds `-c notify=[<hook>,"done",
+"--codex-notify"]` unless the user configured `notify`. Neither touches
+`~/.claude` / `~/.codex`. Claude hooks: `UserPromptSubmit`/`PostToolUse` →
+`running`, `PreToolUse` → `running` "soft" (never replaces a pending
+`needs_input`), `Notification` → `needs_input` + message (`idle_prompt` /
+`auth_success` ignored), `Stop` → `done`. Argv launches of an explicit-path
+`claude` (or the `claude` agent hint on another launcher) get `--settings`
+appended to argv. Details: `crates/civet-session/HOOKS.md`.
+
+Worktrees: `create_worktree` validates `base` with `git rev-parse --verify
+--quiet --end-of-options <base>^{commit}` and passes `--` before the path; a
+newly created branch gets only `branch.<b>.remote=origin` /
+`branch.<b>.merge=refs/heads/<b>` (when `origin` exists), never repo-wide
+`push.*` config.
 
 Tests to include: spawn `sh -c 'printf hello'` and see "hello" in a
 subscription's Full update; input dedup (same seq twice → Duplicate);
@@ -1160,7 +1293,7 @@ src/bin/civet-cli.rs test client
 
 ```
 civetd serve        [--state-dir DIR] [--bind IP] [--port-range 60001-60999] [--detach]
-civetd bootstrap    [--state-dir DIR] [--replace]
+civetd bootstrap    [--state-dir DIR] [--replace] [--bind IP]
 civetd stdio-tunnel [--state-dir DIR]
 civetd version      [--json]
 ```
@@ -1176,8 +1309,14 @@ civetd version      [--json]
   default `info`). On SIGTERM/SIGINT: send `ServerMessage::Goodbye` to all
   clients, `SessionManager::shutdown`, remove `daemon.json` and the socket.
 - **bootstrap** (run over SSH by clients): if `daemon.json` exists, its pid is
-  alive, the lock is held, and the unix socket answers a hello+Ping within
-  2 s → print its line with `reattached: true` and exit 0. If that daemon's
+  alive and the unix socket answers a hello+Ping+ListPanes within 2 s →
+  print its line with `reattached: true` and exit 0 (the flock is only
+  probed when no healthy daemon is advertised, and never while waiting for
+  a just-started `serve`, which could otherwise lose the lock race). The
+  printed line also carries `available_version` (this binary), `live_panes`
+  and `upgrade_available` (an older compatible daemon was kept because it
+  has panes; `--replace` restarts it). `--bind IP` is passed to a `serve`
+  it starts (local clients use 127.0.0.1). If that daemon's
   `proto_version` is incompatible (or `--replace`): if it has no panes
   (checked via `ListPanes`), SIGTERM it and wait up to 5 s; if it has panes
   and no `--replace`, exit 4 with a message on stderr. Otherwise spawn
@@ -1204,7 +1343,7 @@ pub struct DaemonOptions {
     pub port_range: std::ops::RangeInclusive<u16>,
 }
 pub async fn serve(opts: DaemonOptions) -> anyhow::Result<()>;
-pub async fn bootstrap(state_dir: &std::path::Path, replace: bool) -> anyhow::Result<civet_proto::BootstrapInfo>;
+pub async fn bootstrap(state_dir: &std::path::Path, replace: bool, bind: Option<std::net::IpAddr>) -> anyhow::Result<civet_proto::BootstrapInfo>;
 pub async fn stdio_tunnel(state_dir: &std::path::Path) -> anyhow::Result<()>;
 ```
 
@@ -1229,11 +1368,31 @@ Per accepted connection (QUIC or unix socket, same code):
      `Subscription`, `reset_baseline(known_state)`, (re)start its send task
      (`open_screen_stream(pane)` then loop `next()` → `ScreenStream::send` or
      `ServerSender::send(InputAck)`), reply `Subscribed(info)`.
-   - `Input` → `write_input(client_id, &msg)`.
+   - `Input` → `write_input(client_id, &msg)`. `SessionError::Busy` (PTY
+     write backlog full) is neither applied nor acked; the client
+     retransmits it.
    - `Ack` → `subscription.ack(state)`.
    - `Scrollback` → `responder.respond(sessions.fetch_scrollback(..))`.
    - `Goodbye` → drop the `ClientState` immediately.
 5. On disconnect: stop send tasks, keep `ClientState` for 24 h (resume TTL).
+   Expiry checks `conn.is_none()` and the TTL and removes the state under
+   one lock.
+
+Hardening:
+
+- At most `MAX_PENDING_HANDSHAKES` (32) connections per listener may be in
+  their unauthenticated handshake + hello; more are refused.
+- `ResizePane` / `SpawnPane` / `LaunchAgent` sizes are capped at
+  `MAX_TERM_COLS` x `MAX_TERM_ROWS` before they reach the session.
+- Event forwarding: an event that cannot be encoded is logged and skipped
+  (only a closed connection ends the task). If the connection lags behind
+  the daemon's event broadcast, the missed events are replaced by a resync:
+  `PaneClosed` for every pane the client was told about that is gone,
+  `PaneCreated(info)` for every live pane (an upsert carrying title, size,
+  status, exit), then `ReposChanged`.
+- Screen send task: an update that cannot be framed (too large) is not
+  fatal: `reset_baseline(None)` and send a Full instead (backing off if it
+  keeps failing).
 
 ### 5.3 Client bootstrap module (`civetd::bootstrap`, no `server` feature)
 
@@ -1257,7 +1416,15 @@ pub enum BinarySource {
     File(std::path::PathBuf),
     /// `civetd` next to the current executable (dev: same-OS remotes only).
     CurrentExeSibling,
+    /// Try in order; first file with the right embedded version wins.
+    Search(Vec<BinarySource>),
 }
+// BinarySource::from_env() = Search[bundled `civet-dist` resource dir (if
+// any), $CIVET_DIST_DIR, ~/.civet/dist, CurrentExeSibling];
+// BinarySource::with_bundled(Some(dir)) puts an explicit resource dir first.
+// The chosen file is logged (tracing info). Every civetd binary embeds
+// `\0CIVETD_VERSION=<version>\0` (bootstrap::VERSION_MARKER,
+// bootstrap::binary_version, bootstrap::check_binary).
 
 #[derive(Debug, Clone)]
 pub struct BootstrapOptions {
@@ -1298,6 +1465,15 @@ pub enum BootstrapError {
     Io(#[from] std::io::Error),
     #[error("timed out: {0}")]
     Timeout(&'static str),
+    /// Local dist file has the wrong version / platform (tells the user to
+    /// run scripts/build-remote.sh --install). Nothing uploaded.
+    WrongBinary { path: String, expected: String, got: String },
+    /// Uploaded file failed `civetd version` on the remote (removed again).
+    UploadRejected { expected: String, got: String },
+    /// Remote state dir or bin/ is a symlink / not owned by the login user.
+    UnsafeRemoteDir(String),
+    /// Remote path contains ! \ ' " ` or control characters.
+    InvalidRemotePath(String),
 }
 
 /// Progress callback steps (desktop shows them).
@@ -1312,9 +1488,17 @@ pub async fn bootstrap_ssh(
 
 /// Run `<civetd> bootstrap [--state-dir]` as a local child (no ssh); dial
 /// address 127.0.0.1. Used by `civet-cli --local` and desktop "Local".
+/// Runs `bootstrap --bind 127.0.0.1` (a started daemon is loopback-only).
 pub async fn bootstrap_local(
     civetd: &std::path::Path,
     state_dir: Option<&std::path::Path>,
+) -> Result<Bootstrapped, BootstrapError>;
+/// Same with `--replace` (restart after `upgrade_available`). Over SSH set
+/// `BootstrapOptions::replace`.
+pub async fn bootstrap_local_with(
+    civetd: &std::path::Path,
+    state_dir: Option<&std::path::Path>,
+    replace: bool,
 ) -> Result<Bootstrapped, BootstrapError>;
 
 /// Spawn `ssh <target> <remote_binary> stdio-tunnel` and return its
@@ -1338,19 +1522,31 @@ pub fn target_triple(uname_s: &str, uname_m: &str) -> Result<String, BootstrapEr
 Bootstrap procedure:
 
 1. Every ssh call uses `-o BatchMode=yes -o ControlMaster=auto
-   -o ControlPath=~/.civet/ssh/%C -o ControlPersist=60` (create
-   `~/.civet/ssh` mode 0700 locally) so the 2–3 calls and a later stdio
+   -o 'ControlPath="~/.civet/ssh/%C"' -o ControlPersist=60` (create
+   `~/.civet/ssh` mode 0700 locally; the path is double-quoted for ssh with
+   `%` doubled; if the socket path would exceed the unix socket limit, 104
+   bytes on macOS, sharing is turned off with a warning:
+   `ControlMaster=no`, `ControlPath=none`) so the 2–3 calls and a later stdio
    tunnel share one SSH login. Desktop never prompts for passwords; key/agent
    auth is required in the MVP.
 2. **Probe** (one ssh call; POSIX sh script passed as the remote command):
    print `uname -s`, `uname -m`, then whether
-   `~/.civet/bin/civetd-<our version>` exists and is executable. If it exists,
-   the same script runs it with `bootstrap` and its stdout is parsed with
-   `BootstrapInfo::find_in_output` (done in one round trip).
-3. **Upload** if missing: pick the binary for the triple, then
+   `~/.civet/bin/civetd-<our version>` exists, is executable and owned by the
+   user in a non-symlink owned state dir, and its `version` output starts
+   with `civetd <our version> `. If so, the same script runs it with
+   `bootstrap` and its stdout is parsed with `BootstrapInfo::find_in_output`
+   (done in one round trip); otherwise (stale, truncated, wrong arch) it is
+   reinstalled. Remote paths with `! \ ' " \``, newlines or control
+   characters are refused (csh/fish login shells).
+3. **Upload** if missing: pick the binary for the triple and check its
+   embedded version marker and executable format/arch locally
+   (`WrongBinary`), then
    `ssh … 'mkdir -p ~/.civet/bin && cat > ~/.civet/bin/.civetd-<ver>.tmp &&
    chmod 755 … && mv … ~/.civet/bin/civetd-<ver> && ln -sf civetd-<ver>
-   ~/.civet/bin/civetd'` with the binary on stdin. Binaries are
+   ~/.civet/bin/civetd'` with the binary on stdin; the script refuses a
+   symlinked / foreign-owned state dir or `bin/` (exit 87,
+   `UnsafeRemoteDir`) and runs the temp file's `version` before the `mv`
+   (mismatch: remove it, exit 86, `UploadRejected`). Binaries are
    version-suffixed so a running daemon's file is never overwritten.
 4. **Start**: `ssh … '~/.civet/bin/civetd-<ver> bootstrap'` (with
    `--replace` / `--state-dir` when requested) and parse the line.
@@ -1368,7 +1564,7 @@ civet-cli [CONNECT] [--client-id HEX] [--rebind-every SECS] [-v] <COMMAND>
 
 CONNECT (exactly one; default --local):
   --ssh DEST [--ssh-port N] [--ssh-arg ARG]... [--dist DIR] [--replace]
-  --local [--civetd PATH] [--state-dir DIR]
+  --local [--civetd PATH] [--state-dir DIR] [--replace]
   --bootstrap-line JSON --host IP       dial a printed bootstrap line directly
   --stdio                               (with --ssh/--local) skip QUIC; use the
                                         stdio tunnel (local: `civetd stdio-tunnel`)
@@ -1391,8 +1587,11 @@ COMMANDS
 ```
 
 - Output: JSON (pretty) for data commands, so tests can parse it.
-- `--client-id` default: persisted in `~/.civet/client-id` (hex), generated on
-  first use.
+- `--client-id` default: a random id per run (two clients sharing an id
+  kick each other off the daemon; pass one only to resume a specific
+  client's state).
+- Without `--stdio`, `--ssh` connects with a `FailoverDialer` (QUIC, SSH
+  tunnel when UDP is or becomes blocked, back to QUIC when it works).
 - `attach`: crossterm raw mode + alternate screen on the local terminal;
   `ResizePane` to the local size on start and on resize events; stdin bytes →
   `ClientSession::send_input`; `SessionEvent::Screen` payloads written to
@@ -1559,10 +1758,15 @@ later: macOS `NSWorkspaceDidWakeNotification`.)
 
 ### 6.5 Transport choice
 
-`transport: "auto"` (default): bootstrap over SSH, try QUIC with a 3 s
-connect timeout, else fall back to `StreamDialer` over
-`civetd::bootstrap::open_ssh_tunnel` and emit `bootstrap-progress` step
-`"fallback"`. Remember the choice per host for the app session.
+`transport: "auto"` (default): bootstrap over SSH, then connect with a
+`FailoverDialer` (QUIC with a 3 s connect timeout, `StreamDialer` over
+`civetd::bootstrap::open_ssh_tunnel` as the fallback). If the first
+connection ends up on the tunnel, emit `bootstrap-progress` step
+`"fallback"`. The failover dialer also moves the session to the tunnel
+when UDP gets blocked mid-session and back to QUIC when it works again
+(probe every 10 s), so "auto" is kept for re-bootstraps. `"quic"` = QUIC
+only, `"ssh"` = tunnel only. The desktop's client id is persisted in
+`~/.civet/client-id-desktop` (not shared with civet-cli).
 
 ### 6.6 Local-echo prediction (phase 2, week 5+)
 
@@ -1602,9 +1806,13 @@ Remote/host side (`~/.civet`, or `$CIVET_STATE_DIR`):
 | `repos.json` | registered repos `[{ "id", "name", "path" }]` |
 | `status/<pane>.status` | per-pane hook file (`CIVET_STATUS_FILE`) |
 | `hooks/claude-settings.json` | generated Claude Code hook settings |
+| `hooks/civet-status-hook.sh` | status hook helper |
+| `hooks/bin/claude`, `hooks/bin/codex` | PATH shims adding Civet's hooks (first on every pane's PATH) |
+| `hooks/zsh/.zshenv` | zsh `ZDOTDIR` shim for panes |
 | `logs/civetd.log` | daemon log when detached |
 
-Client side (`~/.civet` on the laptop): `client-id` (hex), `ssh/` (ssh
+Client side (`~/.civet` on the laptop): `client-id-desktop` (hex, the
+desktop's `ClientId`), `client-id` (legacy, unused by the shipped clients), `ssh/` (ssh
 ControlPath sockets, 0700), `dist/` (optional `civetd-<triple>` binaries for
 dev; also `CIVET_DIST_DIR`).
 
@@ -1617,6 +1825,9 @@ dev; also `CIVET_DIST_DIR`).
 | `CIVET_PANE_ID` | panes | pane id |
 | `CIVET_STATUS_FILE` | panes | hook file path |
 | `CIVET_WORKTREE` | panes | worktree path (if any) |
+| `CIVET_SHIM_DIR` | panes | agent shim dir (first on `PATH`) |
+| `CIVET_USER_ZDOTDIR` | zsh panes | the user's `ZDOTDIR`, restored by the shim |
+| `TERM_PROGRAM` | panes | `civet` |
 
 ---
 
@@ -1635,7 +1846,15 @@ dev; also `CIVET_DIST_DIR`).
 | Max in-flight updates per pane | 8 | `civet_proto::MAX_INFLIGHT_UPDATES` |
 | Update coalescing | 2 ms after idle, ≤ 1 per 8 ms | civet-session |
 | Echo-ack delay | 50 ms | `civet_proto::ECHO_ACK_DELAY_MS` |
-| History replay per Diff / Full | 2000 / 1000 lines | `civet_proto::{MAX_REPLAY_LINES, FULL_REPLAY_LINES}` |
+| History replay per Diff / Full | 2000 / 1000 lines, ≤ 8 MiB | `civet_proto::{MAX_REPLAY_LINES, FULL_REPLAY_LINES}`, `civet_term::MAX_REPLAY_BYTES` |
+| Max screen-update payload | 12 MiB | `civet_term::MAX_UPDATE_BYTES` |
+| Max pane size | 1000 cols x 500 rows | `civet_proto::{MAX_TERM_COLS, MAX_TERM_ROWS}` |
+| Snapshot ring per pane | 2 | `civet_term::DEFAULT_SNAPSHOT_RING` |
 | Scrollback retained per pane | 10 000 lines | `TermConfig` / `SessionConfig` |
 | UDP port range | 60001–60999 | civetd |
+| Pre-auth frame limits (StreamOpen / hello) | 64 B / 64 KiB | `civet_proto::{MAX_STREAM_OPEN_LEN, MAX_HELLO_LEN}` |
+| Concurrent unauthenticated handshakes | 32 per listener | `civetd::daemon::MAX_PENDING_HANDSHAKES` |
+| "Replaced" retry delay / give-up window | 1 s / 30 s | `civet_transport::{REPLACED_RETRY_DELAY, REPLACED_WINDOW}` |
+| Unacked input retransmit | after 1 s without ack progress, ≤ 64 KiB | `civet_transport::session::INPUT_RETRANSMIT_AFTER` |
+| Failover: primary timeout / after / probe | 3 s (2 attempts) / 3 s / 10 s | `civet_transport::FailoverConfig` |
 | Desktop channel flush | 4 ms or 256 KiB | desktop |

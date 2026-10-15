@@ -46,6 +46,20 @@ pub struct BootstrapInfo {
     /// True if an already-running daemon was reused rather than started.
     #[serde(default)]
     pub reattached: bool,
+    /// Bootstrap output only: the version of the `civetd` binary that ran
+    /// the bootstrap (the newest one installed). Differs from
+    /// `daemon_version` when an older daemon was kept running.
+    #[serde(default)]
+    pub available_version: Option<String>,
+    /// Bootstrap output only: number of live panes of the daemon (when the
+    /// running daemon was reattached).
+    #[serde(default)]
+    pub live_panes: Option<u32>,
+    /// Bootstrap output only: a newer `civetd` (`available_version`) is
+    /// installed but the running daemon was kept because it has live panes.
+    /// Bootstrapping again with `replace` restarts it (killing the panes).
+    #[serde(default)]
+    pub upgrade_available: bool,
 }
 
 impl BootstrapInfo {
@@ -65,6 +79,9 @@ impl BootstrapInfo {
             cert_fingerprint,
             pid: std::process::id(),
             reattached: false,
+            available_version: None,
+            live_panes: None,
+            upgrade_available: false,
         }
     }
 
@@ -119,6 +136,17 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_fields_are_optional_and_roundtrip() {
+        let mut b = sample();
+        b.available_version = Some("0.2.0".into());
+        b.live_panes = Some(3);
+        b.upgrade_available = true;
+        let line = b.to_json_line();
+        assert!(line.contains("\"upgrade_available\":true"));
+        assert_eq!(BootstrapInfo::from_json_line(&line).unwrap(), b);
+    }
+
+    #[test]
     fn find_in_noisy_output() {
         let b = sample();
         let out = format!(
@@ -143,6 +171,9 @@ mod tests {
         let b = BootstrapInfo::from_json_line(&line).unwrap();
         assert_eq!(b.pid, 0);
         assert!(!b.reattached);
+        assert_eq!(b.available_version, None);
+        assert_eq!(b.live_panes, None);
+        assert!(!b.upgrade_available);
         assert_eq!(b.cert_fingerprint, CertFingerprint([0xff; 32]));
     }
 }

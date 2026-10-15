@@ -14,11 +14,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use std::collections::HashSet;
+
 use civet_proto::{
-    ClientHello, ClientId, ClientMessage, ControlRequest, ControlResponse, Event, InputMessage,
-    PaneId, Request, RequestId, Response, RpcError, ScreenAck, ScreenUpdate, ScrollbackPage,
-    ScrollbackQuery, ScrollbackRequest, ServerHello, ServerMessage, SessionKey, SubscribeInfo,
-    UpdateKind, now_ms,
+    ClientHello, ClientId, ClientMessage, ControlRequest, ControlResponse, ErrorCode, Event,
+    InputMessage, PaneId, Request, RequestId, Response, RpcError, ScreenAck, ScreenUpdate,
+    ScrollbackPage, ScrollbackQuery, ScrollbackRequest, ServerHello, ServerMessage, SessionKey,
+    SubscribeInfo, UpdateKind, now_ms,
 };
 use futures::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -42,9 +44,60 @@ pub trait Dialer: Send + Sync + 'static {
     fn rebind(&self) -> std::io::Result<()> {
         Ok(())
     }
-    /// Link kind this dialer produces.
+    /// Link kind this dialer produces (for a failover dialer: the
+    /// preferred kind).
     fn kind(&self) -> TransportKind;
+    /// Hint from the session: the link has been in trouble (stalled / lost)
+    /// since `since`, or recovered (`None`). A failover dialer uses it to
+    /// decide when to try its fallback. Default: ignored.
+    fn link_trouble(&self, since: Option<std::time::Instant>) {
+        let _ = since;
+    }
+    /// While the session is connected over a link whose kind differs from
+    /// [`Dialer::kind`] (i.e. on a fallback), it calls
+    /// [`Dialer::dial_preferred`] this often to move back. None (default):
+    /// never.
+    fn upgrade_interval(&self) -> Option<Duration> {
+        None
+    }
+    /// Dial only the preferred link (used to move back from a fallback).
+    /// Default: [`Dialer::dial`].
+    fn dial_preferred(
+        &self,
+        hello: ClientHello,
+        pipelined: Vec<ClientMessage>,
+    ) -> BoxFuture<'_, Result<Connected, TransportError>> {
+        self.dial(hello, pipelined)
+    }
 }
+
+/// `LinkState::Failed::reason` when the daemon closed the connection because
+/// another connection with the same `ClientId` took over (twice within
+/// [`REPLACED_WINDOW`]); see [`TransportError::Replaced`].
+pub const REPLACED_REASON: &str =
+    "taken over by another connection with the same client id (close code 3)";
+
+/// After a first "replaced" close the session redials once after this delay
+/// (the replacing connection may have been a stale dial of its own).
+pub const REPLACED_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// A second "replaced" close within this window ends the session with
+/// `LinkState::Failed { reason: REPLACED_REASON, needs_bootstrap: false }`
+/// instead of kicking the other connection off in turn.
+pub const REPLACED_WINDOW: Duration = Duration::from_secs(30);
+
+/// Unacked input that saw no ack progress for this long is sent again on
+/// the same connection (the daemon dedups by seq). Covers input the daemon
+/// refused under PTY backpressure, which it neither applies nor acks.
+pub const INPUT_RETRANSMIT_AFTER: Duration = Duration::from_secs(1);
+
+/// At most this many bytes of a pane's unacked input are retransmitted per
+/// [`INPUT_RETRANSMIT_AFTER`] period.
+const INPUT_RETRANSMIT_BYTES: usize = 64 * 1024;
+
+/// Consecutive connections lost sooner than this after they were
+/// established escalate the reconnect backoff (no instant redial loops).
+const SHORT_LIVED: Duration = Duration::from_millis(500);
 
 /// Dials QUIC connections on a shared endpoint.
 #[derive(Debug)]
@@ -165,7 +218,7 @@ impl ClientSessionConfig {
 
 /// Link health as seen by the session.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum LinkState {
     /// First connect in progress.
     Connecting,
@@ -267,6 +320,8 @@ struct PaneState {
     awaiting_full: bool,
     /// Highest input seq reported as applied.
     acked_input: u64,
+    /// Last time unacked input was (re)sent or its ack advanced.
+    input_progress: Instant,
 }
 
 impl PaneState {
@@ -278,6 +333,7 @@ impl PaneState {
             subscribed: false,
             awaiting_full: false,
             acked_input: 0,
+            input_progress: Instant::now(),
         }
     }
 
@@ -298,6 +354,9 @@ enum Pending {
     Subscribe {
         generation: u64,
         pane: PaneId,
+        /// Re-subscription pipelined with a reconnect (the pane was live
+        /// before the link dropped).
+        resubscribe: bool,
     },
     Ping {
         generation: u64,
@@ -326,6 +385,9 @@ struct Shared {
     pending: HashMap<RequestId, Pending>,
     sub_waiters: HashMap<PaneId, Vec<SubWaiter>>,
     panes: HashMap<PaneId, PaneState>,
+    /// Panes known to be gone (PaneClosed, or re-subscribe said NotFound):
+    /// input for them is not buffered.
+    closed_panes: HashSet<PaneId>,
     server_hello: ServerHello,
     ping_rtt: Option<Duration>,
 }
@@ -393,6 +455,7 @@ impl Shared {
             Pending::Subscribe {
                 generation: self.generation,
                 pane,
+                resubscribe: false,
             },
         );
         self.send(&ClientMessage::Request(ControlRequest {
@@ -490,6 +553,7 @@ impl ClientSession {
                 pending: HashMap::new(),
                 sub_waiters: HashMap::new(),
                 panes: HashMap::new(),
+                closed_panes: HashSet::new(),
                 server_hello: connected.server_hello.clone(),
                 ping_rtt: None,
             }),
@@ -583,12 +647,19 @@ impl ClientSession {
     }
 
     /// Assign the next seq for this pane, buffer the bytes until acked, and
-    /// send. Never blocks on the network; returns the seq.
+    /// send. Never blocks on the network; returns the seq, or 0 (nothing
+    /// sent or buffered) if the pane is known to be closed.
     pub fn send_input(&self, pane: PaneId, data: Vec<u8>) -> u64 {
         let mut st = self.inner().lock();
+        if st.closed_panes.contains(&pane) {
+            return 0;
+        }
         let p = st.panes.entry(pane).or_insert_with(PaneState::new);
         let seq = p.next_input_seq;
         p.next_input_seq += 1;
+        if p.unacked_input.is_empty() {
+            p.input_progress = Instant::now();
+        }
         p.unacked_input.push_back((seq, data.clone()));
         if !st.finished {
             st.send(&ClientMessage::Input(InputMessage { pane, seq, data }));
@@ -664,6 +735,18 @@ struct Supervisor {
     next_dial_at: Option<Instant>,
     goodbye: Option<String>,
     stopped: bool,
+    /// When the current connection was adopted.
+    adopted_at: Instant,
+    /// Consecutive connections lost within [`SHORT_LIVED`].
+    short_lived_losses: usize,
+    /// Last "replaced" close (see [`REPLACED_WINDOW`]).
+    last_replaced: Option<Instant>,
+    /// Next attempt to move back to the preferred link (while on a fallback).
+    upgrade_at: Option<Instant>,
+    /// The dial in flight is such an upgrade attempt.
+    dial_upgrade: bool,
+    /// Next check for stale unacked input.
+    input_check_at: Instant,
 }
 
 async fn recv_opt(
@@ -698,6 +781,12 @@ impl Supervisor {
             next_dial_at: None,
             goodbye: None,
             stopped: false,
+            adopted_at: Instant::now(),
+            short_lived_losses: 0,
+            last_replaced: None,
+            upgrade_at: None,
+            dial_upgrade: false,
+            input_check_at: Instant::now() + INPUT_RETRANSMIT_AFTER,
         }
     }
 
@@ -727,12 +816,21 @@ impl Supervisor {
         let far = Instant::now() + Duration::from_secs(86_400);
         let cfg = &self.inner.config;
         if self.rx.is_some() {
-            match (self.recovering_since, self.ping_out) {
+            let upgrade = match (self.recovering_since, &self.dial) {
+                (None, None) => self.upgrade_at.unwrap_or(far),
+                _ => far,
+            };
+            let upgrade = match self.recovering_since {
+                None => upgrade.min(self.input_check_at),
+                Some(_) => upgrade,
+            };
+            let t = match (self.recovering_since, self.ping_out) {
                 (None, Some((_, sent))) => sent + cfg.stall_after,
                 (None, None) => self.last_rx + cfg.heartbeat,
                 (Some(_), _) if self.dial.is_none() => self.race_at.unwrap_or(far),
                 _ => far,
-            }
+            };
+            t.min(upgrade)
         } else if self.dial.is_none() {
             self.next_dial_at.unwrap_or(far)
         } else {
@@ -749,14 +847,19 @@ impl Supervisor {
             .or(st.ping_rtt)
             .map(|d| d.as_millis().min(u32::MAX as u128) as u32);
         LinkState::Connected {
-            transport: self.inner.dialer.kind(),
+            transport: st
+                .conn
+                .as_ref()
+                .map_or_else(|| self.inner.dialer.kind(), |c| c.kind()),
             rtt_ms: rtt,
         }
     }
 
     fn enter_recovering(&mut self, reason: &str) {
         if self.recovering_since.is_none() {
-            self.recovering_since = Some(Instant::now());
+            let now = Instant::now();
+            self.recovering_since = Some(now);
+            self.inner.dialer.link_trouble(Some(now.into_std()));
             tracing::info!(reason, "link recovering");
             self.inner.set_link(LinkState::Recovering {
                 since_ms: now_ms(),
@@ -791,6 +894,19 @@ impl Supervisor {
         let now = Instant::now();
         let cfg = self.inner.config.clone();
         if self.rx.is_some() {
+            if self.recovering_since.is_none() && now >= self.input_check_at {
+                self.input_check_at = now + INPUT_RETRANSMIT_AFTER;
+                self.retransmit_stale_input(now);
+            }
+            if self.recovering_since.is_none()
+                && self.dial.is_none()
+                && self.upgrade_at.is_some_and(|t| now >= t)
+            {
+                self.upgrade_at = None;
+                tracing::debug!("on a fallback link; trying the preferred one");
+                self.start_dial_kind(true);
+                return;
+            }
             if self.recovering_since.is_none() {
                 match self.ping_out {
                     Some((_, sent)) if now >= sent + cfg.stall_after => {
@@ -835,7 +951,62 @@ impl Supervisor {
                 self.handle_message(msg);
             }
             Ok(None) => self.on_conn_lost("connection closed by daemon".into()),
+            // Kicked off by another connection with our client id. If a dial
+            // of our own is in flight, that dial is the newer connection:
+            // just a normal loss.
+            Err(TransportError::Replaced(why)) if self.dial.is_none() => {
+                let now = Instant::now();
+                if self
+                    .last_replaced
+                    .is_some_and(|t| now.saturating_duration_since(t) < REPLACED_WINDOW)
+                {
+                    tracing::warn!(%why, "connection taken over again; giving up");
+                    self.fail(REPLACED_REASON.to_string(), false);
+                    return;
+                }
+                tracing::warn!(%why, "connection taken over by another connection of this client");
+                self.last_replaced = Some(now);
+                self.on_conn_lost(format!("replaced: {why}"));
+                self.next_dial_at = Some(now + REPLACED_RETRY_DELAY);
+            }
             Err(e) => self.on_conn_lost(e.to_string()),
+        }
+    }
+
+    /// Resend (a bounded prefix of) unacked input that made no progress for
+    /// [`INPUT_RETRANSMIT_AFTER`]. Safe: the daemon applies a seq at most
+    /// once and answers duplicates with an `InputAck`.
+    fn retransmit_stale_input(&mut self, now: Instant) {
+        let mut st = self.inner.lock();
+        if st.conn.is_none() {
+            return;
+        }
+        let mut resend = Vec::new();
+        for (pane, p) in st.panes.iter_mut() {
+            if p.unacked_input.is_empty()
+                || now.saturating_duration_since(p.input_progress) < INPUT_RETRANSMIT_AFTER
+            {
+                continue;
+            }
+            p.input_progress = now;
+            let mut bytes = 0;
+            for (seq, data) in &p.unacked_input {
+                if bytes > 0 && bytes + data.len() > INPUT_RETRANSMIT_BYTES {
+                    break;
+                }
+                bytes += data.len();
+                resend.push(InputMessage {
+                    pane: *pane,
+                    seq: *seq,
+                    data: data.clone(),
+                });
+            }
+        }
+        if !resend.is_empty() {
+            tracing::debug!(n = resend.len(), "retransmitting unacked input");
+        }
+        for m in resend {
+            st.send(&ClientMessage::Input(m));
         }
     }
 
@@ -848,8 +1019,25 @@ impl Supervisor {
             let g = self.dial_generation;
             self.inner.lock().pending.retain(|_, p| p.generation() != g);
         }
+        self.inner.dialer.link_trouble(None);
+        self.schedule_upgrade();
         let s = self.connected_state();
         self.inner.set_link(s);
+    }
+
+    /// While connected over a non-preferred link, plan the next attempt to
+    /// move back (see [`Dialer::upgrade_interval`]).
+    fn schedule_upgrade(&mut self) {
+        let on_fallback = self
+            .inner
+            .lock()
+            .conn
+            .as_ref()
+            .is_some_and(|c| c.kind() != self.inner.dialer.kind());
+        self.upgrade_at = match self.inner.dialer.upgrade_interval() {
+            Some(every) if on_fallback => Some(Instant::now() + every),
+            _ => None,
+        };
     }
 
     fn handle_message(&mut self, msg: ServerMessage) {
@@ -861,8 +1049,11 @@ impl Supervisor {
                 Some(Pending::Request { tx, .. }) => {
                     let _ = tx.send(result.map_err(RequestError::Rpc));
                 }
-                Some(Pending::Subscribe { pane, .. }) => match result {
+                Some(Pending::Subscribe {
+                    pane, resubscribe, ..
+                }) => match result {
                     Ok(Response::Subscribed(info)) => {
+                        st.closed_panes.remove(&pane);
                         if let Some(p) = st.panes.get_mut(&pane) {
                             p.drop_acked(info.last_input_seq);
                             if p.next_input_seq <= info.last_input_seq {
@@ -874,6 +1065,21 @@ impl Supervisor {
                     Ok(other) => {
                         let msg = format!("{other:?}");
                         st.resolve_waiters(pane, || Err(RequestError::Unexpected(msg.clone())));
+                    }
+                    Err(rpc)
+                        if rpc.code == ErrorCode::NotFound
+                            && (resubscribe
+                                || st.panes.get(&pane).is_some_and(|p| p.current_state > 0)) =>
+                    {
+                        // A pane we were showing is gone (typically closed
+                        // while we were disconnected, so its PaneClosed
+                        // event was never delivered): forget it, stop
+                        // buffering its input and tell the caller.
+                        tracing::debug!(%pane, "re-subscribe: pane no longer exists");
+                        st.panes.remove(&pane);
+                        st.closed_panes.insert(pane);
+                        st.resolve_waiters(pane, || Err(RequestError::Rpc(rpc.clone())));
+                        inner.emit(SessionEvent::Event(Event::PaneClosed { pane }));
                     }
                     Err(rpc) => {
                         if let Some(p) = st.panes.get_mut(&pane) {
@@ -902,9 +1108,13 @@ impl Supervisor {
                 None => {}
             },
             ServerMessage::Event(ev) => {
+                if let Event::PaneCreated(info) = &ev {
+                    st.closed_panes.remove(&info.id);
+                }
                 if let Event::PaneClosed { pane } = &ev {
                     let pane = *pane;
                     st.panes.remove(&pane);
+                    st.closed_panes.insert(pane);
                     st.resolve_waiters(pane, || Err(RequestError::Rpc(RpcError::not_found(pane))));
                 }
                 inner.emit(SessionEvent::Event(ev));
@@ -959,6 +1169,7 @@ impl Supervisor {
         p.drop_acked(seq);
         if seq > p.acked_input {
             p.acked_input = seq;
+            p.input_progress = Instant::now();
             inner.emit(SessionEvent::InputAcked { pane, seq });
         }
     }
@@ -981,13 +1192,28 @@ impl Supervisor {
             return;
         }
         self.enter_recovering(&reason);
+        self.upgrade_at = None;
         if self.dial.is_none() {
-            self.attempt = 0;
-            self.next_dial_at = Some(Instant::now() + self.inner.config.backoff_at(0));
+            // Connections that keep dying right after they were established
+            // (e.g. kicked off by another client) escalate the backoff
+            // instead of redialing at once; a single short-lived one does not.
+            if self.adopted_at.elapsed() >= SHORT_LIVED {
+                self.short_lived_losses = 0;
+            } else {
+                self.short_lived_losses += 1;
+            }
+            self.attempt = self.short_lived_losses.saturating_sub(1);
+            self.next_dial_at = Some(Instant::now() + self.inner.config.backoff_at(self.attempt));
         }
     }
 
     fn start_dial(&mut self) {
+        self.start_dial_kind(false);
+    }
+
+    /// Start a (re)dial; `upgrade` = only the preferred link, while the
+    /// current (fallback) connection still works.
+    fn start_dial_kind(&mut self, upgrade: bool) {
         let (hello, pipelined) = {
             let mut st = self.inner.lock();
             let generation = st.next_generation;
@@ -1014,8 +1240,14 @@ impl Supervisor {
             let mut pipelined = Vec::with_capacity(panes.len());
             for (pane, current) in panes {
                 let id = st.alloc_id();
-                st.pending
-                    .insert(id, Pending::Subscribe { generation, pane });
+                st.pending.insert(
+                    id,
+                    Pending::Subscribe {
+                        generation,
+                        pane,
+                        resubscribe: true,
+                    },
+                );
                 pipelined.push(ClientMessage::Request(ControlRequest {
                     id,
                     request: Request::SubscribePane {
@@ -1027,8 +1259,15 @@ impl Supervisor {
             (hello, pipelined)
         };
         self.next_dial_at = None;
+        self.dial_upgrade = upgrade;
         let dialer = self.inner.dialer.clone();
-        self.dial = Some(Box::pin(async move { dialer.dial(hello, pipelined).await }));
+        self.dial = Some(Box::pin(async move {
+            if upgrade {
+                dialer.dial_preferred(hello, pipelined).await
+            } else {
+                dialer.dial(hello, pipelined).await
+            }
+        }));
     }
 
     fn on_dial(&mut self, r: Result<Connected, TransportError>) {
@@ -1037,6 +1276,12 @@ impl Supervisor {
             Err(e) => {
                 let g = self.dial_generation;
                 self.inner.lock().pending.retain(|_, p| p.generation() != g);
+                if self.dial_upgrade && self.rx.is_some() && !e.is_fatal() {
+                    // Still on the fallback; try again later.
+                    tracing::debug!(error = %e, "preferred link still unavailable");
+                    self.schedule_upgrade();
+                    return;
+                }
                 if e.is_fatal() || matches!(e, TransportError::Rejected(_)) {
                     tracing::warn!(error = %e, "reconnect refused");
                     self.fail(e.to_string(), true);
@@ -1089,6 +1334,7 @@ impl Supervisor {
                     st.resolve_waiters(pane, || Err(RequestError::ConnectionLost));
                 }
                 st.panes.clear();
+                st.closed_panes.clear();
             } else if sh.resumed {
                 let mut resumed: HashMap<PaneId, u64> = HashMap::new();
                 for info in &sh.resumed_subscriptions {
@@ -1107,6 +1353,7 @@ impl Supervisor {
                                 p.acked_input = last;
                                 acked.push((*pane, last));
                             }
+                            p.input_progress = Instant::now();
                             for (seq, data) in &p.unacked_input {
                                 resend.push(InputMessage {
                                     pane: *pane,
@@ -1170,10 +1417,13 @@ impl Supervisor {
         self.ping_out = None;
         self.recovering_since = None;
         self.race_at = None;
-        self.attempt = 0;
         self.next_dial_at = None;
         self.dial = None;
+        self.dial_upgrade = false;
         self.goodbye = None;
+        self.adopted_at = Instant::now();
+        inner.dialer.link_trouble(None);
+        self.schedule_upgrade();
         let s = self.connected_state();
         inner.set_link(s);
     }

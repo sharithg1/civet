@@ -115,6 +115,78 @@ impl Git {
         }
     }
 
+    /// Resolve user input `rev` to a commit id, refusing anything git could
+    /// read as an option (`git rev-parse --verify --quiet --end-of-options
+    /// <rev>^{commit}`). InvalidArgument if it does not name a commit.
+    pub(crate) async fn verify_commit(
+        &self,
+        dir: &Path,
+        rev: &str,
+    ) -> Result<String, SessionError> {
+        let invalid = || SessionError::InvalidArgument(format!("{rev:?} is not a commit"));
+        if rev.is_empty() || rev.starts_with('-') || rev.contains(['\0', '\n']) {
+            return Err(invalid());
+        }
+        let spec = format!("{rev}^{{commit}}");
+        let out = self
+            .output(
+                dir,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &spec,
+                ],
+            )
+            .await?;
+        let sha = out.stdout.trim();
+        if out.success && !sha.is_empty() {
+            Ok(sha.to_owned())
+        } else {
+            Err(invalid())
+        }
+    }
+
+    /// If `remote` exists, record `branch.<branch>.remote = <remote>` and
+    /// `branch.<branch>.merge = refs/heads/<branch>` (per-branch only).
+    /// Ok(false) if there is no such remote.
+    pub(crate) async fn set_branch_upstream(
+        &self,
+        dir: &Path,
+        branch: &str,
+        remote: &str,
+    ) -> Result<bool, SessionError> {
+        if !self
+            .succeeds(dir, &["remote", "get-url", "--", remote])
+            .await?
+        {
+            return Ok(false);
+        }
+        let merge = format!("refs/heads/{branch}");
+        self.run(
+            dir,
+            &[
+                "config",
+                "--local",
+                &format!("branch.{branch}.remote"),
+                remote,
+            ],
+        )
+        .await?;
+        self.run(
+            dir,
+            &[
+                "config",
+                "--local",
+                &format!("branch.{branch}.merge"),
+                &merge,
+            ],
+        )
+        .await?;
+        Ok(true)
+    }
+
     /// The repository's default branch: `origin/HEAD`'s target, else a local
     /// `main` or `master`, else the branch checked out in `dir`.
     pub(crate) async fn default_branch(&self, dir: &Path) -> Option<String> {

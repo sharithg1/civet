@@ -18,6 +18,26 @@ use crate::scrollback::ScrollbackStore;
 use crate::snapshot::{Row, Snapshot};
 use crate::types::{Cell, CellFlags, Color, CursorShape, MouseMode, TermModes};
 
+/// Max bytes of history replay in one update. Replay that would exceed it
+/// drops the *oldest* lines (`history_start` advances), leaving a gap the
+/// client fills with a scrollback fetch, so one update always fits in a frame
+/// ([`civet_proto::MAX_FRAME_LEN`]) no matter how heavy the history lines
+/// are.
+pub const MAX_REPLAY_BYTES: usize = 8 << 20;
+
+/// Upper bound on the payload of any update produced by [`encode_full`] /
+/// [`encode_diff`] (comfortably below [`civet_proto::MAX_FRAME_LEN`]). A diff
+/// over it falls back to a full repaint; a full repaint over it drops the
+/// replay, then repaints text only (no attributes, links or combining
+/// characters) as a last resort.
+pub const MAX_UPDATE_BYTES: usize = 12 << 20;
+
+/// Framing bytes [`Writer::replay`] adds per line (`" \r"` or `"\r\n"`).
+const REPLAY_LINE_OVERHEAD: usize = 2;
+
+/// Max title bytes in a text-only fallback repaint.
+const PLAIN_TITLE_BYTES: usize = 1024;
+
 /// Unchanged cells between two changed runs that are cheaper to reprint than
 /// to skip with a cursor move.
 const GAP: usize = 3;
@@ -527,14 +547,76 @@ fn paint_from_blank(w: &mut Writer<'_>, to: &Snapshot) {
     }
 }
 
-/// Full repaint: RIS, history replay (newest [`FULL_REPLAY_LINES`]), modes,
-/// every visible cell, title, cursor.
+/// Full repaint: RIS, history replay (newest [`FULL_REPLAY_LINES`], at most
+/// [`MAX_REPLAY_BYTES`]), modes, every visible cell, title, cursor. The
+/// payload never exceeds [`MAX_UPDATE_BYTES`].
 pub fn encode_full(to: &Snapshot, store: &ScrollbackStore) -> EncodedUpdate {
-    let mut out = Vec::with_capacity(4096);
-    let history_start = store
+    let lines_start = store
         .oldest()
         .max(to.history_lines.saturating_sub(FULL_REPLAY_LINES))
         .min(to.history_lines);
+    let history_start = replay_budget_start(store, lines_start, to.history_lines, MAX_REPLAY_BYTES);
+    let update = encode_full_from(to, store, history_start);
+    if update.payload.len() <= MAX_UPDATE_BYTES {
+        return update;
+    }
+    // The screen itself is heavy: drop the replay (the client fetches it).
+    let update = encode_full_from(to, store, to.history_lines);
+    if update.payload.len() <= MAX_UPDATE_BYTES {
+        return update;
+    }
+    // Pathological screen (every cell a different color/link, combining
+    // marks): repaint text only. Bounded by cols * rows * 4 bytes.
+    let mut update = encode_full_from(&plain_snapshot(to), store, to.history_lines);
+    update.size = to.size;
+    update
+}
+
+/// `start` advanced so replaying `start..end` costs at most `budget` bytes.
+fn replay_budget_start(store: &ScrollbackStore, start: u64, end: u64, budget: usize) -> u64 {
+    if start >= end {
+        return start;
+    }
+    store
+        .budget_start(start, end, REPLAY_LINE_OVERHEAD, budget)
+        .max(start)
+}
+
+/// `to` with every attribute, hyperlink and combining mark removed and the
+/// title truncated.
+fn plain_snapshot(to: &Snapshot) -> Snapshot {
+    let rows = to
+        .rows
+        .iter()
+        .map(|r| {
+            let cells: Box<[Cell]> = r
+                .cells
+                .iter()
+                .map(|c| Cell {
+                    ch: c.ch,
+                    flags: c.flags & !CellFlags::SGR_MASK,
+                    ..Cell::BLANK
+                })
+                .collect();
+            Arc::new(Row {
+                cells,
+                wrapped: r.wrapped,
+            })
+        })
+        .collect();
+    let mut cut = to.title.len().min(PLAIN_TITLE_BYTES);
+    while !to.title.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    Snapshot {
+        title: Arc::from(&to.title[..cut]),
+        rows,
+        ..to.clone()
+    }
+}
+
+fn encode_full_from(to: &Snapshot, store: &ScrollbackStore, history_start: u64) -> EncodedUpdate {
+    let mut out = Vec::with_capacity(4096);
     {
         let mut w = Writer::new(&mut out, to.size);
         w.raw(b"\x1bc");
@@ -605,7 +687,9 @@ fn top_rows_scrolled(from: &Snapshot, store: &ScrollbackStore, k: u64) -> bool {
 }
 
 /// Diff `from` → `to`. Falls back to [`encode_full`] if `from` is not an
-/// earlier state of the same terminal.
+/// earlier state of the same terminal, or if the diff payload would exceed
+/// [`MAX_UPDATE_BYTES`]. Replay is capped at [`MAX_REPLAY_LINES`] and
+/// [`MAX_REPLAY_BYTES`] (oldest lines dropped first).
 pub fn encode_diff(from: &Snapshot, to: &Snapshot, store: &ScrollbackStore) -> EncodedUpdate {
     if from.history_lines > to.history_lines
         || from.state > to.state
@@ -613,11 +697,12 @@ pub fn encode_diff(from: &Snapshot, to: &Snapshot, store: &ScrollbackStore) -> E
     {
         return encode_full(to, store);
     }
-    let history_start = from
+    let lines_start = from
         .history_lines
         .max(to.history_lines.saturating_sub(MAX_REPLAY_LINES))
         .max(store.oldest())
         .min(to.history_lines);
+    let history_start = replay_budget_start(store, lines_start, to.history_lines, MAX_REPLAY_BYTES);
     let mut out = Vec::new();
     let size_changed = (from.size.cols, from.size.rows) != (to.size.cols, to.size.rows);
     if from.state != to.state || size_changed {
@@ -693,6 +778,9 @@ pub fn encode_diff(from: &Snapshot, to: &Snapshot, store: &ScrollbackStore) -> E
             visible: from.cursor.visible,
         };
         finish(&mut w, &base, client_wrap, to);
+    }
+    if out.len() > MAX_UPDATE_BYTES {
+        return encode_full(to, store);
     }
     EncodedUpdate {
         kind: UpdateKind::Diff,

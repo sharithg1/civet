@@ -34,6 +34,14 @@ pub const HEADER_LEN: usize = 4;
 /// far below this; anything larger is treated as a protocol error.
 pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 
+/// Largest [`crate::StreamOpen`] frame a receiver accepts (it is a few bytes;
+/// read before the peer is authenticated, so keep the limit tiny).
+pub const MAX_STREAM_OPEN_LEN: usize = 64;
+
+/// Largest `ClientHello` frame the daemon accepts (read before the session
+/// key is checked, so far below [`MAX_FRAME_LEN`]).
+pub const MAX_HELLO_LEN: usize = 64 * 1024;
+
 /// Postcard-encode a message (no length prefix).
 pub fn encode<T: Serialize + ?Sized>(msg: &T) -> Result<Vec<u8>, ProtoError> {
     Ok(postcard::to_stdvec(msg)?)
@@ -81,11 +89,12 @@ pub fn encode_frame_into<T: Serialize + ?Sized>(
 }
 
 fn check_len(len: usize) -> Result<(), ProtoError> {
-    if len > MAX_FRAME_LEN {
-        Err(ProtoError::FrameTooLarge {
-            len,
-            max: MAX_FRAME_LEN,
-        })
+    check_len_max(len, MAX_FRAME_LEN)
+}
+
+fn check_len_max(len: usize, max: usize) -> Result<(), ProtoError> {
+    if len > max {
+        Err(ProtoError::FrameTooLarge { len, max })
     } else {
         Ok(())
     }
@@ -168,6 +177,9 @@ mod async_io {
     use super::*;
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+    /// First allocation for an incoming payload; more is added as it arrives.
+    const INITIAL_READ_CAPACITY: usize = 64 * 1024;
+
     /// Write one already-encoded payload as a frame and flush.
     pub async fn write_raw_frame<W>(w: &mut W, payload: &[u8]) -> Result<(), ProtoError>
     where
@@ -203,6 +215,24 @@ mod async_io {
     where
         R: AsyncRead + Unpin + ?Sized,
     {
+        read_raw_frame_limited(r, MAX_FRAME_LEN).await
+    }
+
+    /// [`read_raw_frame`] with a smaller payload limit (`max_len`, clamped to
+    /// [`MAX_FRAME_LEN`]); a longer claimed length is
+    /// [`ProtoError::FrameTooLarge`]. Use it for frames read before the peer
+    /// is authenticated ([`MAX_STREAM_OPEN_LEN`], [`MAX_HELLO_LEN`]).
+    ///
+    /// The buffer grows as bytes arrive instead of being allocated up front
+    /// for the claimed length, so a peer that announces a large frame and
+    /// then stalls costs (almost) nothing.
+    pub async fn read_raw_frame_limited<R>(
+        r: &mut R,
+        max_len: usize,
+    ) -> Result<Option<Vec<u8>>, ProtoError>
+    where
+        R: AsyncRead + Unpin + ?Sized,
+    {
         let mut header = [0u8; HEADER_LEN];
         let mut got = 0;
         while got < HEADER_LEN {
@@ -217,15 +247,13 @@ mod async_io {
             got += n;
         }
         let len = u32::from_be_bytes(header) as usize;
-        check_len(len)?;
-        let mut payload = vec![0u8; len];
-        let mut filled = 0;
-        while filled < len {
-            let n = r.read(&mut payload[filled..]).await?;
-            if n == 0 {
-                return Err(ProtoError::Truncated(HEADER_LEN + filled));
-            }
-            filled += n;
+        check_len_max(len, max_len.min(MAX_FRAME_LEN))?;
+        let mut payload = Vec::with_capacity(len.min(INITIAL_READ_CAPACITY));
+        // `read_to_end` grows the buffer geometrically and does not
+        // zero-fill it; `take` stops it at the frame boundary.
+        let n = (&mut *r).take(len as u64).read_to_end(&mut payload).await?;
+        if n < len {
+            return Err(ProtoError::Truncated(HEADER_LEN + n));
         }
         Ok(Some(payload))
     }
@@ -245,7 +273,9 @@ mod async_io {
 }
 
 #[cfg(feature = "tokio")]
-pub use async_io::{read_frame, read_raw_frame, write_frame, write_raw_frame};
+pub use async_io::{
+    read_frame, read_raw_frame, read_raw_frame_limited, write_frame, write_raw_frame,
+};
 
 #[cfg(test)]
 mod tests {
@@ -368,5 +398,39 @@ mod tests {
             read_raw_frame(&mut b).await,
             Err(ProtoError::Truncated(7))
         ));
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn async_limited_rejects_large_claims_without_allocating() {
+        use tokio::io::AsyncWriteExt;
+        let (mut a, mut b) = tokio::io::duplex(64);
+        // Claims 1000 bytes against a 64-byte limit: rejected from the header.
+        a.write_all(&1000u32.to_be_bytes()).await.unwrap();
+        assert!(matches!(
+            read_raw_frame_limited(&mut b, MAX_STREAM_OPEN_LEN).await,
+            Err(ProtoError::FrameTooLarge { len: 1000, max: 64 })
+        ));
+
+        // A full-size claim followed by a stall: the reader has not
+        // allocated the claimed 16 MiB while it waits.
+        let (mut a, mut b) = tokio::io::duplex(64);
+        a.write_all(&(MAX_FRAME_LEN as u32).to_be_bytes())
+            .await
+            .unwrap();
+        a.write_all(b"abc").await.unwrap();
+        drop(a);
+        assert!(matches!(
+            read_raw_frame(&mut b).await,
+            Err(ProtoError::Truncated(7))
+        ));
+
+        // Within the limit it reads normally.
+        let (mut a, mut b) = tokio::io::duplex(64);
+        write_raw_frame(&mut a, b"hello").await.unwrap();
+        assert_eq!(
+            read_raw_frame_limited(&mut b, 5).await.unwrap().unwrap(),
+            b"hello"
+        );
     }
 }

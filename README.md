@@ -140,6 +140,7 @@ Every daemon runs in a temp state dir and is killed even when a test fails.
 | `scrollback_gap` | output larger than one replay while away; gap filled with `Range` pages; whole history paged with `Before` |
 | `memory` | real daemon RSS: baseline, 10 idle shell panes, then 10 000-line scrollback each |
 | `daemon_restart` | SIGKILL / SIGTERM the real daemon under a connected client: `Failed { needs_bootstrap }`, re-bootstrap, new instance id, old panes gone |
+| `udp_failover` | UDP blackholed mid-session: the `FailoverDialer` moves the session to the stdio tunnel (resumed, input exactly once); UDP restored: back on QUIC |
 
 Knobs: `CIVET_E2E_RUNS`, `CIVET_E2E_RTTS_MS`, `CIVET_E2E_SLEEP_SECS`,
 `CIVET_E2E_SOAK_SECS`, `CIVET_E2E_SEED`, `CIVET_E2E_LOG` (tracing filter),
@@ -163,7 +164,7 @@ on the client's mirror of the screen (server echo, no local prediction).
 | Network back → live, typeable terminal | < 200 ms | Client rebind (wake / Wi-Fi switch, `notify_network_change`), 20 runs: p50 7.3 / p95 9.9 ms at 0 ms RTT; p50 109.7 / p95 112.2 ms at 100 ms RTT (= 1 RTT). After a blackout with output running, at 50 ms RTT: 10 s → 118 ms to echo, 60 s → 116 ms, 300 s → 168 ms. Silent NAT rebinding, 20 runs: p95 9.9 ms at 0 ms RTT, **p95 214.9 ms at 100 ms RTT** (2 RTT, see note 1) | Met for wake / network change; NAT rebinding misses at 100 ms RTT by design of QUIC |
 | Keystroke → screen (local echo) | < 10 ms | Server echo at 0 ms RTT: p50 9.0 ms. Local-echo prediction (below 10 ms regardless of RTT) lives in civet-desktop and is not measured here | See desktop build |
 | Survives Wi-Fi change, lid close/open, client restart: 100% of runs, no lost output | 100% | 40/40 rebinds at each RTT migrated without reconnect; 10 / 60 / 300 s blackouts with output running: resumed in place, every line present once and in order (300 s: 5084 lines printed while away, 3078-line replay gap fetched); client restart (token or fresh): every line present; 60 s soak at 10% loss with 21 network changes (incl. 7 s blackouts, 2 resumed re-dials): typed text exact. 5% / 20% loss at 100 ms RTT: input exactly once and in order, screen converged, history exact. Real macOS sleep (`scripts/sleep-wake-loop.sh`): not run here | Met (simulated) |
-| Idle daemon memory per session | < 20 MB | +0.27 MiB per idle shell pane (daemon RSS 6.8 → 9.5 MiB for 10 panes); +18.4 MiB per pane after filling the 10 000-line scrollback (note 2) | Met |
+| Idle daemon memory per session | < 20 MB | +0.27 MiB per idle shell pane (daemon RSS 6.8 → 9.5 MiB for 10 panes); +5.1 MiB per pane after filling the 10 000-line scrollback (was 18.4 MiB with a 64-snapshot ring; note 2) | Met |
 | Installed client size | < 25 MB | Not measured here | See desktop build |
 
 Other numbers (same runs):
@@ -173,11 +174,12 @@ Other numbers (same runs):
 | Loss 5% / 20%, 100 ms RTT, 1463 keystrokes typed one per message | Delivered in 1.26 / 1.38 s; echo p50 122 / 130 ms, p95 394 / 668 ms |
 | Client restart, resume token | First update (Diff from the known state) 9.6 ms after dial |
 | Client restart, fresh session | Full repaint 9.9 ms; complete history (482 lines fetched) 11.8 ms |
-| UDP blocked | QUIC gives up at 3.0 s, stdio tunnel live at 3.04 s; tunnel echo p50 9.6 ms; tunnel process killed → resumed in 6.5 ms |
-| Throughput, `cat` 50 MiB (819 200 lines) | 1.66 s to the final screen over QUIC and over the tunnel (30 MiB/s; the daemon's own parse is the bottleneck, note 3) |
+| UDP blocked | QUIC gives up at 3.0 s, stdio tunnel live at 3.03 s; tunnel echo p50 9.4 ms; tunnel process killed → resumed in 4 ms |
+| UDP blocked mid-session (2026-10-15) | On the tunnel 5.0–5.2 s after the blackhole (1 s heartbeat + 1 s stall + 3 s race, then QUIC and tunnel raced); back on QUIC 2.0 s after UDP returns (probe interval 2 s in the test, 10 s default) |
+| Throughput, `cat` 50 MiB (819 200 lines) | 1.33 s over QUIC (37.5 MiB/s), 1.06 s over the tunnel (47.3 MiB/s) since PTY reads are batched (2026-10-15; was 1.66 s / 30 MiB/s; note 3) |
 | Throughput, `yes \| head -n 2000000` | 20.8 s; a bare macOS PTY read loop takes 19.5 s for the same command (`head` line-buffers to a tty: 1.4 M reads), so Civet adds ~7% |
 | Scrollback gap after a resume (6000 lines while away) | 3982-line gap filled with `Range` pages in 0.7 ms (unix socket); 5981 lines paged upward with `Before` in 12 pages: 0.7 ms (unix), 326 ms (QUIC, 20 ms RTT) |
-| Daemon restart (real binary) | SIGTERM: client `Failed { needs_bootstrap }` at once (Goodbye); SIGKILL: after 5.0 s (stall + race timers, note 4). Re-bootstrap → new pane echo 19–52 ms; instance id changed, old panes gone |
+| Daemon restart (real binary) | SIGTERM: client `Failed { needs_bootstrap }` at once (Goodbye); SIGKILL: 117–136 ms after the new daemon is up (was 5.0 s; note 4). Re-bootstrap → new pane echo 18–38 ms; instance id changed, old panes gone |
 
 Notes:
 
@@ -187,16 +189,19 @@ Notes:
    challenge completes, +1 RTT. With the 2 s client keep-alive this only
    affects a keystroke sent in the instant after a rebinding while idle; a
    wake or Wi-Fi change goes through `notify_network_change` (1 RTT).
-2. Mostly `civet-term`'s ring of 64 recent snapshots kept for resume
-   (`DEFAULT_SNAPSHOT_RING`): under scrolling every row differs, about
-   7 MiB per pane in a probe; a ring of 4 brought a filled pane from 11.3 to
-   4.0 MiB. Idle panes that never scrolled cost almost nothing.
+2. Mostly scrollback itself now. `civet-term`'s ring of recent snapshots
+   (`DEFAULT_SNAPSHOT_RING`) was 64 and cost about 7 MiB per scrolling
+   pane; it is 2 since 2026-10-15 (it is only the last fallback for a
+   resume baseline; a miss yields a correct Full). Idle panes that never
+   scrolled cost almost nothing.
 3. Bare PTY `cat` of the same file: 0.29 s. macOS PTY reads return ~1 KiB;
-   feeding `PaneTerminal` 1 KiB at a time is ~2× slower than 64 KiB chunks.
-4. A restarted daemon has a new QUIC stateless-reset key, so the client
-   cannot recognize resets for its old connection and waits for its own
-   stall detection (1 s heartbeat + 1 s stall + 3 s race). Deriving the
-   reset key from the persisted TLS key would cut this to about one RTT.
+   the reader now keeps reading while `poll` says more is ready (up to
+   64 KiB) before feeding `PaneTerminal` once.
+4. The QUIC stateless-reset key and the connection-ID generator key are
+   derived from the persisted TLS identity key, so a restarted daemon
+   answers the old connection's next packet with a reset the client
+   recognizes (before: a random per-start key, and quinn dropped the old
+   CIDs unanswered, so the client waited for its stall timers, 5.0 s).
 
 ## Open questions from the plan, as settled by the implementation
 

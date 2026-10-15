@@ -199,7 +199,7 @@ pub struct DaemonInfo {
 
 /// Control requests, client -> daemon. Append-only (see crate docs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Request {
     /// Liveness / RTT probe. -> [`Response::Pong`]
     Ping {
@@ -301,7 +301,7 @@ pub enum Request {
 
 /// Successful responses. Append-only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Response {
     /// Generic success with no payload.
     Ok,
@@ -434,7 +434,7 @@ pub struct AgentStatusEvent {
 
 /// Events pushed by the daemon to every authenticated client. Append-only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Event {
     /// A pane was created (by any client).
     PaneCreated(PaneInfo),

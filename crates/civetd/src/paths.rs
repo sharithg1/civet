@@ -14,6 +14,10 @@ pub const DAEMON_JSON: &str = "daemon.json";
 pub const SOCKET_FILE: &str = "civetd.sock";
 /// Persisted client id (hex), client side.
 pub const CLIENT_ID_FILE: &str = "client-id";
+/// Persisted client id of civet-desktop. Each client app needs its own id:
+/// the daemon keeps one live connection per id and closes the older one
+/// (REPLACED) when another connects with the same id.
+pub const DESKTOP_CLIENT_ID_FILE: &str = "client-id-desktop";
 
 /// The state directory: `$CIVET_STATE_DIR` if set and non-empty, else
 /// `~/.civet` (else `./.civet` when the home directory is unknown).
@@ -90,10 +94,38 @@ impl StatePaths {
     }
 }
 
-/// Create `dir` (and parents) and restrict it to the owner (0700).
+/// Create `dir` (and parents) and restrict it to the owner (0700). Refuses
+/// (PermissionDenied) if `dir` is a symlink or not owned by the effective
+/// user, so a state dir planted by someone else is never trusted.
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
     std::fs::create_dir_all(dir)?;
+    let md = std::fs::symlink_metadata(dir)?;
+    let refuse = |why: String| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("refusing to use {}: {why}", dir.display()),
+        ))
+    };
+    if md.file_type().is_symlink() {
+        return refuse("it is a symlink".into());
+    }
+    if !md.is_dir() {
+        return refuse("not a directory".into());
+    }
+    let euid = effective_uid();
+    if md.uid() != euid {
+        return refuse(format!("owned by uid {}, not {euid}", md.uid()));
+    }
     set_mode(dir, 0o700)
+}
+
+/// `geteuid()`.
+#[allow(unsafe_code)]
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid takes no arguments, cannot fail and has no
+    // memory-safety preconditions.
+    unsafe { libc::geteuid() }
 }
 
 /// chmod.
@@ -131,8 +163,13 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> 
 /// Load the persisted client id from `<dir>/client-id`, or generate and save
 /// one (mode 0600).
 pub fn load_or_create_client_id(dir: &Path) -> std::io::Result<ClientId> {
-    let paths = StatePaths::new(dir);
-    let file = paths.client_id();
+    load_or_create_client_id_file(dir, CLIENT_ID_FILE)
+}
+
+/// Like [`load_or_create_client_id`] with another file name in `dir` (e.g.
+/// [`DESKTOP_CLIENT_ID_FILE`]).
+pub fn load_or_create_client_id_file(dir: &Path, name: &str) -> std::io::Result<ClientId> {
+    let file = dir.join(name);
     if let Ok(s) = std::fs::read_to_string(&file)
         && let Ok(id) = ClientId::from_hex(s.trim())
     {
@@ -154,6 +191,33 @@ mod tests {
         let a = load_or_create_client_id(dir.path()).unwrap();
         let b = load_or_create_client_id(dir.path()).unwrap();
         assert_eq!(a, b);
+        // Another app's id lives in its own file and differs.
+        let d = load_or_create_client_id_file(dir.path(), DESKTOP_CLIENT_ID_FILE).unwrap();
+        assert_ne!(a, d);
+        assert_eq!(
+            d,
+            load_or_create_client_id_file(dir.path(), DESKTOP_CLIENT_ID_FILE).unwrap()
+        );
+    }
+
+    #[test]
+    fn private_dir_refuses_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        create_private_dir(&real).unwrap();
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = create_private_dir(&link).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("symlink"), "{err}");
+        // Not owned by us: a root-owned directory.
+        if effective_uid() != 0 {
+            let err = create_private_dir(Path::new("/")).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
     }
 
     #[test]

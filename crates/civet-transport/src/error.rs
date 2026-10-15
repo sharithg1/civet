@@ -39,6 +39,13 @@ pub enum TransportError {
     /// gone; ClientSession reconnects on its own.
     #[error("connection closed: {0}")]
     Closed(String),
+    /// The daemon closed this connection because a newer connection with the
+    /// same `ClientId` took over (QUIC close code 3). Redialing would just
+    /// kick the other connection off in turn; `ClientSession` stops with
+    /// `LinkState::Failed { reason: REPLACED_REASON, needs_bootstrap: false }`
+    /// unless the newer connection is its own (racing) dial.
+    #[error("connection taken over by another connection of this client: {0}")]
+    Replaced(String),
 }
 
 impl TransportError {
@@ -81,6 +88,9 @@ pub(crate) fn from_conn_error(e: &quinn::ConnectionError) -> TransportError {
                 && let Ok(reject) = civet_proto::decode::<HelloReject>(&c.reason)
             {
                 return TransportError::Rejected(reject);
+            }
+            if code == u64::from(close_code::REPLACED) {
+                return TransportError::Replaced(String::from_utf8_lossy(&c.reason).into_owned());
             }
             TransportError::Closed(format!(
                 "closed by peer (code {code}): {}",

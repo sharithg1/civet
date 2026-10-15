@@ -1,4 +1,4 @@
-//! Tiny unsafe surface: signalling process groups.
+//! Tiny unsafe surface: signalling process groups, dup/poll of the PTY fd.
 
 use civet_proto::KillSignal;
 
@@ -30,4 +30,31 @@ pub(crate) fn killpg(pgid: i32, sig: libc::c_int) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+/// Duplicate `fd` (close-on-exec) into an owned descriptor.
+#[allow(unsafe_code)]
+pub(crate) fn dup_fd(fd: std::os::fd::RawFd) -> std::io::Result<std::os::fd::OwnedFd> {
+    // SAFETY: `fd` is the PTY master's descriptor, owned by the `MasterPty`
+    // that the caller holds for the duration of this call, so it is open.
+    // The borrow does not outlive this expression; `try_clone_to_owned`
+    // dups it (F_DUPFD_CLOEXEC) into a new descriptor we own.
+    let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+    borrowed.try_clone_to_owned()
+}
+
+/// True if `fd` has data to read right now (`poll` with a zero timeout;
+/// never blocks). Errors count as "not readable".
+#[allow(unsafe_code)]
+pub(crate) fn poll_readable(fd: std::os::fd::BorrowedFd<'_>) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut pfd = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: `pfd` is a valid, initialized pollfd that lives for the call;
+    // nfds = 1 matches it. `fd` is borrowed, so it stays open meanwhile.
+    let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
+    rc > 0 && pfd.revents & libc::POLLIN != 0
 }

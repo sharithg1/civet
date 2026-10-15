@@ -23,7 +23,7 @@ use crate::term::{InputMessage, ScreenAck, ScreenUpdate};
 
 /// First frame on every QUIC stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StreamOpen {
     /// The control stream.
     Control,
@@ -54,7 +54,7 @@ pub enum ClientMessage {
 /// Messages daemon -> client on the control stream (after the hello), and on
 /// screen streams (only the `Screen` variant). Append-only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ServerMessage {
     /// Control RPC response.
     Response(ControlResponse),

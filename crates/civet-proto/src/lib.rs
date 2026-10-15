@@ -53,7 +53,10 @@ pub mod keys;
 pub mod messages;
 pub mod term;
 
-pub use agent::{AgentStatus, AgentStatusSource, parse_status_file};
+pub use agent::{
+    AgentStatus, AgentStatusSource, MAX_STATUS_FILE_BYTES, MAX_STATUS_MESSAGE_CHARS,
+    parse_status_file,
+};
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
     AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, ErrorCode, Event,
@@ -61,15 +64,17 @@ pub use control::{
     SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
 };
 pub use error::ProtoError;
-pub use frame::{FrameDecoder, MAX_FRAME_LEN, decode, encode, encode_frame};
+pub use frame::{
+    FrameDecoder, MAX_FRAME_LEN, MAX_HELLO_LEN, MAX_STREAM_OPEN_LEN, decode, encode, encode_frame,
+};
 pub use hello::{ClientHello, HelloReject, HelloReply, RejectReason, ServerHello};
 pub use ids::{ClientId, PaneId, RepoId, RequestId, WorktreeId};
 pub use keys::{CertFingerprint, ResumeToken, SessionKey};
 pub use messages::{ClientMessage, ServerMessage, StreamOpen};
 pub use term::{
     ECHO_ACK_DELAY_MS, FULL_REPLAY_LINES, InputMessage, MAX_INFLIGHT_UPDATES, MAX_REPLAY_LINES,
-    ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage, ScrollbackQuery, ScrollbackRequest,
-    TermSize, UpdateKind,
+    MAX_TERM_COLS, MAX_TERM_ROWS, ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage,
+    ScrollbackQuery, ScrollbackRequest, TermSize, UpdateKind,
 };
 
 /// Wire protocol version. Bump on any incompatible change (see crate docs).

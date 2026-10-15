@@ -58,6 +58,14 @@ pub const FULL_REPLAY_LINES: u64 = 1000;
 /// already visible. Milliseconds.
 pub const ECHO_ACK_DELAY_MS: u64 = 50;
 
+/// Largest column count a pane may have. Sizes from the network are clamped
+/// to this so a hostile or buggy `ResizePane`/`SpawnPane` cannot make the
+/// daemon allocate gigabytes of cells.
+pub const MAX_TERM_COLS: u16 = 1000;
+
+/// Largest row count a pane may have (see [`MAX_TERM_COLS`]).
+pub const MAX_TERM_ROWS: u16 = 500;
+
 /// Terminal dimensions in character cells (plus optional pixel size, passed to
 /// the PTY for programs that care).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,11 +92,12 @@ impl TermSize {
         }
     }
 
-    /// Clamp to at least 1x1.
+    /// Clamp to at least 1x1 and at most [`MAX_TERM_COLS`] x
+    /// [`MAX_TERM_ROWS`]. Pixel dimensions are kept as given.
     pub fn sanitized(self) -> Self {
         Self {
-            cols: self.cols.max(1),
-            rows: self.rows.max(1),
+            cols: self.cols.clamp(1, MAX_TERM_COLS),
+            rows: self.rows.clamp(1, MAX_TERM_ROWS),
             ..self
         }
     }

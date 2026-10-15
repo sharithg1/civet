@@ -148,11 +148,16 @@ pub fn run() {
     // Commands and our background tasks share one runtime.
     tauri::async_runtime::set(handle.clone());
 
-    let client_id = civetd::paths::load_or_create_client_id(&civetd::paths::default_state_dir())
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "client id not persisted; using an ephemeral one");
-            civet_proto::ClientId::generate().expect("random client id")
-        });
+    // Its own id (not civet-cli's): two clients sharing an id kick each
+    // other off the daemon (REPLACED) in a reconnect storm.
+    let client_id = civetd::paths::load_or_create_client_id_file(
+        &civetd::paths::default_state_dir(),
+        civetd::paths::DESKTOP_CLIENT_ID_FILE,
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "client id not persisted; using an ephemeral one");
+        civet_proto::ClientId::generate().expect("random client id")
+    });
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())

@@ -2,6 +2,7 @@
 //! daemon, replace it when the upgrade policy says so (see the module docs
 //! of `daemon`), or start a detached one, then return its bootstrap line.
 
+use std::net::IpAddr;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -41,14 +42,27 @@ enum Probe {
 }
 
 /// Start or reattach to the daemon for `state_dir` and return its line.
-pub async fn bootstrap(state_dir: &Path, replace: bool) -> anyhow::Result<BootstrapInfo> {
+///
+/// `bind`: QUIC bind address for a daemon this call starts (None = the
+/// `serve` default, 0.0.0.0). A daemon that is already running keeps its
+/// address.
+///
+/// The returned line always carries `available_version` (this binary's
+/// version) and `live_panes` (when known); `upgrade_available` is set when
+/// an older compatible daemon was kept because it has live panes (rerun
+/// with `replace` to restart it on this version).
+pub async fn bootstrap(
+    state_dir: &Path,
+    replace: bool,
+    bind: Option<IpAddr>,
+) -> anyhow::Result<BootstrapInfo> {
     let paths = StatePaths::new(state_dir);
     create_private_dir(&paths.root)
         .with_context(|| format!("creating {}", paths.root.display()))?;
 
     match probe(&paths).await {
         Probe::Running {
-            mut info,
+            info,
             panes,
             compatible,
         } => {
@@ -56,7 +70,18 @@ pub async fn bootstrap(state_dir: &Path, replace: bool) -> anyhow::Result<Bootst
             let idle = panes == Some(0);
             let keep = !replace && compatible && !(idle && ours_newer);
             if keep {
-                info.reattached = true;
+                if ours_newer {
+                    eprintln!(
+                        "civetd: keeping running civetd {} (pid {}, {} live panes); {} is \
+                         available: bootstrap with --replace to restart it (kills the panes)",
+                        info.daemon_version,
+                        info.pid,
+                        panes.unwrap_or(0),
+                        crate::VERSION
+                    );
+                }
+                let mut info = annotate(info, panes, true);
+                info.upgrade_available = ours_newer;
                 return Ok(info);
             }
             if !replace && !idle {
@@ -84,16 +109,13 @@ pub async fn bootstrap(state_dir: &Path, replace: bool) -> anyhow::Result<Bootst
                     " (idle upgrade)"
                 }
             );
-            stop_daemon(&paths, info.pid).await?;
+            stop_daemon(info.pid).await?;
         }
         Probe::Unresponsive { pid, why } => {
             if !replace {
                 // Maybe it is just starting: give it the start timeout.
-                if let Some(info) = wait_ready(&paths).await {
-                    return Ok(BootstrapInfo {
-                        reattached: true,
-                        ..info
-                    });
+                if let Some((info, panes)) = wait_ready(&paths).await {
+                    return Ok(annotate(info, Some(panes), true));
                 }
                 return Err(ExitError::new(
                     exit_code::ERROR,
@@ -104,25 +126,37 @@ pub async fn bootstrap(state_dir: &Path, replace: bool) -> anyhow::Result<Bootst
                 .into());
             }
             match pid {
-                Some(pid) => stop_daemon(&paths, pid).await?,
+                Some(pid) => stop_daemon(pid).await?,
                 None => anyhow::bail!("civetd lock held by an unknown process ({why})"),
             }
         }
         Probe::NotRunning => {}
     }
-    start_daemon(&paths).await
+    start_daemon(&paths, bind).await
+}
+
+/// Add the bootstrap-only fields.
+fn annotate(mut info: BootstrapInfo, panes: Option<usize>, reattached: bool) -> BootstrapInfo {
+    info.reattached = reattached;
+    info.available_version = Some(crate::VERSION.to_owned());
+    info.live_panes = panes.map(|p| u32::try_from(p).unwrap_or(u32::MAX));
+    info.upgrade_available = false;
+    info
 }
 
 /// Spawn `civetd serve --detach` and wait for it (or a concurrent winner)
 /// to be ready.
-async fn start_daemon(paths: &StatePaths) -> anyhow::Result<BootstrapInfo> {
+async fn start_daemon(paths: &StatePaths, bind: Option<IpAddr>) -> anyhow::Result<BootstrapInfo> {
     let exe = std::env::current_exe().context("locating the civetd binary")?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("serve")
         .arg("--detach")
         .arg("--state-dir")
-        .arg(&paths.root)
-        .stdin(Stdio::null())
+        .arg(&paths.root);
+    if let Some(ip) = bind {
+        cmd.arg("--bind").arg(ip.to_string());
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // The `--detach` parent exits right after forking; reap it.
@@ -135,12 +169,9 @@ async fn start_daemon(paths: &StatePaths) -> anyhow::Result<BootstrapInfo> {
         anyhow::bail!("civetd serve --detach failed ({status})");
     }
     match wait_ready(paths).await {
-        Some(mut info) => {
-            // Lost the race to a concurrent bootstrap: that daemon was not
-            // started by us.
-            info.reattached = lost_race;
-            Ok(info)
-        }
+        // Lost the race to a concurrent bootstrap: that daemon was not
+        // started by us.
+        Some((info, panes)) => Ok(annotate(info, Some(panes), lost_race)),
         None => Err(anyhow::anyhow!(
             "civetd did not become ready within {:?} (see {})",
             START_TIMEOUT,
@@ -149,39 +180,42 @@ async fn start_daemon(paths: &StatePaths) -> anyhow::Result<BootstrapInfo> {
     }
 }
 
-/// Poll until a healthy daemon is advertised (or the timeout).
-async fn wait_ready(paths: &StatePaths) -> Option<BootstrapInfo> {
+/// Poll until a healthy daemon is advertised (or the timeout); returns its
+/// line and pane count. Never touches the lock: probing the flock while a
+/// just-forked `serve` tries to take it could make that `serve` exit with
+/// ALREADY_RUNNING.
+async fn wait_ready(paths: &StatePaths) -> Option<(BootstrapInfo, usize)> {
     let deadline = Instant::now() + START_TIMEOUT;
     while Instant::now() < deadline {
-        if let Probe::Running { info, .. } = probe(paths).await {
-            return Some(info);
+        if let Advertised::Healthy { info, panes, .. } = probe_advertised(paths).await {
+            return Some((info, panes.unwrap_or(0)));
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     None
 }
 
-/// SIGTERM `pid` (graceful: Goodbye to clients), wait for the lock to be
-/// released; SIGKILL after the timeout.
-async fn stop_daemon(paths: &StatePaths, pid: u32) -> anyhow::Result<()> {
+/// SIGTERM `pid` (graceful: Goodbye to clients), wait for it to exit (which
+/// releases the lock); SIGKILL after the timeout.
+async fn stop_daemon(pid: u32) -> anyhow::Result<()> {
     if let Err(e) = sys::signal(pid, libc::SIGTERM) {
         tracing::warn!(pid, error = %e, "SIGTERM failed");
     }
-    if wait_unlocked(paths, STOP_TIMEOUT).await {
+    if wait_exited(pid, STOP_TIMEOUT).await {
         return Ok(());
     }
     eprintln!("civetd: pid {pid} did not stop within {STOP_TIMEOUT:?}; sending SIGKILL");
     let _ = sys::signal(pid, libc::SIGKILL);
-    if wait_unlocked(paths, Duration::from_secs(2)).await {
+    if wait_exited(pid, Duration::from_secs(2)).await {
         return Ok(());
     }
     anyhow::bail!("could not stop the running civetd (pid {pid})")
 }
 
-async fn wait_unlocked(paths: &StatePaths, timeout: Duration) -> bool {
+async fn wait_exited(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !sys::lock_is_held(&paths.lock()) {
+        if !sys::pid_alive(pid) {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -189,49 +223,78 @@ async fn wait_unlocked(paths: &StatePaths, timeout: Duration) -> bool {
     false
 }
 
-/// Inspect the state dir and health-check the advertised daemon.
-async fn probe(paths: &StatePaths) -> Probe {
+/// What `daemon.json` + the unix socket say (no lock involved).
+enum Advertised {
+    /// Live and answering. `panes` is None if the protocol is incompatible.
+    Healthy {
+        info: BootstrapInfo,
+        panes: Option<usize>,
+        compatible: bool,
+    },
+    /// Advertised by a live pid but not answering.
+    Sick { pid: u32, why: String },
+    /// No daemon.json, or it names a dead pid.
+    Absent(String),
+}
+
+async fn probe_advertised(paths: &StatePaths) -> Advertised {
     let info = std::fs::read_to_string(paths.daemon_json())
         .ok()
         .and_then(|s| BootstrapInfo::from_json_line(&s).ok());
-    if !sys::lock_is_held(&paths.lock()) {
-        return Probe::NotRunning;
-    }
     let Some(info) = info else {
-        return Probe::Unresponsive {
-            pid: None,
-            why: "no daemon.json".into(),
-        };
+        return Advertised::Absent("no daemon.json".into());
     };
     if !sys::pid_alive(info.pid) {
-        return Probe::Unresponsive {
-            pid: None,
-            why: format!("daemon.json names dead pid {}", info.pid),
-        };
+        return Advertised::Absent(format!("daemon.json names dead pid {}", info.pid));
     }
     let compatible = civet_proto::is_compatible(info.proto_version);
     match tokio::time::timeout(PROBE_TIMEOUT, health_check(paths, &info)).await {
-        Ok(Ok(panes)) => Probe::Running {
+        Ok(Ok(panes)) => Advertised::Healthy {
             info,
             panes: Some(panes),
             compatible,
         },
         Ok(Err(TransportError::Rejected(r))) if r.reason == RejectReason::VersionMismatch => {
-            Probe::Running {
+            Advertised::Healthy {
                 info,
                 panes: None,
                 compatible: false,
             }
         }
-        Ok(Err(e)) => Probe::Unresponsive {
-            pid: Some(info.pid),
+        Ok(Err(e)) => Advertised::Sick {
+            pid: info.pid,
             why: e.to_string(),
         },
-        Err(_) => Probe::Unresponsive {
-            pid: Some(info.pid),
+        Err(_) => Advertised::Sick {
+            pid: info.pid,
             why: "health check timed out".into(),
         },
     }
+}
+
+/// Inspect the state dir and health-check the advertised daemon. The lock
+/// is consulted only when no healthy daemon is advertised (to tell "nothing
+/// running" from "starting up / hung").
+async fn probe(paths: &StatePaths) -> Probe {
+    let (pid, why) = match probe_advertised(paths).await {
+        Advertised::Healthy {
+            info,
+            panes,
+            compatible,
+        } => {
+            return Probe::Running {
+                info,
+                panes,
+                compatible,
+            };
+        }
+        Advertised::Sick { pid, why } => (Some(pid), why),
+        Advertised::Absent(why) => (None, why),
+    };
+    if !sys::lock_is_held(&paths.lock()) {
+        return Probe::NotRunning;
+    }
+    Probe::Unresponsive { pid, why }
 }
 
 /// hello + Ping + ListPanes over the unix socket; returns the pane count.

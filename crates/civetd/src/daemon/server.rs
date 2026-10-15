@@ -23,6 +23,10 @@ use tokio::task::AbortHandle;
 /// snapshots, applied input seqs) is kept.
 pub const RESUME_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Pause between attempts when screen updates for a pane keep failing to
+/// encode (multiplied by the number of consecutive failures, capped).
+const ENCODE_RETRY_PAUSE: Duration = Duration::from_millis(100);
+
 /// How long shutdown waits for a client to take its `Goodbye`.
 const GOODBYE_WAIT: Duration = Duration::from_millis(1500);
 
@@ -311,14 +315,17 @@ impl Server {
     fn forget_client(&self, client: ClientId, conn_id: u64) {
         let removed = {
             let mut clients = self.lock();
-            match clients.get(&client) {
+            let removed = match clients.get(&client) {
                 Some(st) if st.conn_id == conn_id => clients.remove(&client),
                 _ => None,
+            };
+            if removed.is_some() {
+                // Under the lock, so a reconnect cannot slip in between.
+                self.sessions.reset_client(client);
             }
+            removed
         };
-        if removed.is_some() {
-            self.sessions.reset_client(client);
-        }
+        drop(removed);
     }
 
     fn subscription(&self, client: ClientId, pane: PaneId) -> Option<Subscription> {
@@ -331,23 +338,45 @@ impl Server {
     pub fn reap_expired(&self) -> usize {
         let now = Instant::now();
         let ttl = self.resume_ttl;
-        let expired: Vec<ClientId> = self
-            .lock()
+        let expired = |st: &ClientState| {
+            st.conn.is_none()
+                && st
+                    .disconnected_at
+                    .is_some_and(|t| now.saturating_duration_since(t) >= ttl)
+        };
+        // Check and remove under one lock: a client that reconnects between
+        // a check and the removal must keep its (now live) state. Its
+        // session-side state is reset under the same lock, like
+        // `handle_connection` does, so a new connection cannot interleave.
+        let mut clients = self.lock();
+        let ids: Vec<ClientId> = clients
             .iter()
-            .filter(|(_, st)| {
-                st.conn.is_none()
-                    && st
-                        .disconnected_at
-                        .is_some_and(|t| now.saturating_duration_since(t) >= ttl)
-            })
+            .filter(|(_, st)| expired(st))
             .map(|(id, _)| *id)
             .collect();
-        for id in &expired {
-            self.lock().remove(id);
+        for id in &ids {
+            clients.remove(id);
             self.sessions.reset_client(*id);
             tracing::info!(client = %id.to_hex(), "resume state expired");
         }
-        expired.len()
+        ids.len()
+    }
+
+    /// Forget subscriptions of panes that no longer exist (after missed
+    /// `PaneClosed` events).
+    pub fn prune_closed_panes(&self) {
+        let mut panes: Vec<PaneId> = self
+            .lock()
+            .values()
+            .flat_map(|st| st.subs.keys().copied())
+            .collect();
+        panes.sort();
+        panes.dedup();
+        for pane in panes {
+            if self.sessions.pane_info(pane).is_err() {
+                self.pane_closed(pane);
+            }
+        }
     }
 
     /// A pane closed: forget every subscription to it.
@@ -384,6 +413,12 @@ impl Server {
                     })
                     .await;
             }
+            Err(civet_session::SessionError::Busy(_)) => {
+                // PTY write backlog full: neither applied nor acked. The
+                // client keeps it unacked and retransmits (same seq) until
+                // it is applied, so the backlog cannot grow without bound.
+                tracing::debug!(pane = %msg.pane, seq = msg.seq, len = msg.data.len(), "input refused: pty backlog full");
+            }
             Err(e) => {
                 tracing::debug!(pane = %msg.pane, seq = msg.seq, len = msg.data.len(), error = %e, "input dropped");
             }
@@ -408,7 +443,7 @@ impl Server {
                 Ok(Response::Ok)
             }
             Request::ResizePane { pane, size } => sessions
-                .resize_pane(pane, size)
+                .resize_pane(pane, clamp_size(size))
                 .map(|()| Response::Ok)
                 .map_err(RpcError::from),
             Request::KillPane { pane, signal } => sessions
@@ -460,11 +495,16 @@ impl Server {
                 .remove_worktree(&worktree, force)
                 .await
                 .map(|()| Response::Ok),
-            Request::SpawnPane(req) => s.spawn_pane(req).await.map(Response::PaneSpawned),
-            Request::LaunchAgent(req) => s
-                .launch_agent(req)
-                .await
-                .map(|(worktree, pane)| Response::AgentLaunched { worktree, pane }),
+            Request::SpawnPane(mut req) => {
+                req.size = clamp_size(req.size);
+                s.spawn_pane(req).await.map(Response::PaneSpawned)
+            }
+            Request::LaunchAgent(mut req) => {
+                req.size = clamp_size(req.size);
+                s.launch_agent(req)
+                    .await
+                    .map(|(worktree, pane)| Response::AgentLaunched { worktree, pane })
+            }
             other => {
                 return Err(RpcError::new(
                     ErrorCode::Internal,
@@ -557,6 +597,17 @@ impl Server {
     }
 }
 
+/// Cap a client-requested size at `MAX_TERM_COLS` x `MAX_TERM_ROWS` (a
+/// 65535x65535 pane would allocate every cell and abort the daemon). The
+/// lower bound is left to the session layer (0 is an error for resize).
+fn clamp_size(size: civet_proto::TermSize) -> civet_proto::TermSize {
+    civet_proto::TermSize {
+        cols: size.cols.min(civet_proto::MAX_TERM_COLS),
+        rows: size.rows.min(civet_proto::MAX_TERM_ROWS),
+        ..size
+    }
+}
+
 /// Minimal join_all without pulling in the futures crate.
 async fn futures_join_all<F: std::future::Future<Output = ()> + Send + 'static>(
     futs: impl Iterator<Item = F>,
@@ -567,10 +618,16 @@ async fn futures_join_all<F: std::future::Future<Output = ()> + Send + 'static>(
     }
 }
 
-/// Forward daemon events to one client.
 /// Push daemon events to one connection. Everything goes to every client
 /// except [`Event::Clipboard`] (OSC 52), which only goes to clients that
 /// can decode it (`clipboard_ok`) and are subscribed to that pane.
+///
+/// If this connection falls behind the daemon's event broadcast (lagged
+/// receiver), the missed events are replaced by a resync: `PaneClosed` for
+/// every pane the client was told about that is gone, `PaneCreated` (full
+/// current `PaneInfo`: title, size, status, exit) for every live pane, and
+/// `ReposChanged`. An event that cannot be encoded is logged and skipped;
+/// only a closed connection ends the task.
 async fn forward_events(
     mut events: broadcast::Receiver<Event>,
     sender: ServerSender,
@@ -578,8 +635,14 @@ async fn forward_events(
     client: ClientId,
     clipboard_ok: bool,
 ) {
+    // Panes this client knows about (to tell it which ones vanished while
+    // it lagged).
+    let mut known: std::collections::HashSet<PaneId> = match server.upgrade() {
+        Some(s) => s.sessions.list_panes().iter().map(|p| p.id).collect(),
+        None => return,
+    };
     loop {
-        match events.recv().await {
+        let batch: Vec<Event> = match events.recv().await {
             Ok(ev) => {
                 if let Event::Clipboard { pane, .. } = &ev {
                     let subscribed = clipboard_ok
@@ -590,16 +653,53 @@ async fn forward_events(
                         continue;
                     }
                 }
-                if sender.send(ServerMessage::Event(ev)).await.is_err() {
-                    return;
+                match &ev {
+                    Event::PaneCreated(info) => {
+                        known.insert(info.id);
+                    }
+                    Event::PaneClosed { pane } => {
+                        known.remove(pane);
+                    }
+                    _ => {}
                 }
+                vec![ev]
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(lost = n, "client lagging behind daemon events");
+                let Some(server) = server.upgrade() else {
+                    return;
+                };
+                tracing::warn!(client = %client.to_hex(), lost = n, "client lagging behind daemon events; resyncing");
+                resync_events(&server, &mut known)
             }
             Err(broadcast::error::RecvError::Closed) => return,
+        };
+        for ev in batch {
+            match sender.send(ServerMessage::Event(ev)).await {
+                Ok(()) => {}
+                Err(civet_transport::TransportError::Proto(e)) => {
+                    tracing::warn!(client = %client.to_hex(), error = %e, "event not encodable; skipped");
+                }
+                Err(_) => return,
+            }
         }
     }
+}
+
+/// Events that bring a client that missed some back in sync (see
+/// [`forward_events`]). Updates `known` to the current pane set.
+fn resync_events(server: &Server, known: &mut std::collections::HashSet<PaneId>) -> Vec<Event> {
+    let panes = server.sessions.list_panes();
+    let live: std::collections::HashSet<PaneId> = panes.iter().map(|p| p.id).collect();
+    let mut gone: Vec<PaneId> = known.difference(&live).copied().collect();
+    gone.sort();
+    let mut out: Vec<Event> = gone
+        .into_iter()
+        .map(|pane| Event::PaneClosed { pane })
+        .collect();
+    out.extend(panes.into_iter().map(Event::PaneCreated));
+    out.push(Event::ReposChanged);
+    *known = live;
+    out
 }
 
 /// Pump one subscription onto its screen stream until the pane closes, the
@@ -622,6 +722,7 @@ async fn screen_task(
         },
         _ = &mut stop => return,
     };
+    let mut encode_failures: u32 = 0;
     loop {
         let out = tokio::select! {
             biased;
@@ -648,9 +749,28 @@ async fn screen_task(
                     r = stream.send(&update) => r,
                     _ = &mut stop => return,
                 };
-                if let Err(e) = sent {
-                    tracing::debug!(%pane, error = %e, "screen stream closed");
-                    return;
+                match sent {
+                    Ok(()) => encode_failures = 0,
+                    // The update could not be framed (too large); nothing was
+                    // written. Fall back to a Full (the encoder keeps those
+                    // within the frame limit) instead of freezing the pane.
+                    Err(civet_transport::TransportError::Proto(e)) => {
+                        encode_failures += 1;
+                        tracing::warn!(%pane, error = %e, kind = ?update.kind, len = update.payload.len(), "screen update not sendable; resending as Full");
+                        sub.reset_baseline(None);
+                        if encode_failures > 1 {
+                            // Never spin: back off while it keeps failing.
+                            let pause = ENCODE_RETRY_PAUSE * encode_failures.min(10);
+                            tokio::select! {
+                                () = tokio::time::sleep(pause) => {}
+                                _ = &mut stop => return,
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(%pane, error = %e, "screen stream closed");
+                        return;
+                    }
                 }
             }
             Some(PaneOutput::InputAck { pane, seq }) => {

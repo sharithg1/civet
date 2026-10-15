@@ -90,27 +90,58 @@ impl FromStr for AgentStatus {
 ///   (`message` optional, other fields ignored).
 ///
 /// Writers should replace the file atomically (write temp + rename) or just
-/// overwrite it; the daemon re-reads the whole file on every change.
+/// overwrite it; the daemon re-reads the whole file on every change (at most
+/// [`MAX_STATUS_FILE_BYTES`] of it).
+///
+/// The message is sanitized: control characters other than newline and tab
+/// are removed and it is truncated to [`MAX_STATUS_MESSAGE_CHARS`] characters
+/// (an ellipsis marks the cut), so a misbehaving hook cannot produce an
+/// oversized or terminal-corrupting `AgentStatus` event.
 pub fn parse_status_file(contents: &str) -> Option<(AgentStatus, Option<String>)> {
     let text = contents.trim();
     if text.is_empty() {
         return None;
     }
-    if text.starts_with('{') {
+    let (status, message) = if text.starts_with('{') {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
         let status = v.get("status")?.as_str()?.parse().ok()?;
-        let message = v
-            .get("message")
-            .and_then(|m| m.as_str())
-            .map(str::trim)
-            .filter(|m| !m.is_empty())
-            .map(str::to_owned);
-        return Some((status, message));
+        let message = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        (status, sanitize_status_message(message))
+    } else {
+        let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+        let status = first.trim().parse().ok()?;
+        (status, sanitize_status_message(rest))
+    };
+    Some((status, message))
+}
+
+/// Daemons read at most this many bytes of a pane's status file.
+pub const MAX_STATUS_FILE_BYTES: u64 = 4096;
+
+/// Status-file messages are truncated to this many characters.
+pub const MAX_STATUS_MESSAGE_CHARS: usize = 500;
+
+/// Strip control characters (keeping `\n` and `\t`), trim, truncate to
+/// [`MAX_STATUS_MESSAGE_CHARS`]. None if nothing is left.
+fn sanitize_status_message(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
-    let status = first.trim().parse().ok()?;
-    let rest = rest.trim();
-    Some((status, (!rest.is_empty()).then(|| rest.to_owned())))
+    let mut chars = trimmed.chars();
+    let mut out: String = chars.by_ref().take(MAX_STATUS_MESSAGE_CHARS).collect();
+    if chars.next().is_some() {
+        // Keep the total at MAX_STATUS_MESSAGE_CHARS including the ellipsis.
+        out.pop();
+        let keep = out.trim_end().len();
+        out.truncate(keep);
+        out.push('\u{2026}');
+    }
+    Some(out)
 }
 
 /// Which detector produced a status change. Useful for debugging and for the
@@ -182,6 +213,34 @@ mod tests {
         assert_eq!(parse_status_file(r#"{"status":"bogus"}"#), None);
         assert_eq!(parse_status_file("{not json"), None);
         assert_eq!(parse_status_file("garbage"), None);
+    }
+
+    #[test]
+    fn status_file_message_sanitized() {
+        // Control characters (ESC, BEL, CR, NUL) are stripped; newline and
+        // tab survive.
+        assert_eq!(
+            parse_status_file("done\n\x1b[31mred\x07\r\0 ok\n\tnext"),
+            Some((AgentStatus::Done, Some("[31mred ok\n\tnext".into())))
+        );
+        assert_eq!(
+            parse_status_file(r#"{"status":"done","message":"\u001b\u0007"}"#),
+            Some((AgentStatus::Done, None))
+        );
+        // Long messages are truncated to MAX_STATUS_MESSAGE_CHARS chars.
+        let long = format!("needs_input\n{}", "\u{e9}".repeat(10_000));
+        let (status, msg) = parse_status_file(&long).unwrap();
+        assert_eq!(status, AgentStatus::NeedsInput);
+        let msg = msg.unwrap();
+        assert_eq!(msg.chars().count(), MAX_STATUS_MESSAGE_CHARS);
+        assert!(msg.ends_with('\u{2026}'));
+        let json = format!(r#"{{"status":"done","message":"{}"}}"#, "x".repeat(5000));
+        let msg = parse_status_file(&json).unwrap().1.unwrap();
+        assert_eq!(msg.chars().count(), MAX_STATUS_MESSAGE_CHARS);
+        // Exactly at the limit: untouched.
+        let exact = format!("done\n{}", "y".repeat(MAX_STATUS_MESSAGE_CHARS));
+        let msg = parse_status_file(&exact).unwrap().1.unwrap();
+        assert_eq!(msg, "y".repeat(MAX_STATUS_MESSAGE_CHARS));
     }
 
     #[test]

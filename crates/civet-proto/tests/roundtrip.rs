@@ -563,3 +563,63 @@ fn clipboard_event_is_appended() {
         serde_json::json!({"clipboard": {"pane": 3, "text": "hi"}})
     );
 }
+
+/// Struct-variant fields must be camelCase in JSON too (`rename_all` on an
+/// enum only renames variants; the UI reads `exitCode`, not `exit_code`).
+#[test]
+fn json_struct_variant_fields_are_camel_case() {
+    let v = serde_json::to_value(Event::PaneExited {
+        pane: PaneId(3),
+        exit_code: Some(1),
+    })
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"paneExited": {"pane": 3, "exitCode": 1}})
+    );
+
+    let v = serde_json::to_value(Request::SubscribePane {
+        pane: PaneId(2),
+        known_state: Some(9),
+    })
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"subscribePane": {"pane": 2, "knownState": 9}})
+    );
+
+    let v = serde_json::to_value(Response::Pong {
+        nonce: 1,
+        server_time_ms: 2,
+    })
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"pong": {"nonce": 1, "serverTimeMs": 2}})
+    );
+
+    // No snake_case key anywhere in any event / request / response.
+    fn no_snake(v: &serde_json::Value, what: &str) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, v) in m {
+                    assert!(!k.contains('_'), "snake_case key {k:?} in {what}");
+                    no_snake(v, what);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|v| no_snake(v, what)),
+            _ => {}
+        }
+    }
+    for e in all_events() {
+        no_snake(&serde_json::to_value(&e).unwrap(), &format!("{e:?}"));
+        rt(&e);
+    }
+    for r in all_requests() {
+        no_snake(&serde_json::to_value(&r).unwrap(), &format!("{r:?}"));
+        rt(&r);
+    }
+    for r in all_responses() {
+        no_snake(&serde_json::to_value(&r).unwrap(), &format!("{r:?}"));
+    }
+}

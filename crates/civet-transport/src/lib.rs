@@ -18,6 +18,7 @@
 pub mod cert;
 mod conn;
 pub mod error;
+pub mod failover;
 mod quic;
 pub mod session;
 mod stream;
@@ -28,13 +29,14 @@ pub use conn::{
     ServerConnection, ServerIncoming, ServerReceiver, ServerSender, TransportKind,
 };
 pub use error::{TransportError, close_code};
+pub use failover::{FailoverConfig, FailoverDialer};
 pub use quic::{
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_PORT_RANGE, HELLO_TIMEOUT, IDLE_TIMEOUT, INITIAL_RTT,
     IncomingConnection, KEEP_ALIVE, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig,
 };
 pub use session::{
-    ClientSession, ClientSessionConfig, Dialer, LinkState, QuicDialer, RequestError, SessionEvent,
-    StreamDialer,
+    ClientSession, ClientSessionConfig, Dialer, LinkState, QuicDialer, REPLACED_REASON,
+    REPLACED_RETRY_DELAY, REPLACED_WINDOW, RequestError, SessionEvent, StreamDialer,
 };
 pub use stream::{STREAM_CONNECT_TIMEOUT, accept_stream, connect_stream};
 

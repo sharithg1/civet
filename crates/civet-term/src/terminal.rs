@@ -12,7 +12,8 @@ use alacritty_terminal::index::Line;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape as AlShape, Processor, Rgb, Timeout};
 use civet_proto::{
-    MAX_CLIPBOARD_BYTES, ScrollbackLine, ScrollbackPage, ScrollbackRequest, TermSize,
+    MAX_CLIPBOARD_BYTES, MAX_TERM_COLS, MAX_TERM_ROWS, ScrollbackLine, ScrollbackPage,
+    ScrollbackRequest, TermSize,
 };
 
 use crate::encode::{EncodedUpdate, encode_diff, encode_full, encode_line};
@@ -25,7 +26,11 @@ use crate::types::{
 };
 
 /// Snapshots retained by default for [`PaneTerminal::snapshot_at`].
-pub const DEFAULT_SNAPSHOT_RING: usize = 64;
+///
+/// Only the last fallback of `Subscription::reset_baseline` (after the
+/// acked and in-flight snapshots); a miss just costs a Full repaint, so a
+/// small ring keeps per-pane memory low.
+pub const DEFAULT_SNAPSHOT_RING: usize = 2;
 
 /// Lines a chunk may push into alacritty's history before it is drained.
 /// alacritty keeps up to 1000 spare rows after `clear_history`; staying below
@@ -103,10 +108,12 @@ impl Dimensions for Dims {
     }
 }
 
+/// At least `MIN_COLS` x 1, at most [`MAX_TERM_COLS`] x [`MAX_TERM_ROWS`]
+/// (an untrusted 65535x65535 would allocate billions of cells).
 fn sanitize_size(size: TermSize) -> TermSize {
     TermSize {
-        cols: size.cols.max(MIN_COLS),
-        rows: size.rows.max(1),
+        cols: size.cols.clamp(MIN_COLS, MAX_TERM_COLS),
+        rows: size.rows.clamp(1, MAX_TERM_ROWS),
         ..size
     }
 }

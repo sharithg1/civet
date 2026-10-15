@@ -18,7 +18,9 @@ mod snapshot;
 mod terminal;
 mod types;
 
-pub use encode::{EncodedUpdate, encode_cells, encode_diff, encode_full};
+pub use encode::{
+    EncodedUpdate, MAX_REPLAY_BYTES, MAX_UPDATE_BYTES, encode_cells, encode_diff, encode_full,
+};
 pub use scrollback::ScrollbackStore;
 pub use snapshot::Snapshot;
 pub use terminal::{DEFAULT_SNAPSHOT_RING, PaneTerminal};

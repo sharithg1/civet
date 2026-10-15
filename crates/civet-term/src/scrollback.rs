@@ -100,6 +100,26 @@ impl ScrollbackStore {
             .map(move |(i, l)| (s + i as u64, &l.line))
     }
 
+    /// Oldest line `s` in `start..end` such that the encoded lines `s..end`
+    /// (VT bytes plus `per_line` bytes of framing each) fit in `budget`.
+    /// Returns `end` if not even the newest line fits.
+    pub(crate) fn budget_start(&self, start: u64, end: u64, per_line: usize, budget: usize) -> u64 {
+        let s = start.clamp(self.first, self.end());
+        let e = end.clamp(s, self.end());
+        let a = (s - self.first) as usize;
+        let b = (e - self.first) as usize;
+        let mut used = 0usize;
+        let mut first = e;
+        for l in self.lines.range(a..b).rev() {
+            used = used.saturating_add(l.line.vt.len() + per_line);
+            if used > budget {
+                break;
+            }
+            first -= 1;
+        }
+        first
+    }
+
     pub(crate) fn range_with_cols(
         &self,
         start: u64,
