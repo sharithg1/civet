@@ -370,6 +370,16 @@ impl Pane {
         }
     }
 
+    /// Stop accepting input and discard what is queued. Why: on Linux a
+    /// PTY master write blocks while the line discipline's buffer is full,
+    /// and neither killing the child nor closing our master fd unblocks it,
+    /// so the writer thread may never get to reset the backlog itself;
+    /// waiters on [`Self::wait_input_capacity`] must be woken here.
+    fn drop_writer(&self) {
+        lock(&self.writer).take();
+        self.backlog.send_replace(0);
+    }
+
     /// Bytes queued for the PTY and not yet written.
     pub(crate) fn pty_backlog(&self) -> usize {
         *self.backlog.borrow()
@@ -448,7 +458,7 @@ impl Pane {
             meta.exit_code = code;
         }
         // Writes after exit are refused; let the writer thread finish.
-        lock(&self.writer).take();
+        self.drop_writer();
         tracing::info!(pane = self.id.0, ?code, ?signal, "pane exited");
         if self.is_closed() {
             return;
@@ -591,7 +601,7 @@ impl Pane {
                 let _ = sys::killpg(fg, sig);
             }
         }
-        lock(&self.writer).take();
+        self.drop_writer();
         lock(&self.master).take();
         self.state_tx.send_modify(|_| {});
         let _ = std::fs::remove_file(&self.status_file);

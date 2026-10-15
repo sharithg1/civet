@@ -60,6 +60,7 @@ async fn restart_with_resume_token() {
     })
     .await
     .unwrap();
+    c1.wait_screen(pane, |m| m.has_prompt()).await;
     let send = |c: &RawClient, seq: u64, s: String| {
         let conn = c.conn.clone();
         async move {

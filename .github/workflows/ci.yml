@@ -60,12 +60,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: clippy
         run: cargo clippy --workspace --exclude civet-desktop --all-targets --all-features --locked -- -D warnings
-      # civet-e2e (the hardening harness, not a default member) runs in the
-      # macOS job only: on ubuntu runners its client_restart scenarios type
-      # before the shell prompt is drawn ("$ before" instead of "before") and
-      # time out. Run it there with `cargo test -p civet-e2e` when fixing that.
       - name: test
-        run: cargo test --workspace --exclude civet-desktop --exclude civet-e2e --all-features --locked --no-fail-fast
+        run: cargo test --workspace --exclude civet-desktop --all-features --locked --no-fail-fast
 
   ui:
     name: desktop UI (typecheck, lint, test)
