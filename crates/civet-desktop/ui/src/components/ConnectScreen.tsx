@@ -4,11 +4,17 @@
 // identity files and the Orca-server/WSL variants were dropped. Bootstrap
 // progress comes from `civet://bootstrap-progress`.
 
-import { useState } from 'react'
-import { Laptop, Loader2, Server } from 'lucide-react'
-import { connectHost, reportError, useStore } from '../state/store'
-import type { BootstrapStep } from '../types'
-import { Button, Input, Label, Switch } from './ui'
+import { useState, type ReactNode } from 'react'
+import { Laptop, Server } from 'lucide-react'
+import { connectHost, reportError, useStore } from '@/state/store'
+import { restoreTerminalFocus } from '@/lib/terminal-focus'
+import type { BootstrapStep } from '@/types'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
 
 const STEP_LABEL: Record<BootstrapStep, string> = {
   probe: 'Checking the remote daemon',
@@ -19,6 +25,18 @@ const STEP_LABEL: Record<BootstrapStep, string> = {
   fallback: 'UDP unavailable, using SSH tunnel'
 }
 
+const INTRO = (
+  <>
+    Civet bootstraps <code className="font-mono text-xs">civetd</code> over SSH, then switches to
+    QUIC so sessions survive sleep and network changes.
+  </>
+)
+
+/**
+ * Without `onCancel`: the full-window first-run screen. With it: a modal
+ * dialog over the workspace ("Connect to another host"), closable with
+ * Escape / Cancel unless a connection attempt is in flight.
+ */
 export function ConnectScreen({ onCancel }: { onCancel?: () => void }) {
   const [destination, setDestination] = useState('')
   const [forceSsh, setForceSsh] = useState(false)
@@ -43,81 +61,122 @@ export function ConnectScreen({ onCancel }: { onCancel?: () => void }) {
     }
   }
 
+  const form = (header: ReactNode) => (
+    <form
+      className="flex flex-col gap-5"
+      onSubmit={(e) => {
+        e.preventDefault()
+        void connect({ kind: 'ssh', destination })
+      }}
+    >
+      {header}
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="ssh-destination" className="text-xs text-muted-foreground">
+          SSH destination
+        </Label>
+        <Input
+          id="ssh-destination"
+          placeholder="user@devbox or a Host from ~/.ssh/config"
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          value={destination}
+          disabled={busy !== null}
+          onChange={(e) => setDestination(e.target.value)}
+        />
+        {isMock && (
+          <p className="text-[11px] text-muted-foreground">
+            Mock backend: any name works; names containing “fail” fail, “udp-blocked” falls back to
+            SSH.
+          </p>
+        )}
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col">
+          <Label htmlFor="force-ssh" className="text-xs">
+            Force SSH fallback
+          </Label>
+          <span className="text-[11px] text-muted-foreground">
+            Skip QUIC and tunnel through SSH (for hosts where UDP is blocked).
+          </span>
+        </div>
+        <Switch
+          id="force-ssh"
+          checked={forceSsh}
+          onCheckedChange={setForceSsh}
+          disabled={busy !== null}
+        />
+      </div>
+      {busy && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+          <Spinner className="size-3.5" />
+          {pending?.bootstrap
+            ? `${STEP_LABEL[pending.bootstrap.step]}${pending.bootstrap.message ? ` — ${pending.bootstrap.message}` : ''}`
+            : `Connecting to ${busy}…`}
+        </div>
+      )}
+      {error && !busy && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex items-center gap-2">
+        <Button type="submit" disabled={busy !== null || destination.trim() === ''}>
+          <Server />
+          Connect
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy !== null}
+          onClick={() => void connect({ kind: 'local' })}
+          title="Run civetd on this machine"
+        >
+          <Laptop />
+          This Mac
+        </Button>
+        {onCancel && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="ml-auto"
+            onClick={onCancel}
+            disabled={busy !== null}
+          >
+            Cancel
+          </Button>
+        )}
+      </div>
+    </form>
+  )
+
+  if (onCancel) {
+    return (
+      <Dialog open onOpenChange={(open) => !open && busy === null && onCancel()}>
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-md"
+          onCloseAutoFocus={restoreTerminalFocus}
+          // A click outside must not abandon an in-flight connection.
+          onInteractOutside={(e) => busy !== null && e.preventDefault()}
+        >
+          {form(
+            <div className="flex flex-col gap-1">
+              <DialogTitle className="text-lg leading-normal">Connect to a host</DialogTitle>
+              <DialogDescription>{INTRO}</DialogDescription>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
   return (
     <div className="flex h-full w-full items-center justify-center bg-background p-6">
-      <form
-        className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-floating"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void connect({ kind: 'ssh', destination })
-        }}
-      >
-        <div className="flex flex-col gap-1">
-          <h1 className="text-lg font-semibold">Connect to a host</h1>
-          <p className="text-sm text-muted-foreground">
-            Civet bootstraps <code className="font-mono text-xs">civetd</code> over SSH, then switches
-            to QUIC so sessions survive sleep and network changes.
-          </p>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ssh-destination">SSH destination</Label>
-          <Input
-            id="ssh-destination"
-            placeholder="user@devbox or a Host from ~/.ssh/config"
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            value={destination}
-            disabled={busy !== null}
-            onChange={(e) => setDestination(e.target.value)}
-          />
-          {isMock && (
-            <p className="text-[11px] text-muted-foreground">
-              Mock backend: any name works; names containing “fail” fail, “udp-blocked” falls back to SSH.
-            </p>
-          )}
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex flex-col">
-            <Label htmlFor="force-ssh" className="text-foreground">
-              Force SSH fallback
-            </Label>
-            <span className="text-[11px] text-muted-foreground">
-              Skip QUIC and tunnel through SSH (for hosts where UDP is blocked).
-            </span>
-          </div>
-          <Switch id="force-ssh" checked={forceSsh} onChange={setForceSsh} disabled={busy !== null} />
-        </div>
-        {busy && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-            <Loader2 className="size-3.5 animate-spin" />
-            {pending?.bootstrap
-              ? `${STEP_LABEL[pending.bootstrap.step]}${pending.bootstrap.message ? ` — ${pending.bootstrap.message}` : ''}`
-              : `Connecting to ${busy}…`}
+      <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-floating">
+        {form(
+          <div className="flex flex-col gap-1">
+            <h1 className="text-lg font-semibold">Connect to a host</h1>
+            <p className="text-sm text-muted-foreground">{INTRO}</p>
           </div>
         )}
-        {error && !busy && <p className="text-xs text-destructive">{error}</p>}
-        <div className="flex items-center gap-2">
-          <Button type="submit" disabled={busy !== null || destination.trim() === ''}>
-            <Server />
-            Connect
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy !== null}
-            onClick={() => void connect({ kind: 'local' })}
-            title="Run civetd on this machine"
-          >
-            <Laptop />
-            This Mac
-          </Button>
-          {onCancel && (
-            <Button variant="ghost" className="ml-auto" onClick={onCancel} disabled={busy !== null}>
-              Cancel
-            </Button>
-          )}
-        </div>
-      </form>
+      </div>
     </div>
   )
 }

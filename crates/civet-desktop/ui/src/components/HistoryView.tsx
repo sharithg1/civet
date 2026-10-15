@@ -6,11 +6,19 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { History, Loader2, X } from 'lucide-react'
-import type { PaneController } from '../terminal/pane-controller'
-import type { LineRange } from '../terminal/pane-stream'
-import { historyToVt, type HistoryLine } from '../terminal/scrollback-pager'
-import { buildDefaultTerminalOptions } from '../terminal/terminal-options'
+import { History, X } from 'lucide-react'
+import type { PaneController } from '@/terminal/pane-controller'
+import type { LineRange } from '@/terminal/pane-stream'
+import { historyToVt, type HistoryLine } from '@/terminal/scrollback-pager'
+import { buildDefaultTerminalOptions } from '@/terminal/terminal-options'
+import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { IconButton } from './IconButton'
+
+/** Small outlined header action (was a bordered <button>). */
+const HEADER_ACTION =
+  'h-5 rounded border-border bg-transparent px-1.5 text-xs font-normal text-muted-foreground shadow-none hover:bg-muted hover:text-foreground dark:border-border dark:bg-transparent dark:hover:bg-muted'
 
 type Props = {
   controller: PaneController
@@ -112,49 +120,61 @@ export function HistoryView({ controller, gaps, onClose }: Props) {
         {gapView ? (
           <span>
             Skipped lines {gapView.gap.start}–{gapView.gap.end - 1}
-            <button className="ml-2 underline hover:text-foreground" onClick={() => setGapView(null)}>
+            <Button
+              type="button"
+              variant="link"
+              className="ml-2 h-auto p-0 text-xs font-normal text-muted-foreground underline hover:text-foreground"
+              onClick={() => setGapView(null)}
+            >
               back to history
-            </button>
+            </Button>
           </span>
         ) : (
           <span>
-            {first === undefined
-              ? 'Scrollback history'
-              : `History lines ${first}–${last}`}
+            {first === undefined ? 'Scrollback history' : `History lines ${first}–${last}`}
             {exhausted && first !== undefined ? ' · start of retained history' : ''}
           </span>
         )}
-        {pager.loading && <Loader2 className="size-3.5 animate-spin" aria-label="Loading" />}
+        {pager.loading && <Spinner className="size-3.5" />}
         {pager.error && <span className="text-destructive">{pager.error}</span>}
         {gapError && <span className="text-destructive">{gapError}</span>}
         <div className="ml-auto flex items-center gap-2">
           {!gapView &&
             gaps.slice(-3).map((g) => (
-              <button
-                key={`${g.start}-${g.end}`}
-                className="rounded border border-border px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
-                onClick={() => void showGap(g)}
-                title="Output skipped while the view was catching up"
-              >
-                {g.end - g.start} skipped lines
-              </button>
+              <Tooltip key={`${g.start}-${g.end}`}>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    className={HEADER_ACTION}
+                    onClick={() => void showGap(g)}
+                  >
+                    {g.end - g.start} skipped lines
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Output skipped while the view was catching up</TooltipContent>
+              </Tooltip>
             ))}
           {!gapView && !exhausted && (
-            <button
-              className="rounded border border-border px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className={HEADER_ACTION}
               onClick={() => void controller.loadOlderHistory()}
               disabled={pager.loading}
             >
               Load older
-            </button>
+            </Button>
           )}
-          <button
-            className="flex size-5 items-center justify-center rounded hover:bg-muted hover:text-foreground"
+          <IconButton
+            label="Close history"
+            className="size-5 rounded hover:bg-muted dark:hover:bg-muted"
             onClick={onClose}
-            aria-label="Close history"
           >
             <X className="size-3.5" />
-          </button>
+          </IconButton>
         </div>
       </div>
       <div ref={hostRef} className="terminal-host relative min-h-0 flex-1 px-1" />

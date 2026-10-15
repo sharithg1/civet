@@ -1,11 +1,14 @@
 // Ported from Orca: src/renderer/src/components/tab-bar/SortableTab.tsx and
 // tab-bar/drop-indicator.ts (tab classes, active indicator, hover-reveal close
 // button, middle-click close). Drag-to-reorder (dnd-kit), rename, pinning,
-// context menus and i18n were dropped.
+// context menus and i18n were dropped. shadcn Tabs is not used: these tabs
+// carry their own close buttons and only switch which split layout is mounted.
 
 import { Columns2, Plus, Rows2, X } from 'lucide-react'
-import { leaves } from '../layout/pane-tree'
-import { aggregateStatus, indicatorFor } from '../lib/agent-status'
+import { leaves } from '@/layout/pane-tree'
+import { aggregateStatus, indicatorFor } from '@/lib/agent-status'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import {
   activateTab,
   closeTab,
@@ -13,8 +16,12 @@ import {
   splitFocused,
   useStore,
   type Tab
-} from '../state/store'
+} from '@/state/store'
 import { AgentStateDot } from './AgentStateDot'
+import { IconButton } from './IconButton'
+
+/** Tab-bar controls hover to --muted, as before (overrides ghost's dark accent). */
+const BAR_HOVER = 'hover:bg-muted dark:hover:bg-muted'
 
 const ACTIVE_TAB_INDICATOR_CLASSES =
   'pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-foreground z-20'
@@ -25,12 +32,18 @@ function getTabRootStateClasses(isActive: boolean): string {
     : 'bg-card text-muted-foreground hover:text-foreground'
 }
 
-type Props = { hostId: string; worktree: string; wsKey: string; tabs: Tab[]; activeTab: string | null }
+type Props = {
+  hostId: string
+  worktree: string
+  wsKey: string
+  tabs: Tab[]
+  activeTab: string | null
+}
 
 export function TabBar({ hostId, worktree, wsKey, tabs, activeTab }: Props) {
   return (
     <div className="flex h-9 shrink-0 items-stretch border-b border-border bg-card">
-      <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
+      <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto" role="tablist">
         {tabs.map((tab, i) => (
           <TerminalTab
             key={tab.id}
@@ -41,21 +54,30 @@ export function TabBar({ hostId, worktree, wsKey, tabs, activeTab }: Props) {
             hasTabsToRight={i < tabs.length - 1}
           />
         ))}
-        <button
-          type="button"
-          className="flex w-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
-          title="New terminal"
-          aria-label="New terminal"
+        <IconButton
+          label="New terminal"
+          side="bottom"
+          className={cn('h-full w-8 rounded-none', BAR_HOVER)}
           onClick={() => void newTerminalTab(hostId, worktree)}
         >
           <Plus className="size-4" />
-        </button>
+        </IconButton>
       </div>
       <div className="flex items-center gap-0.5 px-1.5">
-        <IconButton label="Split right" onClick={() => void splitFocused('row')}>
+        <IconButton
+          label="Split right"
+          side="bottom"
+          className={cn('rounded', BAR_HOVER)}
+          onClick={() => void splitFocused('row')}
+        >
           <Columns2 className="size-3.5" />
         </IconButton>
-        <IconButton label="Split down" onClick={() => void splitFocused('column')}>
+        <IconButton
+          label="Split down"
+          side="bottom"
+          className={cn('rounded', BAR_HOVER)}
+          onClick={() => void splitFocused('column')}
+        >
           <Rows2 className="size-3.5" />
         </IconButton>
       </div>
@@ -80,8 +102,7 @@ function TerminalTab({
   const ids = leaves(tab.root)
   const infos = ids.map((id) => panes?.[id]).filter((p) => p !== undefined)
   const focusedInfo = panes?.[tab.focused]
-  const title =
-    focusedInfo?.title || focusedInfo?.command.join(' ') || `pane ${tab.focused}`
+  const title = focusedInfo?.title || focusedInfo?.command.join(' ') || `pane ${tab.focused}`
   const hasAgent = infos.some((p) => p.agent)
   const status = aggregateStatus(infos)
   return (
@@ -107,13 +128,17 @@ function TerminalTab({
       {hasAgent && <AgentStateDot state={indicatorFor(status)} className="mr-1.5" />}
       <span className="mr-1 min-w-0 flex-1 truncate">{title}</span>
       {ids.length > 1 && <span className="mr-1 text-[10px] opacity-60">{ids.length}</span>}
-      <button
+      <Button
         type="button"
-        className={`relative z-10 flex size-4 shrink-0 items-center justify-center rounded-sm ${
+        variant="ghost"
+        size="icon-xs"
+        className={cn(
+          'relative z-10 size-4 rounded-sm',
+          BAR_HOVER,
           isActive
-            ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
-            : 'text-transparent group-hover:text-muted-foreground hover:!bg-muted hover:!text-foreground'
-        }`}
+            ? 'text-muted-foreground hover:text-foreground'
+            : 'text-transparent group-hover:text-muted-foreground hover:!text-foreground focus-visible:text-muted-foreground'
+        )}
         aria-label={`Close tab ${title}`}
         onClick={(e) => {
           e.stopPropagation()
@@ -121,29 +146,7 @@ function TerminalTab({
         }}
       >
         <X className="size-3" />
-      </button>
+      </Button>
     </div>
-  )
-}
-
-function IconButton({
-  label,
-  onClick,
-  children
-}: {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-    >
-      {children}
-    </button>
   )
 }

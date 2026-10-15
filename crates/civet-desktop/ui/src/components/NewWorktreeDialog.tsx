@@ -5,18 +5,40 @@
 // Calls `launch_agent`, which creates the worktree and spawns the agent pane.
 
 import { useMemo, useState } from 'react'
-import { Loader2, Sparkles } from 'lucide-react'
-import { launchAgentInNewWorktree, useStore, type AgentChoice } from '../state/store'
-import { splitShellWords } from '../lib/shell-words'
-import { cn } from '../lib/utils'
-import type { CommandSpec } from '../types'
-import { Button, Dialog, Input, Label } from './ui'
+import { Sparkles } from 'lucide-react'
+import { launchAgentInNewWorktree, useStore, type AgentChoice } from '@/state/store'
+import { splitShellWords } from '@/lib/shell-words'
+import { restoreTerminalFocus } from '@/lib/terminal-focus'
+import { cn } from '@/lib/utils'
+import type { CommandSpec } from '@/types'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { Spinner } from '@/components/ui/spinner'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 const AGENTS: { id: AgentChoice; label: string; hint: string }[] = [
   { id: 'claude', label: 'Claude Code', hint: 'claude' },
   { id: 'codex', label: 'Codex', hint: 'codex' },
   { id: 'custom', label: 'Custom command', hint: 'any CLI' }
 ]
+
+const LABEL = 'text-xs text-muted-foreground'
 
 /** Git-ish branch name check (subset of git check-ref-format). */
 export function branchNameError(name: string): string | null {
@@ -79,110 +101,128 @@ export function NewWorktreeDialog() {
   }
 
   return (
-    <Dialog
-      title="New worktree + launch agent"
-      description="Creates a git worktree on the host and starts the agent in it."
-      onClose={close}
-    >
-      <form
-        className="flex flex-col gap-4"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void submit()
-        }}
-      >
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2 flex flex-col gap-1.5">
-            <Label htmlFor="nw-name">Name (branch)</Label>
-            <Input
-              id="nw-name"
-              placeholder="fix-reconnect-banner"
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={nameError ? true : undefined}
-              onChange={(e) => setName(e.target.value)}
-            />
-            {nameError && <span className="text-[11px] text-destructive">{nameError}</span>}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="nw-repo">Repository</Label>
-            <select
-              id="nw-repo"
-              className="h-9 rounded-md border border-input bg-transparent px-2 text-sm dark:bg-input/30"
-              value={repoId}
-              onChange={(e) => {
-                setRepoId(e.target.value)
-                setBase(null)
-              }}
-            >
-              {(repos ?? []).map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="nw-base">Base branch</Label>
-            <Input
-              id="nw-base"
-              placeholder={repo?.defaultBranch ?? 'HEAD'}
-              value={baseValue}
-              spellCheck={false}
-              onChange={(e) => setBase(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label>Agent</Label>
-          <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Agent">
-            {AGENTS.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                role="radio"
-                aria-checked={agent === a.id}
-                onClick={() => setAgent(a.id)}
-                className={cn(
-                  'flex flex-col items-start rounded-md border px-3 py-2 text-left text-sm transition-colors',
-                  agent === a.id
-                    ? 'border-ring bg-accent text-accent-foreground'
-                    : 'border-border text-muted-foreground hover:bg-accent/50'
-                )}
-              >
-                <span className="font-medium text-foreground">{a.label}</span>
-                <span className="font-mono text-[11px]">{a.hint}</span>
-              </button>
-            ))}
-          </div>
-          {agent === 'custom' && (
-            <>
+    <Dialog open onOpenChange={(open) => !open && close()}>
+      <DialogContent onCloseAutoFocus={restoreTerminalFocus}>
+        <DialogHeader className="gap-1.5">
+          <DialogTitle className="text-base leading-none">New worktree + launch agent</DialogTitle>
+          <DialogDescription>
+            Creates a git worktree on the host and starts the agent in it.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void submit()
+          }}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 flex flex-col gap-1.5">
+              <Label className={LABEL} htmlFor="nw-name">
+                Name (branch)
+              </Label>
               <Input
-                aria-label="Custom command"
-                className="font-mono"
-                placeholder={`aider --model sonnet`}
-                value={custom}
+                id="nw-name"
+                placeholder="fix-reconnect-banner"
+                value={name}
+                autoComplete="off"
                 spellCheck={false}
-                onChange={(e) => setCustom(e.target.value)}
+                aria-invalid={nameError ? true : undefined}
+                onChange={(e) => setName(e.target.value)}
               />
-              {custom && command.error && (
-                <span className="text-[11px] text-destructive">{command.error}</span>
-              )}
-            </>
-          )}
-        </div>
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={close} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={!canSubmit}>
-            {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
-            Create and launch
-          </Button>
-        </div>
-      </form>
+              {nameError && <span className="text-[11px] text-destructive">{nameError}</span>}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className={LABEL} htmlFor="nw-repo">
+                Repository
+              </Label>
+              <Select
+                value={repoId}
+                onValueChange={(value) => {
+                  setRepoId(value)
+                  setBase(null)
+                }}
+              >
+                <SelectTrigger id="nw-repo" className="w-full">
+                  <SelectValue placeholder="No repositories" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(repos ?? []).map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className={LABEL} htmlFor="nw-base">
+                Base branch
+              </Label>
+              <Input
+                id="nw-base"
+                placeholder={repo?.defaultBranch ?? 'HEAD'}
+                value={baseValue}
+                spellCheck={false}
+                onChange={(e) => setBase(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label className={LABEL} id="nw-agent-label">
+              Agent
+            </Label>
+            <ToggleGroup
+              type="single"
+              value={agent}
+              // Single toggle groups can be emptied by re-clicking; keep a choice.
+              onValueChange={(value) => value && setAgent(value as AgentChoice)}
+              aria-labelledby="nw-agent-label"
+              className="grid w-full grid-cols-3 gap-2"
+            >
+              {AGENTS.map((a) => (
+                <ToggleGroupItem
+                  key={a.id}
+                  value={a.id}
+                  className={cn(
+                    'flex h-auto flex-col items-start gap-0 rounded-md border px-3 py-2 text-left text-sm font-normal whitespace-normal transition-colors',
+                    'border-border text-muted-foreground hover:bg-accent/50 hover:text-muted-foreground',
+                    'data-[state=on]:border-ring data-[state=on]:bg-accent data-[state=on]:text-accent-foreground'
+                  )}
+                >
+                  <span className="font-medium text-foreground">{a.label}</span>
+                  <span className="font-mono text-[11px]">{a.hint}</span>
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            {agent === 'custom' && (
+              <>
+                <Input
+                  aria-label="Custom command"
+                  className="font-mono"
+                  placeholder={`aider --model sonnet`}
+                  value={custom}
+                  spellCheck={false}
+                  onChange={(e) => setCustom(e.target.value)}
+                />
+                {custom && command.error && (
+                  <span className="text-[11px] text-destructive">{command.error}</span>
+                )}
+              </>
+            )}
+          </div>
+          {error && <p className="text-xs text-destructive">{error}</p>}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={close} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              {busy ? <Spinner /> : <Sparkles />}
+              Create and launch
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
     </Dialog>
   )
 }

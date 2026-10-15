@@ -51,11 +51,7 @@ export function App() {
     <div className="flex h-full w-full overflow-hidden">
       <Sidebar />
       <Workspace />
-      {showConnect && (
-        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]">
-          <ConnectScreen onCancel={() => useStore.setState({ showConnect: false })} />
-        </div>
-      )}
+      {showConnect && <ConnectScreen onCancel={() => useStore.setState({ showConnect: false })} />}
       {newWorktree && <NewWorktreeDialog key={`${newWorktree.hostId}:${newWorktree.repo ?? ''}`} />}
       <AddRepoDialog />
       <ConfirmDialog />
@@ -68,7 +64,9 @@ export function App() {
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = navigator.platform.toLowerCase().includes('mac') ? e.metaKey : e.ctrlKey && e.shiftKey
+      const mod = navigator.platform.toLowerCase().includes('mac')
+        ? e.metaKey
+        : e.ctrlKey && e.shiftKey
       if (!mod) return
       const { active, workspaces } = useStore.getState()
       if (!active) return
@@ -78,7 +76,9 @@ function useShortcuts() {
         void newTerminalTab(active.hostId, active.worktree)
       } else if (key === 'd') {
         e.preventDefault()
-        void splitFocused(e.shiftKey && navigator.platform.toLowerCase().includes('mac') ? 'column' : 'row')
+        void splitFocused(
+          e.shiftKey && navigator.platform.toLowerCase().includes('mac') ? 'column' : 'row'
+        )
       } else if (key === 'w') {
         const ws = workspaces[wsKey(active.hostId, active.worktree)]
         const tab = ws?.tabs.find((t) => t.id === ws.activeTab)

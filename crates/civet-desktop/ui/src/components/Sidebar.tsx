@@ -5,10 +5,25 @@
 // virtualised list and SSH target management were dropped.
 
 import { FolderPlus, LogOut, Plus, Server, Sparkles } from 'lucide-react'
-import { useStore, disconnectHost, selectWorktree, wtKey, wsKey, panesOfWorktree } from '../state/store'
-import { cn } from '../lib/utils'
-import type { HostView } from '../state/store'
+import {
+  useStore,
+  disconnectHost,
+  selectWorktree,
+  wtKey,
+  wsKey,
+  panesOfWorktree
+} from '@/state/store'
+import type { HostView } from '@/state/store'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { IconButton } from './IconButton'
 import { WorktreeCard } from './WorktreeCard'
+
+/** Hover colour for sidebar controls (overrides the ghost button's accent in both themes). */
+const SIDEBAR_HOVER = 'hover:bg-worktree-sidebar-accent dark:hover:bg-worktree-sidebar-accent'
 
 export function Sidebar() {
   const hostOrder = useStore((s) => s.hostOrder)
@@ -19,26 +34,32 @@ export function Sidebar() {
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-worktree-sidebar-border px-3">
         <span className="text-sm font-semibold tracking-tight">Civet</span>
         {backendKind === 'mock' && (
-          <span
-            className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
-            title="Not running inside Tauri: using the in-browser mock backend"
-          >
-            mock
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-500">
+                mock
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Not running inside Tauri: using the in-browser mock backend
+            </TooltipContent>
+          </Tooltip>
         )}
-        <button
-          type="button"
-          className="ml-auto flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-worktree-sidebar-accent hover:text-foreground"
-          title="Connect to another host"
-          aria-label="Connect to another host"
+        <IconButton
+          label="Connect to another host"
+          side="bottom"
+          className={cn('ml-auto rounded', SIDEBAR_HOVER)}
           onClick={() => useStore.setState({ showConnect: true })}
         >
           <Plus className="size-4" />
-        </button>
+        </IconButton>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
+      <ScrollArea
+        className="min-h-0 flex-1" // Radix wraps content in a display:table div that defeats `truncate`.
+        viewportClassName="px-1.5 py-2 [&>div]:!block"
+      >
         {hostOrder.map((id) => hosts[id] && <HostSection key={id} host={hosts[id]} />)}
-      </div>
+      </ScrollArea>
     </aside>
   )
 }
@@ -60,33 +81,50 @@ function HostSection({ host }: { host: HostView }) {
         <span className="min-w-0 flex-1 truncate font-medium" title={host.hostId}>
           {host.label}
         </span>
-        <span
-          className={cn('size-1.5 rounded-full', STATE_DOT[host.state])}
-          title={`${host.state}${host.transport ? ` · ${host.transport === 'quic' ? 'QUIC' : 'SSH tunnel'}` : ''}${host.rttMs != null ? ` · ${host.rttMs} ms` : ''}`}
-        />
-        <div className="flex items-center opacity-0 transition-opacity group-hover:opacity-100">
-          <HeaderButton label="Add repository" onClick={() => useStore.setState({ addRepoFor: host.hostId })}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn('size-1.5 rounded-full', STATE_DOT[host.state])}
+              data-host-state={host.state}
+              aria-label={hostStateLabel(host)}
+            />
+          </TooltipTrigger>
+          <TooltipContent>{hostStateLabel(host)}</TooltipContent>
+        </Tooltip>
+        <div className="flex items-center opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <IconButton
+            label="Add repository"
+            className={cn('size-5 rounded', SIDEBAR_HOVER)}
+            onClick={() => useStore.setState({ addRepoFor: host.hostId })}
+          >
             <FolderPlus className="size-3.5" />
-          </HeaderButton>
-          <HeaderButton label="Disconnect" onClick={() => void disconnectHost(host.hostId)}>
+          </IconButton>
+          <IconButton
+            label="Disconnect"
+            className={cn('size-5 rounded', SIDEBAR_HOVER)}
+            onClick={() => void disconnectHost(host.hostId)}
+          >
             <LogOut className="size-3.5" />
-          </HeaderButton>
+          </IconButton>
         </div>
       </div>
       {host.transport === 'stream' && (
-        <div className="px-1.5 pb-1 text-[10px] text-muted-foreground">via SSH tunnel (UDP unavailable)</div>
+        <div className="px-1.5 pb-1 text-[10px] text-muted-foreground">
+          via SSH tunnel (UDP unavailable)
+        </div>
       )}
       {(repos ?? []).map((repo) => (
         <RepoGroup key={repo.id} hostId={host.hostId} repoId={repo.id} name={repo.name} />
       ))}
       {repos && repos.length === 0 && (
-        <button
+        <Button
           type="button"
-          className="mx-1.5 mt-1 text-xs text-muted-foreground underline hover:text-foreground"
+          variant="link"
+          className="mx-1.5 mt-1 h-auto p-0 text-xs font-normal text-muted-foreground underline hover:text-foreground"
           onClick={() => useStore.setState({ addRepoFor: host.hostId })}
         >
           Add a repository…
-        </button>
+        </Button>
       )}
     </section>
   )
@@ -101,15 +139,24 @@ function RepoGroup({ hostId, repoId, name }: { hostId: string; repoId: string; n
     <div className="mb-1.5">
       <div className="group flex h-6 items-center px-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         <span className="min-w-0 flex-1 truncate">{name}</span>
-        <button
-          type="button"
-          className="flex h-5 items-center gap-1 rounded px-1 normal-case tracking-normal opacity-0 transition-opacity hover:bg-worktree-sidebar-accent hover:text-foreground group-hover:opacity-100"
-          title="New worktree + launch agent"
-          onClick={() => useStore.setState({ newWorktree: { hostId, repo: repoId } })}
-        >
-          <Sparkles className="size-3" />
-          New
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className={cn(
+                'h-5 gap-1 rounded px-1 text-[11px] font-medium normal-case tracking-normal text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:text-foreground has-[>svg]:px-1',
+                SIDEBAR_HOVER
+              )}
+              onClick={() => useStore.setState({ newWorktree: { hostId, repo: repoId } })}
+            >
+              <Sparkles className="size-3" />
+              New
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>New worktree + launch agent</TooltipContent>
+        </Tooltip>
       </div>
       <div className="flex flex-col gap-0.5">
         {(worktrees ?? []).map((wt) => (
@@ -127,24 +174,8 @@ function RepoGroup({ hostId, repoId, name }: { hostId: string; repoId: string; n
   )
 }
 
-function HeaderButton({
-  label,
-  onClick,
-  children
-}: {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-worktree-sidebar-accent hover:text-foreground"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  )
+function hostStateLabel(host: HostView): string {
+  const transport = host.transport ? ` · ${host.transport === 'quic' ? 'QUIC' : 'SSH tunnel'}` : ''
+  const rtt = host.rttMs != null ? ` · ${host.rttMs} ms` : ''
+  return `${host.state}${transport}${rtt}`
 }

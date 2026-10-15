@@ -5,9 +5,10 @@
 // branch, path, pane count and the aggregated agent status.
 
 import { GitBranch, Terminal } from 'lucide-react'
-import { aggregateStatus, indicatorFor, statusLabel } from '../lib/agent-status'
-import { basename, cn } from '../lib/utils'
-import type { AgentStatus, PaneInfo, WorktreeInfo } from '../types'
+import { aggregateStatus, indicatorFor, statusLabel } from '@/lib/agent-status'
+import { basename, cn } from '@/lib/utils'
+import type { AgentStatus, PaneInfo, WorktreeInfo } from '@/types'
+import { Badge } from '@/components/ui/badge'
 import { AgentStateDot } from './AgentStateDot'
 
 type Props = {
@@ -47,9 +48,12 @@ export function WorktreeCard({ worktree, panes, active, unread, onSelect }: Prop
           {name}
         </span>
         {worktree.isMain && (
-          <span className="rounded border border-worktree-sidebar-border px-1 text-[10px] text-muted-foreground">
+          <Badge
+            variant="outline"
+            className="rounded border-worktree-sidebar-border px-1 py-0 text-[10px] font-normal text-muted-foreground"
+          >
             main
-          </span>
+          </Badge>
         )}
         {unread && (
           <span
@@ -66,7 +70,10 @@ export function WorktreeCard({ worktree, panes, active, unread, onSelect }: Prop
           {worktree.path}
         </span>
         {live.length > 0 && (
-          <span className="flex shrink-0 items-center gap-0.5" title={`${live.length} live pane(s)`}>
+          <span
+            className="flex shrink-0 items-center gap-0.5"
+            title={`${live.length} live pane(s)`}
+          >
             <Terminal className="size-3" aria-hidden />
             {live.length}
           </span>

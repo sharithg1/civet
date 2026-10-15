@@ -5,14 +5,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Columns2, History, Rows2, X } from 'lucide-react'
-import { useStore, closePanes, focusPane, splitFocused, reportError } from '../state/store'
-import { PaneController } from '../terminal/pane-controller'
-import type { LineRange } from '../terminal/pane-stream'
-import type { PaneId } from '../types'
-import { cn } from '../lib/utils'
+import { useStore, closePanes, focusPane, splitFocused, reportError } from '@/state/store'
+import { PaneController } from '@/terminal/pane-controller'
+import type { LineRange } from '@/terminal/pane-stream'
+import type { PaneId } from '@/types'
+import { cn } from '@/lib/utils'
+import { indicatorFor } from '@/lib/agent-status'
 import { HistoryView } from './HistoryView'
 import { AgentStateDot } from './AgentStateDot'
-import { indicatorFor } from '../lib/agent-status'
+import { IconButton } from './IconButton'
 
 type Props = {
   hostId: string
@@ -90,10 +91,16 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
           <PaneButton label="Show older history" onClick={() => setHistoryOpen((v) => !v)}>
             <History className="size-3" />
           </PaneButton>
-          <PaneButton label="Split right" onClick={() => void splitFocusedFrom(hostId, pane, 'row')}>
+          <PaneButton
+            label="Split right"
+            onClick={() => void splitFocusedFrom(hostId, pane, 'row')}
+          >
             <Columns2 className="size-3" />
           </PaneButton>
-          <PaneButton label="Split down" onClick={() => void splitFocusedFrom(hostId, pane, 'column')}>
+          <PaneButton
+            label="Split down"
+            onClick={() => void splitFocusedFrom(hostId, pane, 'column')}
+          >
             <Rows2 className="size-3" />
           </PaneButton>
           <PaneButton label="Close pane" onClick={() => closePanes(hostId, [pane])}>
@@ -129,15 +136,15 @@ function PaneButton({
   children: React.ReactNode
 }) {
   return (
-    <button
-      type="button"
-      className="flex size-5 items-center justify-center rounded-sm text-terminal-pane-title-on-dark-button-fg/70 hover:bg-white/10 hover:text-terminal-pane-title-on-dark-button-hover-fg"
-      title={label}
-      aria-label={label}
+    <IconButton
+      label={label}
+      side="bottom"
+      className="size-5 rounded-sm text-terminal-pane-title-on-dark-button-fg/70 hover:bg-white/10 hover:text-terminal-pane-title-on-dark-button-hover-fg dark:hover:bg-white/10"
+      // Keep the click from refocusing the pane (and its xterm) first.
       onMouseDown={(e) => e.stopPropagation()}
       onClick={onClick}
     >
       {children}
-    </button>
+    </IconButton>
   )
 }

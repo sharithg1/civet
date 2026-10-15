@@ -3,13 +3,13 @@
 // detaches the hidden panes and re-attaching replays a Full (cheap in the
 // mosh model, and it keeps WebGL contexts bounded).
 import { Plus, Sparkles } from 'lucide-react'
-import { newTerminalTab, useStore, wsKey as makeWsKey } from '../state/store'
-import { leaves } from '../layout/pane-tree'
-import { basename } from '../lib/utils'
+import { newTerminalTab, useStore, wsKey as makeWsKey } from '@/state/store'
+import { leaves } from '@/layout/pane-tree'
+import { basename } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { ConnectionBanner } from './ConnectionBanner'
 import { SplitLayout } from './SplitLayout'
 import { TabBar } from './TabBar'
-import { Button } from './ui'
 
 export function Workspace() {
   const active = useStore((s) => s.active)
@@ -50,10 +50,12 @@ export function Workspace() {
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 bg-background text-sm text-muted-foreground">
             <div>
-              No terminals in <span className="font-medium text-foreground">{basename(active.worktree)}</span>
+              No terminals in{' '}
+              <span className="font-medium text-foreground">{basename(active.worktree)}</span>
             </div>
             <div className="flex gap-2">
               <Button
+                type="button"
                 size="sm"
                 variant="outline"
                 disabled={hostState !== 'connected'}
@@ -63,6 +65,7 @@ export function Workspace() {
                 New terminal
               </Button>
               <Button
+                type="button"
                 size="sm"
                 disabled={hostState !== 'connected'}
                 onClick={() => useStore.setState({ newWorktree: { hostId: active.hostId } })}
