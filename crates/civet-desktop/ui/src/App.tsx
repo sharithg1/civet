@@ -28,6 +28,7 @@ import {
   worktreesOf,
   wsKey
 } from './state/store'
+import { initPorts } from './state/ports'
 
 export function App() {
   const [ready, setReady] = useState(false)
@@ -41,7 +42,14 @@ export function App() {
     let cleanup: (() => void) | undefined
     let cancelled = false
     getBackend()
-      .then((b) => initApp(b))
+      .then(async (b) => {
+        const app = await initApp(b)
+        const ports = await initPorts(b)
+        return () => {
+          ports()
+          app()
+        }
+      })
       .then((c) => {
         if (cancelled) c()
         else cleanup = c

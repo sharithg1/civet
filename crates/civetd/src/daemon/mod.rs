@@ -35,6 +35,7 @@
 //! A newer running daemon is never downgraded unless `--replace` is given.
 
 mod bootstrap;
+mod ports;
 mod server;
 mod sys;
 mod uploads;

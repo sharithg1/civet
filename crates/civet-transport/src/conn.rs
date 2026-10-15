@@ -562,6 +562,10 @@ pub enum ServerIncoming {
         /// Where to send the answer.
         responder: ScrollbackResponder,
     },
+    /// The client opened a `StreamOpen::Ports` stream (QUIC only).
+    Ports(crate::tunnel::PortsSink),
+    /// The client wants a TCP connection forwarded (QUIC only).
+    Forward(crate::tunnel::ForwardRequest),
 }
 
 /// Receiving half of a daemon-side connection.
@@ -831,6 +835,29 @@ impl ClientConnection {
                     Err(_) => Err(closed_err(&self.inner.closer)),
                 }
             }
+        }
+    }
+
+    /// Open a `StreamOpen::Ports` stream. Stream link: `Ok(Err(Unsupported))`.
+    pub async fn watch_ports(
+        &self,
+    ) -> Result<Result<crate::tunnel::PortsWatch, RpcError>, TransportError> {
+        match &self.inner.quic {
+            Some((conn, _)) => crate::tunnel::watch_ports(conn).await.map(Ok),
+            None => Ok(Err(crate::tunnel::unsupported_on_stream_link())),
+        }
+    }
+
+    /// Forward one TCP connection to `port` on the daemon's host.
+    /// `Ok(Err(_))`: the daemon refused (see `civet_proto::ForwardReply`);
+    /// stream link: `Unsupported`.
+    pub async fn open_forward(
+        &self,
+        port: u16,
+    ) -> Result<Result<crate::tunnel::Tunnel, RpcError>, TransportError> {
+        match &self.inner.quic {
+            Some((conn, _)) => crate::tunnel::open_forward(conn, port).await,
+            None => Ok(Err(crate::tunnel::unsupported_on_stream_link())),
         }
     }
 

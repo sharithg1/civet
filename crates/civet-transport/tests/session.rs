@@ -546,3 +546,33 @@ async fn session_first_connect_times_out_without_daemon() {
     assert!(t0.elapsed() < Duration::from_secs(2));
     let _ = TransportKind::Quic;
 }
+
+/// A daemon that predates port forwarding drops the new streams: the client
+/// reports `Unsupported` (or the watch ends before its first update) and the
+/// connection keeps working.
+#[tokio::test]
+async fn old_daemon_drops_forward_and_ports_streams_harmlessly() {
+    let (key, cid) = hello_template();
+    let daemon = TestDaemon::new(key.clone());
+    let (dialer, _) = quic_dialer(&daemon);
+    let (s, _ev) = start(fast(session_config(key, cid)), dialer).await;
+
+    match s.open_forward(8080).await {
+        Err(civet_transport::RequestError::Rpc(e)) => {
+            assert_eq!(e.code, civet_proto::ErrorCode::Unsupported, "{e}");
+        }
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+    let mut watch = s.watch_ports().await.unwrap();
+    let first = tokio::time::timeout(T, watch.next()).await.unwrap();
+    assert!(
+        !matches!(first, Ok(Some(_))),
+        "no update from an old daemon: {first:?}"
+    );
+    // The connection is unaffected.
+    assert!(matches!(
+        s.request(Request::Ping { nonce: 9 }).await.unwrap(),
+        Response::Pong { nonce: 9, .. }
+    ));
+    s.close().await;
+}

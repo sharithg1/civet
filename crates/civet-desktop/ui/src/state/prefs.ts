@@ -10,6 +10,8 @@ export type StepKind = 'agent' | 'terminal'
 export type CreateStep = { kind: StepKind; cmd: string }
 /** Local echo prediction: `auto` = mosh-style, only on links slower than ~30 ms. */
 export type Prediction = 'auto' | 'off'
+/** A forward restored whenever its host connects: remote port → `localhost:local`. */
+export type PinnedForward = { remote: number; local: number }
 
 type PrefsListener = (next: Prefs, prev: Prefs) => void
 const listeners = new Set<PrefsListener>()
@@ -49,7 +51,9 @@ export type Prefs = {
   sidebarOpen: boolean | null
   rightPanelOpen: boolean | null
   /** Right panel tab last selected. */
-  rightTab: 'files' | 'changes' | 'branch'
+  rightTab: 'files' | 'changes' | 'branch' | 'ports'
+  /** Port forwards to restore on connect, per host id. */
+  pinnedForwards: Record<string, PinnedForward[]>
 }
 
 /** Fields kept by "Reset to defaults": saved data and sidebar layout, not settings. */
@@ -62,7 +66,8 @@ const KEPT_ON_RESET = [
   'collapsedRepos',
   'sidebarOpen',
   'rightPanelOpen',
-  'rightTab'
+  'rightTab',
+  'pinnedForwards'
 ] as const
 
 export const DEFAULT_PREFS: Prefs = {
@@ -80,7 +85,8 @@ export const DEFAULT_PREFS: Prefs = {
   collapsedRepos: {},
   sidebarOpen: null,
   rightPanelOpen: null,
-  rightTab: 'branch'
+  rightTab: 'branch',
+  pinnedForwards: {}
 }
 
 const KEY = 'civet.prefs.v1'

@@ -1,30 +1,34 @@
-// Right panel (Files / Changes / Branch), styled after Cursor's review pane:
+// Right panel (Files / Changes / Branch / Ports), styled after Cursor's review pane:
 // its own header row of icon pills with the panel toggle at the far right,
 // then a PR-like branch view (state badge, branch → base, title, sections).
 // civetd does not expose a worktree's files, git status, diffs, commits or
 // PRs yet, so Files and Changes are explanatory empty states and Branch shows
 // what the daemon does report (branch, HEAD, path, sessions) plus "Remove
-// worktree…". Backend follow-up: list_files / git_status / git_diff /
-// branch_info.
-import { ArrowRight, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
+// worktree…". Ports lists listening ports and port forwards (PortsTab.tsx).
+// Backend follow-up: list_files / git_status / git_diff / branch_info.
+import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
 import { panesOfWorktree, pushToast, useStore, type RightTab } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
 import { cn } from '@/lib/utils'
 import { DOT_LABEL, paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
 import { useWorktreeInfo } from './chrome'
+import { usePorts } from '@/state/ports'
 import { IconButton } from './IconButton'
+import { PortsTab } from './PortsTab'
 import { StatusDot } from './StatusDot'
 import { RightPanelToggle } from './TitleBar'
 
 const TABS: [RightTab, string, typeof FileText][] = [
   ['files', 'Files', FileText],
   ['changes', 'Changes', Diff],
-  ['branch', 'Branch', GitBranch]
+  ['branch', 'Branch', GitBranch],
+  ['ports', 'Ports', ArrowRightLeft]
 ]
 
 export function RightPanel() {
   const active = useStore((s) => s.active)
   const tab = useStore((s) => s.rightTab)
+  const forwardCount = usePorts((s) => (active ? (s.forwards[active.hostId]?.length ?? 0) : 0))
   return (
     <aside className="flex min-h-0 w-[360px] shrink-0 flex-col border-l border-border bg-background">
       <div data-tauri-drag-region="deep" className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none">
@@ -43,6 +47,7 @@ export function RightPanel() {
             >
               <Icon className="size-3.5 shrink-0" />
               {label}
+              {id === 'ports' && forwardCount > 0 && <span className="font-mono text-xs text-quiet">{forwardCount}</span>}
             </button>
           ))}
         </div>
@@ -97,6 +102,13 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   const connected = host?.state === 'connected'
   const remote = `${host?.label ?? hostId}:${info.path}`
   const panes = panesOfWorktree(paneMap, worktree).sort((a, b) => a.id - b.id)
+  if (tab === 'ports') {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pt-1 pb-3">
+        <PortsTab hostId={hostId} worktree={worktree} panes={panes} connected={connected} />
+      </div>
+    )
+  }
   const task = info.isMain ? null : worktreeTask(info, panes)
   const title = labelPref === 'task' && task ? task : info.isMain ? 'Default checkout' : branch
   const copyPath = () => {

@@ -22,6 +22,7 @@ pub mod failover;
 mod quic;
 pub mod session;
 mod stream;
+mod tunnel;
 
 pub use cert::{SERVER_NAME, ServerIdentity, fingerprint_of};
 pub use conn::{
@@ -39,6 +40,7 @@ pub use session::{
     REPLACED_RETRY_DELAY, REPLACED_WINDOW, RequestError, SessionEvent, StreamDialer,
 };
 pub use stream::{STREAM_CONNECT_TIMEOUT, accept_stream, connect_stream};
+pub use tunnel::{FORWARD_REPLY_TIMEOUT, ForwardRequest, PortsSink, PortsWatch, Tunnel};
 
 use civet_proto::{ClientHello, HelloReject, RejectReason, SessionKey};
 

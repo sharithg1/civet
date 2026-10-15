@@ -16,6 +16,8 @@
 //!   QUIC stream after the control stream.
 //! * [`control`]: control RPC ([`Request`] / [`Response`]) and pushed
 //!   [`Event`]s.
+//! * [`ports`]: listening-port updates and TCP port forwarding, each on
+//!   their own QUIC streams.
 //! * [`term`]: terminal traffic: [`InputMessage`] (client keystrokes with
 //!   sequence numbers), [`ScreenUpdate`] (server screen diffs as VT bytes),
 //!   [`ScreenAck`], and scrollback paging.
@@ -51,6 +53,7 @@ pub mod hello;
 pub mod ids;
 pub mod keys;
 pub mod messages;
+pub mod ports;
 pub mod term;
 
 pub use agent::{
@@ -71,6 +74,7 @@ pub use hello::{ClientHello, HelloReject, HelloReply, RejectReason, ServerHello}
 pub use ids::{ClientId, PaneId, RepoId, RequestId, WorktreeId};
 pub use keys::{CertFingerprint, ResumeToken, SessionKey};
 pub use messages::{ClientMessage, ServerMessage, StreamOpen};
+pub use ports::{ForwardReply, ListeningPort, MAX_PORT_COMMAND_CHARS, PortsUpdate};
 pub use term::{
     ECHO_ACK_DELAY_MS, FULL_REPLAY_LINES, InputMessage, MAX_INFLIGHT_UPDATES, MAX_REPLAY_LINES,
     MAX_TERM_COLS, MAX_TERM_ROWS, ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage,

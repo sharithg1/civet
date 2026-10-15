@@ -30,12 +30,15 @@ import type {
   DaemonEvent,
   DaemonEventEnvelope,
   DaemonInfo,
+  ForwardView,
+  ForwardsEvent,
   HostStateEvent,
   HostSummary,
   HostTarget,
   LaunchAgentRequest,
   PaneId,
   PaneInfo,
+  PortsEvent,
   RepoInfo,
   ScrollbackPageView,
   ScrollbackQuery,
@@ -468,10 +471,20 @@ function randomStep(): string {
   return STEPS[Math.floor(Math.random() * STEPS.length)]!
 }
 
+/** Local ports the mock pretends are already taken on this Mac. */
+const MOCK_TAKEN_LOCALLY = new Set([3001, 8080])
+
 export class MockBackend implements CivetBackend {
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
   private hosts = new Map<string, MockHost>()
+  /** hostId → remote port → forward */
+  private forwards = new Map<string, Map<number, ForwardView>>()
+  private lastPorts = new Map<string, string>()
+
+  constructor() {
+    this.emitter.on<DaemonEventEnvelope>('civet://daemon-event', ({ hostId }) => this.refreshPorts(hostId))
+  }
   /** What each host was connected with (reconnect_host / restart_daemon reuse it). */
   readonly targets = new Map<string, { target: HostTarget; transport: TransportChoice }>()
 
@@ -584,13 +597,146 @@ export class MockBackend implements CivetBackend {
       rttMs: 42,
       message: null
     })
+    this.refreshPorts(hostId)
     return host.summary
+  }
+
+  /** Sample listening ports derived from the host's live panes: a dev server per agent, one per shell, plus a database. */
+  private mockPorts(hostId: string): PortsEvent {
+    const h = this.hosts.get(hostId)
+    if (!h || h.summary.state !== 'connected') {
+      return { hostId, status: 'pending', message: null, ports: [] }
+    }
+    if (h.summary.transport === 'stream') {
+      return {
+        hostId,
+        status: 'unsupported',
+        message: 'port forwarding needs the QUIC transport (this host is connected over the SSH tunnel)',
+        ports: []
+      }
+    }
+    const live = [...h.panes.values()].map((p) => p.info).filter((p) => !p.exited)
+    const ports: PortsEvent['ports'] = []
+    const agents = live.filter((p) => p.agent)
+    const shells = live.filter((p) => !p.agent)
+    agents.slice(0, 3).forEach((p, i) => {
+      ports.push({
+        port: 5173 + i,
+        addrs: ['::1'],
+        pid: 4100 + p.id,
+        process: 'node',
+        command: 'node node_modules/.bin/vite --port ' + (5173 + i),
+        pane: p.id,
+        worktree: p.worktree
+      })
+    })
+    if (agents[0]) {
+      ports.push({
+        port: 6006,
+        addrs: ['127.0.0.1'],
+        pid: 4200 + agents[0].id,
+        process: 'node',
+        command: 'node node_modules/.bin/storybook dev -p 6006',
+        pane: agents[0].id,
+        worktree: agents[0].worktree
+      })
+    }
+    if (shells[0]) {
+      ports.push({
+        port: 3001,
+        addrs: ['0.0.0.0'],
+        pid: 4300 + shells[0].id,
+        process: 'node',
+        command: 'node server.js',
+        pane: shells[0].id,
+        worktree: shells[0].worktree
+      })
+    }
+    ports.push({
+      port: 5432,
+      addrs: ['127.0.0.1', '::1'],
+      pid: 812,
+      process: 'postgres',
+      command: '/usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main',
+      pane: null,
+      worktree: null
+    })
+    ports.sort((a, b) => a.port - b.port)
+    return { hostId, status: 'watching', message: null, ports }
+  }
+
+  /** Emit `civet://ports` if the sample ports changed (after connect and every pane event). */
+  private refreshPorts(hostId: string): void {
+    if (!this.hosts.has(hostId)) return
+    const e = this.mockPorts(hostId)
+    const json = JSON.stringify(e)
+    if (this.lastPorts.get(hostId) === json) return
+    this.lastPorts.set(hostId, json)
+    this.emitter.emit<PortsEvent>('civet://ports', e)
+  }
+
+  private forwardsOf(hostId: string): Map<number, ForwardView> {
+    let m = this.forwards.get(hostId)
+    if (!m) this.forwards.set(hostId, (m = new Map()))
+    return m
+  }
+
+  private emitForwards(hostId: string): void {
+    const forwards = [...this.forwardsOf(hostId).values()].sort((a, b) => a.remotePort - b.remotePort)
+    this.emitter.emit<ForwardsEvent>('civet://forwards', { hostId, forwards })
+  }
+
+  async listPorts(hostId: string) {
+    this.host(hostId)
+    return this.mockPorts(hostId)
+  }
+
+  async forwardPort(hostId: string, remotePort: number, localPort: number | null = null) {
+    this.host(hostId)
+    const m = this.forwardsOf(hostId)
+    const existing = m.get(remotePort)
+    if (existing) {
+      if (localPort != null && localPort !== existing.localPort) {
+        throw new CivetError('alreadyExists', `port ${remotePort} is already forwarded to localhost:${existing.localPort}`)
+      }
+      return existing
+    }
+    const used = new Set([...m.values()].map((f) => f.localPort))
+    if (localPort != null && (MOCK_TAKEN_LOCALLY.has(localPort) || used.has(localPort))) {
+      throw new CivetError('alreadyExists', `localhost:${localPort} is already in use on this Mac`)
+    }
+    let local = localPort ?? remotePort
+    if (localPort == null && (MOCK_TAKEN_LOCALLY.has(local) || used.has(local))) {
+      local = 51842
+      while (used.has(local)) local++
+    }
+    const f: ForwardView = { remotePort, localPort: local, connections: 0, lastError: null }
+    m.set(remotePort, f)
+    this.emitForwards(hostId)
+    return f
+  }
+
+  async stopForward(hostId: string, remotePort: number) {
+    if (!this.forwardsOf(hostId).delete(remotePort)) {
+      throw new CivetError('notFound', `port ${remotePort} is not forwarded`)
+    }
+    this.emitForwards(hostId)
+  }
+
+  async listForwards(hostId: string) {
+    return [...this.forwardsOf(hostId).values()]
+  }
+
+  async openLocalUrl(url: string) {
+    window.open(url, '_blank', 'noopener')
   }
 
   async disconnectHost(hostId: string) {
     this.host(hostId)
     this.hostState(hostId, { state: 'disconnected', transport: null, rttMs: null, message: null })
     this.hosts.delete(hostId)
+    this.lastPorts.delete(hostId)
+    if (this.forwards.delete(hostId)) this.emitter.emit<ForwardsEvent>('civet://forwards', { hostId, forwards: [] })
   }
 
   async listHosts() {
@@ -845,6 +991,12 @@ export class MockBackend implements CivetBackend {
   }
   async onClipboard(cb: (e: ClipboardEvent) => void) {
     return this.emitter.on('civet://clipboard', cb)
+  }
+  async onPorts(cb: (e: PortsEvent) => void) {
+    return this.emitter.on('civet://ports', cb)
+  }
+  async onForwards(cb: (e: ForwardsEvent) => void) {
+    return this.emitter.on('civet://forwards', cb)
   }
 
   async prepareFileDrop(_hostId: string, paths: string[]): Promise<DroppedFile[]> {

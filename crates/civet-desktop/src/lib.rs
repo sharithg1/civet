@@ -9,6 +9,7 @@
 //! * [`linkstate`]: `LinkState` → host state ("reconnecting" after 1 s).
 //! * [`wake`]: sleep/wake and network-change detection.
 //! * [`connect`]: ssh bootstrap, QUIC with stdio-tunnel fallback, local mode.
+//! * [`forwards`]: listening-port watch and TCP port forwarding per host.
 //!
 //! The React frontend lives in `ui/`.
 
@@ -18,6 +19,7 @@ pub mod commands;
 pub mod connect;
 pub mod error;
 pub mod events;
+pub mod forwards;
 pub mod hosts;
 pub mod linkstate;
 pub mod pane;
@@ -36,7 +38,7 @@ use crate::connect::SshConnector;
 use crate::events::{
     AgentAttentionEvent, BootstrapProgressEvent, ClipboardEvent, ClipboardWrite,
     DaemonEventPayload, EV_AGENT_ATTENTION, EV_BOOTSTRAP_PROGRESS, EV_CLIPBOARD, EV_DAEMON_EVENT,
-    EV_HOST_STATE, HostStateEvent, UiEvents,
+    EV_FORWARDS, EV_HOST_STATE, EV_PORTS, ForwardsEvent, HostStateEvent, PortsEvent, UiEvents,
 };
 use crate::hosts::{HostManager, ManagerConfig};
 
@@ -68,6 +70,14 @@ impl<R: tauri::Runtime> UiEvents for TauriUi<R> {
 
     fn agent_attention(&self, e: AgentAttentionEvent) {
         self.emit(EV_AGENT_ATTENTION, e);
+    }
+
+    fn ports(&self, e: PortsEvent) {
+        self.emit(EV_PORTS, e);
+    }
+
+    fn forwards(&self, e: ForwardsEvent) {
+        self.emit(EV_FORWARDS, e);
     }
 
     fn window_focused(&self) -> bool {
