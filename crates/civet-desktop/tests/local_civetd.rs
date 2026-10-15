@@ -91,6 +91,7 @@ async fn local_mode_quic_then_stdio_tunnel() {
         client_id: ClientId::generate().unwrap(),
         local_civetd: Some(civetd),
         local_state_dir: Some(dir.path().to_path_buf()),
+        remote_state_dir: None,
         bundled_dist: None,
     });
     let mgr = HostManager::new(
