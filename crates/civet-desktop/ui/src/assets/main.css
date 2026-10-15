@@ -342,10 +342,9 @@
   border-color: transparent;
   outline: none;
 }
-/* Match TERMINAL_THEME_DARK.background (= --background) so the terminal sits
-   flush in the work area, like Cursor's integrated terminal. */
+/* Match TERMINAL_THEME_DARK.background so the inset padding isn't a darker frame. */
 .terminal-host {
-  background-color: var(--background);
+  background-color: #282c34;
 }
 .terminal-host .xterm {
   height: 100%;
