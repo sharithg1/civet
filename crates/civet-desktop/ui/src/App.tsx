@@ -71,14 +71,17 @@ export function App() {
     )
   }
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-chrome">
-      <TitleBar />
-      <div className="flex min-h-0 flex-1">
-        {sidebarOpen && <Sidebar />}
+    // Cursor-style columns: the sidebar and the right panel run the full
+    // window height with their own header rows; the main column stacks its
+    // header (tabs), the workspace and a footer line.
+    <div className="relative flex h-full w-full overflow-hidden bg-background">
+      {sidebarOpen && <Sidebar />}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TitleBar />
         <Workspace />
-        {rightPanelOpen && <RightPanel />}
+        <StatusBar />
       </div>
-      <StatusBar />
+      {rightPanelOpen && <RightPanel />}
       <SettingsView />
       <WorktreeSwitcher />
       {showConnect && <ConnectScreen onCancel={() => useStore.setState({ showConnect: false, addProjectAfterConnect: false })} />}

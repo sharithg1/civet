@@ -183,7 +183,7 @@ export function SettingsView() {
             ← Back to workspace<span className="flex-1" />
             <span className="font-mono text-2xs text-dim">esc</span>
           </button>
-          <div className="mb-2 flex h-8 items-center gap-2 rounded-lg border border-border bg-white/[0.045] px-2.5">
+          <div className="mb-2 flex h-8 items-center gap-2 rounded-lg border border-border bg-field px-2.5">
             <RingGlyph />
             <input
               ref={searchRef}

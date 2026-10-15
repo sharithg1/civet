@@ -7,6 +7,7 @@
 import { useStore, wsKey as makeWsKey } from '@/state/store'
 import { leaves } from '@/layout/pane-tree'
 import { Spinner } from '@/components/ui/spinner'
+import { Kbd } from './chrome'
 import { ConnectionBanner } from './ConnectionBanner'
 import { SplitLayout } from './SplitLayout'
 
@@ -18,14 +19,19 @@ export function Workspace() {
 
   if (!active) {
     return (
-      <main className="grid min-w-0 flex-1 place-items-center bg-background font-mono text-xs text-faint">
-        select a worktree · ⌘K switch
+      <main className="grid min-h-0 min-w-0 flex-1 place-items-center bg-background text-sm text-quiet">
+        <div className="flex flex-col items-center gap-2">
+          Select a worktree
+          <span className="flex items-center gap-1.5 text-dim">
+            <Kbd>⌘K</Kbd> to switch
+          </span>
+        </div>
       </main>
     )
   }
   const tab = ws?.tabs.find((t) => t.id === ws?.activeTab)
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-background">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <ConnectionBanner hostId={active.hostId} />
       {/* Why: `inert` also blurs a focused terminal, so keystrokes can't
           reach a pane that is about to be killed. */}
@@ -41,8 +47,13 @@ export function Workspace() {
             multiPane={leaves(tab.root).length > 1}
           />
         ) : (
-          <div className="grid h-full place-items-center font-mono text-xs text-faint">
-            no tabs · ⌥C claude · ⌥T terminal
+          <div className="grid h-full place-items-center text-sm text-quiet">
+            <div className="flex flex-col items-center gap-2">
+              No tabs open
+              <span className="flex items-center gap-1.5 text-dim">
+                <Kbd>⌥C</Kbd> Claude Code · <Kbd>⌥T</Kbd> Terminal
+              </span>
+            </div>
           </div>
         )}
         {removing && (
