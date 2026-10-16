@@ -44,10 +44,24 @@ query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo)
   --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)'
 ```
 
-Also read the review bodies (`gh pr view <n> --json reviews`) and PR
-comments (`gh pr view <n> --comments`): **CodeRabbit puts "nitpick" and
-"outside diff range" findings only in the review body**, not in threads.
-Its comments carry a category, a severity (🔴 Critical / 🟠 Major /
+Also read **every** review body and the PR comments: **CodeRabbit puts
+"nitpick" and "outside diff range" findings only in the review body**, not
+in threads. It often posts several reviews per push, and the latest one can
+be empty, so never look at just the last review (`.reviews[-1]`). List
+every review with a non-empty body and the commit it reviewed, and read
+each one newer than your last pass:
+
+```sh
+gh api repos/sharithg1/civet/pulls/<n>/reviews --paginate \
+  --jq '.[] | select(.body != "") | {id, user: .user.login, submitted_at, commit: .commit_id[0:7], body}'
+gh pr view <n> --comments
+```
+
+In each CodeRabbit body, look for the `Outside diff range comments (N)`,
+`Nitpick comments (N)` and `Duplicate comments (N)` sections. Every finding
+listed there needs a verdict, the same as a thread.
+
+CodeRabbit comments carry a category, a severity (🔴 Critical / 🟠 Major /
 🟡 Minor / 🔵 Trivial) and often a "Proposed fix" diff and a "Prompt for AI
 Agents" block.
 
@@ -131,5 +145,7 @@ Don't post `@coderabbitai` commands (e.g. resolve, pause) unless the user asks.
 
 Reply with: the PR URL; CI state per job (green / failing / pending);
 each finding as fixed / declined (why) / needs your call; commits pushed;
-and what's still pending. If this pass found nothing new, say that in one
-line. Don't merge the PR — that's the user's call.
+and what's still pending. Before reporting "nothing left", check that every
+non-empty review body on the PR (step 2's list, not just the latest review)
+has had each of its findings answered. If this pass found nothing new, say
+that in one line. Don't merge the PR — that's the user's call.
