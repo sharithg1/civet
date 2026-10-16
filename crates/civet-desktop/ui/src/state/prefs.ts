@@ -52,6 +52,8 @@ export type Prefs = {
   collapsedRepos: Record<string, true>
   /** Sidebar width in px, as last dragged. */
   sidebarWidth: number
+  /** Right panel width in px, as last dragged. */
+  rightPanelWidth: number
   /** Panels as last toggled (⌥B / ⌥E); null: the default for the window size. */
   sidebarOpen: boolean | null
   rightPanelOpen: boolean | null
@@ -88,6 +90,7 @@ const KEPT_ON_RESET = [
   'collapsedRepos',
   'sidebarOpen',
   'sidebarWidth',
+  'rightPanelWidth',
   'rightPanelOpen',
   'rightTab',
   'pinnedForwards',
@@ -110,6 +113,7 @@ export const DEFAULT_PREFS: Prefs = {
   collapsedRepos: {},
   sidebarOpen: null,
   sidebarWidth: 260,
+  rightPanelWidth: 360,
   rightPanelOpen: null,
   rightTab: 'branch',
   pinnedForwards: {},
@@ -157,6 +161,15 @@ export const SIDEBAR_MAX_WIDTH = 480
 export function clampSidebarWidth(px: number): number {
   if (!Number.isFinite(px)) return DEFAULT_PREFS.sidebarWidth
   return Math.round(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, px)))
+}
+
+/** Right panel width limits for the drag handle. */
+export const RIGHT_PANEL_MIN_WIDTH = 280
+export const RIGHT_PANEL_MAX_WIDTH = 800
+
+export function clampRightPanelWidth(px: number): number {
+  if (!Number.isFinite(px)) return DEFAULT_PREFS.rightPanelWidth
+  return Math.round(Math.min(RIGHT_PANEL_MAX_WIDTH, Math.max(RIGHT_PANEL_MIN_WIDTH, px)))
 }
 
 export function applyOrder(ids: readonly string[], order: readonly string[] | undefined): string[] {

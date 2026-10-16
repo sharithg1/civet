@@ -73,6 +73,7 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 | `click-file` / `dblclick-file <name>` | A row in the Files tree (exact entry name, e.g. `Cargo.toml`). |
 | `rclick-file` / `cmd-click-file` / `shift-click-file <name>` | Right-click (opens the context menu), ⌘-click or ⇧-click a Files row. |
 | `drag-file <from> -> <to>` | Drag a Files row onto another row (a folder, or a file: its folder) with the mouse. |
+| `drag-separator <label> <dx>` / `dblclick-separator <label>` | Drag a panel resize handle by its label (`Resize sidebar`, `Resize right panel`) `dx` px (negative = left), or double-click it (reset). |
 | `menu <text>` | Click an item of the open context menu (text prefix, e.g. `menu New File`). |
 | `type <text>` | Type into the focused element (e.g. the inline name field). |
 | `click-change` / `dblclick-change <name>` | A row in the Changes list (file name). |

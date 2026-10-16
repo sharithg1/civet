@@ -82,6 +82,7 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { Kbd, useWorktreeTabs } from './chrome'
 import { IconButton } from './IconButton'
+import { PanelResizeHandle } from './PanelResizeHandle'
 import { StatusDot } from './StatusDot'
 import { AgentLogo, hasAgentLogo } from './AgentLogo'
 
@@ -103,7 +104,15 @@ export function Sidebar() {
       className="relative flex h-full shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground"
       style={{ width }}
     >
-      <SidebarResizeHandle width={width} onDrag={setDragWidth} />
+      <PanelResizeHandle
+        edge="right"
+        label="Resize sidebar"
+        width={width}
+        clamp={clampSidebarWidth}
+        onDrag={setDragWidth}
+        onCommit={(w) => setPrefs({ sidebarWidth: w })}
+        onReset={() => setPrefs({ sidebarWidth: DEFAULT_PREFS.sidebarWidth })}
+      />
       <SidebarTop />
       <SidebarNav />
       <div
@@ -121,54 +130,6 @@ export function Sidebar() {
 }
 
 /** Window-title row: traffic-light inset, sidebar toggle, worktree history arrows. */
-/**
- * Drag the sidebar's right edge to resize it (saved in prefs on release);
- * double-click restores the default width.
- */
-function SidebarResizeHandle({
-  width,
-  onDrag
-}: {
-  width: number
-  onDrag: (w: number | null) => void
-}) {
-  const [start, setStart] = useState<{ x: number; width: number } | null>(null)
-  const at = (e: React.PointerEvent) => clampSidebarWidth(start!.width + e.clientX - start!.x)
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize sidebar"
-      aria-valuenow={width}
-      title="Drag to resize, double-click to reset"
-      onPointerDown={(e) => {
-        if (e.button !== 0) return
-        e.preventDefault()
-        e.currentTarget.setPointerCapture(e.pointerId)
-        setStart({ x: e.clientX, width })
-      }}
-      onPointerMove={(e) => {
-        if (start) onDrag(at(e))
-      }}
-      onPointerUp={(e) => {
-        if (!start) return
-        setPrefs({ sidebarWidth: at(e) })
-        setStart(null)
-        onDrag(null)
-      }}
-      onPointerCancel={() => {
-        setStart(null)
-        onDrag(null)
-      }}
-      onDoubleClick={() => setPrefs({ sidebarWidth: DEFAULT_PREFS.sidebarWidth })}
-      className={cn(
-        'absolute inset-y-0 -right-[3px] z-10 w-1.5 cursor-col-resize transition-colors hover:bg-border-strong',
-        start && 'bg-border-strong'
-      )}
-    />
-  )
-}
-
 function SidebarTop() {
   const inset = useTitleBarInset()
   const backendKind = useStore((s) => s.backend?.kind)

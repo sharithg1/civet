@@ -54,6 +54,19 @@ const commands = {
     await p.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 8 })
     await p.mouse.up()
   },
+  // Drag a resize handle (role=separator) by its label, `dx` px (negative = left).
+  'drag-separator': async (...args) => {
+    const dx = Number(args.pop())
+    const b = await p.getByRole('separator', { name: args.join(' ') }).boundingBox()
+    const x = b.x + b.width / 2
+    const y = b.y + b.height / 2
+    await p.mouse.move(x, y)
+    await p.mouse.down()
+    await p.mouse.move(x + dx, y, { steps: 8 })
+    await p.mouse.up()
+  },
+  'dblclick-separator': async (...name) =>
+    p.getByRole('separator', { name: name.join(' ') }).dblclick(),
   // An item of the open context menu, by its text.
   menu: async (...label) =>
     p.getByRole('menuitem', { name: new RegExp(`^${esc(label.join(' '))}`) }).click(),
