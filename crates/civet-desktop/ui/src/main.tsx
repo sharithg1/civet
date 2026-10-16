@@ -13,8 +13,8 @@ import { TooltipProvider } from './components/ui/tooltip'
 // font must not block the app.
 const fontsReady = Promise.race([
   Promise.all([
-    document.fonts.load('400 13px "Geist Mono Variable"'),
-    document.fonts.load('600 13px "Geist Mono Variable"'),
+    document.fonts.load('350 13px "Geist Mono Variable"'),
+    document.fonts.load('500 13px "Geist Mono Variable"'),
     document.fonts.load('400 13px "Geist Variable"')
   ]),
   new Promise((r) => setTimeout(r, 1500))

@@ -2,16 +2,16 @@
 // (buildDefaultTerminalOptions) and src/shared/terminal-themes/defaults.ts
 // ("Ghostty Default Style Dark"). Settings plumbing, contrast correction and
 // the scrollback policy module were dropped; Civet has one fixed theme
-// (Ghostty's default colours, font from the Civet Workspace v3 design).
+// (Ghostty's palette with softer text, font from the Civet Workspace v3 design).
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
 
 export const TERMINAL_THEME_DARK: ITheme = {
   // Ghostty's built-in defaults (`ghostty +show-config --default`): the
-  // #282c34 background with its Tomorrow Night 16-colour palette. Cursor and
-  // selection follow Ghostty's unset behaviour (foreground cursor, inverted
-  // selection).
+  // #282c34 background with its Tomorrow Night 16-colour palette. Soften the
+  // default text white for long reading sessions; keep cursor and selection
+  // bright so they remain easy to find.
   background: '#282c34',
-  foreground: '#ffffff',
+  foreground: '#e0e0e0',
   cursor: '#ffffff',
   cursorAccent: '#282c34',
   selectionBackground: '#ffffff',
@@ -53,8 +53,8 @@ export function buildDefaultTerminalOptions(): ITerminalOptions {
     cursorInactiveStyle: 'outline',
     fontSize: 13,
     fontFamily: TERMINAL_FONT_FAMILY,
-    fontWeight: '400',
-    fontWeightBold: '600',
+    fontWeight: 350,
+    fontWeightBold: '500',
     scrollback: TERMINAL_SCROLLBACK_ROWS,
     scrollSensitivity: 1.15,
     fastScrollSensitivity: 5,
