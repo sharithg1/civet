@@ -88,8 +88,14 @@ export function ChangesTab({
                     key={c.path}
                     change={c}
                     active={open === `${side}\u0000${c.path}`}
-                    onClick={() =>
-                      openDiffTab(hostId, worktree, c.path, { side, oldPath: c.oldPath })
+                    onOpen={(preview) =>
+                      openDiffTab(
+                        hostId,
+                        worktree,
+                        c.path,
+                        { side, oldPath: c.oldPath },
+                        { preview }
+                      )
                     }
                   />
                 ))}
@@ -157,11 +163,12 @@ function ListHeader({
 function FileRow({
   change,
   active,
-  onClick
+  onOpen
 }: {
   change: GitFileChange
   active: boolean
-  onClick: () => void
+  /** Single click: a preview tab; double click: a pinned one. */
+  onOpen: (preview: boolean) => void
 }) {
   const [name, dir] = splitPath(change.path)
   const [letter, label, color] = CHANGE_KIND[change.kind]
@@ -171,7 +178,8 @@ function FileRow({
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => onOpen(true)}
+      onDoubleClick={() => onOpen(false)}
       title={title}
       className={cn(
         'mx-1.5 flex h-7 cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-sm',

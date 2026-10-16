@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CivetBackend } from '../backend'
 import type { HostSummary, PaneInfo, RepoInfo, WorktreeInfo } from '../types'
 import { termSize } from '../types'
@@ -540,17 +540,18 @@ describe('store', () => {
     expect(ws().tabs).toHaveLength(3)
     expect(ws().activeTab).toBe(main)
 
-    // A diff of the same file is a tab of its own, one per side.
+    // A diff of the same file is a tab of its own, one per side, opened
+    // next to the active tab.
     store.openDiffTab('h', '/w', 'src/main.rs', { side: 'unstaged', oldPath: null })
     store.openDiffTab('h', '/w', 'src/main.rs', { side: 'staged', oldPath: null })
     store.openDiffTab('h', '/w', 'src/main.rs', { side: 'unstaged', oldPath: null })
     expect(
       ws().tabs.map((t) => (t.kind === 'file' ? `${t.path}:${t.diff?.side ?? ''}` : t.id))
-    ).toEqual(['p', 'src/main.rs:', 'README.md:', 'src/main.rs:unstaged', 'src/main.rs:staged'])
-    expect(ws().activeTab).toBe(ws().tabs[3]!.id)
+    ).toEqual(['p', 'src/main.rs:', 'src/main.rs:unstaged', 'src/main.rs:staged', 'README.md:'])
+    expect(ws().activeTab).toBe(ws().tabs[2]!.id)
     store.openFileTab('h', '/w', 'src/main.rs')
     expect(ws().activeTab).toBe(main)
-    for (const t of ws().tabs.slice(3)) store.closeTab(key, t.id)
+    for (const t of ws().tabs.filter((t) => t.kind === 'file' && t.diff)) store.closeTab(key, t.id)
     expect(ws().tabs).toHaveLength(3)
 
     // Closing the pane keeps the file tabs.
@@ -563,5 +564,100 @@ describe('store', () => {
     expect(ws().tabs.map((t) => t.id)).toEqual([main])
     expect(ws().activeTab).toBe(main)
     expect(killPane).toHaveBeenCalledOnce()
+  })
+
+  describe('preview tabs', () => {
+    const key = store.wsKey('h', '/w')
+    const ws = () => useStore.getState().workspaces[key]!
+    const shown = () =>
+      ws().tabs.map((t) =>
+        t.kind === 'file' ? `${t.diff ? 'diff:' : ''}${t.path}${t.preview ? '*' : ''}` : t.id
+      )
+    const active = () => {
+      const t = ws().tabs.find((x) => x.id === ws().activeTab)
+      return t?.kind === 'file' ? `${t.diff ? 'diff:' : ''}${t.path}` : t?.id
+    }
+    const unstaged = { side: 'unstaged', oldPath: null } as const
+    beforeEach(() => {
+      const tab = (id: string, pane: number): Tab => ({
+        id,
+        root: { type: 'leaf', pane },
+        focused: pane
+      })
+      useStore.setState({
+        panes: {},
+        workspaces: { [key]: { tabs: [tab('p', 1), tab('q', 2)], activeTab: 'p' } }
+      })
+    })
+
+    it('a single-click open replaces the preview tab in place', () => {
+      store.openFileTab('h', '/w', 'a.ts', { preview: true })
+      expect(shown()).toEqual(['p', 'a.ts*', 'q'])
+      const id = ws().tabs[1]!.id
+      store.activateTab(key, 'q')
+      store.openFileTab('h', '/w', 'b.ts', { preview: true })
+      expect(shown()).toEqual(['p', 'b.ts*', 'q'])
+      expect(active()).toBe('b.ts')
+      expect(ws().tabs[1]!.id).not.toBe(id)
+      // A diff replaces it too.
+      store.openDiffTab('h', '/w', 'b.ts', unstaged, { preview: true })
+      expect(shown()).toEqual(['p', 'diff:b.ts*', 'q'])
+    })
+
+    it('an open tab is focused, never duplicated', () => {
+      store.openFileTab('h', '/w', 'a.ts')
+      store.openFileTab('h', '/w', 'b.ts', { preview: true })
+      store.openFileTab('h', '/w', 'a.ts', { preview: true })
+      expect(shown()).toEqual(['p', 'a.ts', 'b.ts*', 'q'])
+      expect(active()).toBe('a.ts')
+      store.openFileTab('h', '/w', 'b.ts', { preview: true })
+      expect(shown()).toEqual(['p', 'a.ts', 'b.ts*', 'q'])
+      expect(active()).toBe('b.ts')
+    })
+
+    it('pinning keeps the tab; the next preview goes after the active tab', () => {
+      store.openFileTab('h', '/w', 'a.ts', { preview: true })
+      store.pinTab(key, ws().activeTab!)
+      expect(shown()).toEqual(['p', 'a.ts', 'q'])
+      store.openFileTab('h', '/w', 'b.ts', { preview: true })
+      expect(shown()).toEqual(['p', 'a.ts', 'b.ts*', 'q'])
+      // Pinning a pane tab or a pinned tab changes nothing.
+      store.pinTab(key, 'p')
+      store.pinTab(key, ws().tabs[1]!.id)
+      expect(shown()).toEqual(['p', 'a.ts', 'b.ts*', 'q'])
+    })
+
+    it('a double-click open pins, the preview tab or a new one', () => {
+      // Single then double click on the same row.
+      store.openFileTab('h', '/w', 'a.ts', { preview: true })
+      store.openFileTab('h', '/w', 'a.ts')
+      expect(shown()).toEqual(['p', 'a.ts', 'q'])
+      // A pinned open leaves the preview tab alone.
+      store.openDiffTab('h', '/w', 'b.ts', unstaged, { preview: true })
+      store.openFileTab('h', '/w', 'c.ts')
+      expect(shown()).toEqual(['p', 'a.ts', 'diff:b.ts*', 'c.ts', 'q'])
+      store.openDiffTab('h', '/w', 'b.ts', unstaged)
+      expect(shown()).toEqual(['p', 'a.ts', 'diff:b.ts', 'c.ts', 'q'])
+    })
+
+    it('closing the preview tab clears it', () => {
+      store.openFileTab('h', '/w', 'a.ts', { preview: true })
+      store.closeTab(key, ws().activeTab!)
+      expect(shown()).toEqual(['p', 'q'])
+      expect(active()).toBe('p')
+      store.openFileTab('h', '/w', 'b.ts', { preview: true })
+      expect(shown()).toEqual(['p', 'b.ts*', 'q'])
+    })
+
+    it('a file and its diff are distinct tabs', () => {
+      store.openFileTab('h', '/w', 'a.ts')
+      store.openDiffTab('h', '/w', 'a.ts', unstaged, { preview: true })
+      expect(shown()).toEqual(['p', 'a.ts', 'diff:a.ts*', 'q'])
+      store.openFileTab('h', '/w', 'a.ts', { preview: true })
+      expect(active()).toBe('a.ts')
+      store.openDiffTab('h', '/w', 'a.ts', unstaged, { preview: true })
+      expect(active()).toBe('diff:a.ts')
+      expect(ws().tabs).toHaveLength(4)
+    })
   })
 })

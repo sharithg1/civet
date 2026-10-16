@@ -89,6 +89,8 @@ export type TabView = {
   file: string | null
   /** A file tab showing the file's diff. */
   diff: boolean
+  /** A preview file tab (italic; replaced by the next single-click open). */
+  preview: boolean
   paneCount: number
   what: { text: string; mono: boolean }
 }
@@ -128,6 +130,7 @@ export function worktreeTabs(
         focused: null,
         file: g.path,
         diff: !!g.diff,
+        preview: !!g.preview,
         paneCount: 0,
         what: {
           text: [slash < 0 ? '' : g.path.slice(0, slash), g.diff ? diffWhat(g.diff.side) : '']
@@ -145,6 +148,7 @@ export function worktreeTabs(
       focused: g.focused,
       file: null,
       diff: false,
+      preview: false,
       paneCount: g.ids.length,
       what: paneWhat(l.agent ?? panes?.[g.focused])
     }
