@@ -3,6 +3,7 @@ import type { PaneInfo, WorktreeInfo } from '../types'
 import {
   ago,
   cleanTitle,
+  compactWorktreeName,
   duration,
   fuzzy,
   highlightRuns,
@@ -86,6 +87,16 @@ describe('labels', () => {
     expect(ago(0, 30 * 60000)).toBe('30m')
     expect(ago(0, 3 * 3600000)).toBe('3h')
     expect(duration(0, (3 * 60 + 12) * 60000)).toBe('3h 12m')
+  })
+})
+
+describe('compact worktree name', () => {
+  it('keeps the last segment, cut at a word boundary', () => {
+    expect(compactWorktreeName('desktop/codex-tabs-resizable-sidebar')).toBe('codex-tabs')
+    expect(compactWorktreeName('main')).toBe('main')
+    expect(compactWorktreeName('NO-TICKET/fix-pdf')).toBe('fix-pdf')
+    expect(compactWorktreeName('a/supercalifragilisticexpialidocious-x')).toBe('supercalifragilisticexpialidocious')
+    expect(compactWorktreeName('feat/short_name.with.dots-and-more')).toBe('short_name.with')
   })
 })
 

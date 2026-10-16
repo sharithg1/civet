@@ -1,41 +1,21 @@
-// ⌘K worktree switcher (v3): Recent (MRU) + one group per project when the
-// query is empty; otherwise fuzzy matches on task, branch and project,
-// grouped by project and ordered by best score. ↑↓ / Tab move, ⏎ opens, Esc
-// closes and hands focus back to the terminal.
+// ⌘K worktree switcher, also opened from the title bar's worktree selector
+// and the sidebar's Search. Rows, order and sections come from
+// lib/switcher.ts: current + recent first when the query is empty, fuzzy
+// matches on name, task, project and directory otherwise. ↑↓ / Tab move,
+// ⏎ opens, Esc closes and hands focus back to the terminal.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Laptop, Server } from 'lucide-react'
 import { allWorktrees, panesOfWorktree, selectWorktree, useStore, wsKey } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
-import {
-  ago,
-  highlightRuns,
-  matchFields,
-  worktreeBranch,
-  worktreeDot,
-  worktreeTask,
-  type DotKind
-} from '@/lib/worktree-view'
-import type { WorktreeInfo } from '@/types'
+import { switcherGroups, type SwitcherEntry } from '@/lib/switcher'
+import { ago, highlightRuns, shortPath, worktreeBranch, worktreeDot, worktreeTask, type DotKind } from '@/lib/worktree-view'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { ProjectTile, RingGlyph } from './chrome'
 import { StatusDot } from './StatusDot'
 
-type Item = {
-  key: string
-  hostId: string
-  wt: WorktreeInfo
-  project: string
-  primary: string
-  primaryIsTask: boolean
-  secondary: string
-  dot: DotKind
-  tabs: number
-  hits: number[][]
-  score: number
-}
-
-type Group = { label: string; sub: string; tile: string | null; items: Item[] }
+type Item = SwitcherEntry & { worktree: string; isMain: boolean; dot: DotKind; tabs: number }
 
 export function WorktreeSwitcher() {
   const open = useStore((s) => s.switcherOpen)
@@ -69,81 +49,43 @@ function SwitcherBody() {
   const mru = useStore((s) => s.mru)
   const seen = useStore((s) => s.seen)
   const recentCount = usePrefs((s) => s.recentCount)
-  const labelPref = usePrefs((s) => s.worktreeLabel)
   const currentKey = active ? wsKey(active.hostId, active.worktree) : null
 
-  const { groups, flat } = useMemo(() => {
+  const items = useMemo(() => {
     void worktrees // recompute when worktrees change (allWorktrees reads the store)
-    const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    const items: Item[] = []
-    for (const { hostId, wt } of allWorktrees()) {
-      const project = repos[hostId]?.find((r) => r.id === wt.repo)?.name ?? wt.repo
+    return allWorktrees().map(({ hostId, wt }): Item => {
       const wtPanes = panesOfWorktree(panes[hostId], wt.id)
-      const branch = worktreeBranch(wt)
-      const task = wt.isMain ? null : worktreeTask(wt, wtPanes)
-      const primaryIsTask = labelPref === 'task' && !!task
-      const primary = wt.isMain ? branch : primaryIsTask ? task! : branch
-      const secondary = wt.isMain ? 'default checkout' : primaryIsTask ? branch : (task ?? wt.path)
-      const fields = [primary, secondary, project]
-      const m = tokens.length ? matchFields(tokens, fields) : { score: 0, hits: [[], [], []] }
-      if (!m) continue
       const key = wsKey(hostId, wt.id)
-      const ws = workspaces[key]
-      items.push({
+      return {
         key,
         hostId,
-        wt,
-        project,
-        primary,
-        primaryIsTask,
-        secondary,
+        worktree: wt.id,
+        repo: wt.repo,
+        name: worktreeBranch(wt),
+        path: wt.path,
+        project: repos[hostId]?.find((r) => r.id === wt.repo)?.name ?? wt.repo,
+        host: hosts[hostId]?.label ?? hostId,
+        local: hostId === 'local',
+        task: wt.isMain ? null : worktreeTask(wt, wtPanes),
+        isMain: wt.isMain,
         dot: worktreeDot(wtPanes, hosts[hostId]?.state === 'connected', unread[key]),
-        tabs: ws?.tabs.length || wtPanes.length,
-        hits: m.hits,
-        score: m.score
-      })
-    }
-    const groups: Group[] = []
-    const projectKey = (it: Item) => `${it.hostId}\u0000${it.wt.repo}`
-    const hostLabel = (h: string) => hosts[h]?.label ?? h
-    if (!tokens.length) {
-      const recent = mru
-        .filter((k) => k !== currentKey)
-        .map((k) => items.find((it) => it.key === k))
-        .filter((x): x is Item => !!x)
-        .slice(0, recentCount)
-      if (recent.length) groups.push({ label: 'Recent', sub: '', tile: null, items: recent })
-      const byProject = new Map<string, Item[]>()
-      for (const it of items) {
-        if (recent.includes(it)) continue
-        byProject.set(projectKey(it), [...(byProject.get(projectKey(it)) ?? []), it])
+        tabs: workspaces[key]?.tabs.length || wtPanes.length
       }
-      for (const list of byProject.values()) {
-        groups.push({ label: list[0]!.project, sub: hostLabel(list[0]!.hostId), tile: list[0]!.project, items: list })
-      }
-    } else {
-      const rank = (k: string) => {
-        const i = mru.indexOf(k)
-        return i < 0 ? 1e9 : i
-      }
-      const byProject = new Map<string, Item[]>()
-      for (const it of items) byProject.set(projectKey(it), [...(byProject.get(projectKey(it)) ?? []), it])
-      const sorted = [...byProject.values()]
-        .map((list) => list.sort((a, b) => b.score - a.score || rank(a.key) - rank(b.key)))
-        .sort((a, b) => b[0]!.score - a[0]!.score)
-      for (const list of sorted) {
-        groups.push({ label: list[0]!.project, sub: hostLabel(list[0]!.hostId), tile: list[0]!.project, items: list })
-      }
-    }
-    return { groups, flat: groups.flatMap((g) => g.items) }
-  }, [q, hosts, repos, worktrees, panes, workspaces, unread, mru, currentKey, recentCount, labelPref])
+    })
+  }, [hosts, repos, worktrees, panes, workspaces, unread])
+
+  const groups = useMemo(
+    () => switcherGroups(items, { query: q, mru, currentKey, recentCount }),
+    [items, q, mru, currentKey, recentCount]
+  )
+  const flat = useMemo(() => groups.flatMap((g) => g.rows), [groups])
 
   const sel = Math.min(idx, Math.max(0, flat.length - 1))
   useEffect(() => {
     listRef.current?.querySelector(`[data-sw="${sel}"]`)?.scrollIntoView({ block: 'nearest' })
   }, [sel])
 
-  const open = (it: Item | undefined) => it && selectWorktree(it.hostId, it.wt.id)
+  const open = (it: Item | undefined) => it && selectWorktree(it.hostId, it.worktree)
   const move = (d: number) => flat.length && setIdx((sel + d + flat.length) % flat.length)
 
   let n = 0
@@ -156,7 +98,7 @@ function SwitcherBody() {
           value={q}
           spellCheck={false}
           aria-label="Switch to worktree"
-          placeholder="Switch to worktree…  (task, branch, or project)"
+          placeholder="Switch to worktree…  (name, task, or project)"
           onChange={(e) => {
             setQ(e.target.value)
             setIdx(0)
@@ -180,23 +122,25 @@ function SwitcherBody() {
         </span>
       </div>
       <div ref={listRef} className="max-h-[min(440px,58vh)] overflow-y-auto p-1" role="listbox">
-        {groups.map((g) => (
-          <div key={`${g.label}:${g.sub}`} className="pb-1">
-            <div className="flex items-center gap-[7px] px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
-              {g.tile && <ProjectTile name={g.tile} size={10} />}
-              {g.label}
-              <span className="font-normal text-dim">{g.sub}</span>
-            </div>
-            {g.items.map((it) => {
+        {groups.map((g, gi) => (
+          <div key={`${g.label}:${g.host}:${gi}`} className="pb-1">
+            {g.label && (
+              <div className="flex items-center gap-[7px] px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+                {g.project && <ProjectTile name={g.label} size={10} />}
+                {g.label}
+                {g.host && <span className="font-normal text-dim">{g.host}</span>}
+              </div>
+            )}
+            {g.rows.map((it) => {
               const i = n++
-              const current = it.key === currentKey
-              const meta = `${g.label === 'Recent' ? `${it.project} · ` : ''}${current ? 'current' : seen[it.key] ? ago(seen[it.key]!) : '—'} · ${it.tabs} tab${it.tabs === 1 ? '' : 's'}`
+              const meta = `${it.current ? 'current' : seen[it.key] ? ago(seen[it.key]!) : '—'} · ${it.tabs} tab${it.tabs === 1 ? '' : 's'}`
               return (
                 <div
                   key={it.key}
                   data-sw={i}
                   role="option"
                   aria-selected={i === sel}
+                  aria-current={it.current || undefined}
                   onClick={() => open(it)}
                   onMouseMove={() => i !== sel && setIdx(i)}
                   className={cn('flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5', i === sel && 'bg-accent')}
@@ -204,30 +148,42 @@ function SwitcherBody() {
                   <StatusDot kind={it.dot} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-[7px]">
-                      <span
-                        className={cn(
-                          'min-w-0 truncate text-sm',
-                          !it.primaryIsTask && 'font-mono'
-                        )}
-                      >
-                        <Hl text={it.primary} idxs={it.hits[0]!} base="text-body" />
+                      <span className="min-w-0 truncate font-mono text-sm">
+                        <Hl text={it.name} idxs={it.hits.name} base={it.current ? 'text-foreground' : 'text-body'} />
                       </span>
-                      {it.wt.isMain && (
+                      {it.isMain && (
                         <span className="shrink-0 rounded-sm bg-muted px-[5px] text-2xs leading-4 font-medium text-body">
                           default
                         </span>
                       )}
                     </div>
-                    <div
-                      className={cn(
-                        'truncate text-xs leading-4',
-                        (it.primaryIsTask || it.wt.isMain) && 'font-mono'
+                    <div className="flex min-w-0 items-center gap-1 truncate text-xs leading-4 text-faint">
+                      {!g.project && (
+                        <>
+                          <Hl text={it.project} idxs={it.hits.project} base="text-faint" hit="text-body" />
+                          <span className="text-dim">·</span>
+                          {it.local ? (
+                            <Laptop className="size-3 shrink-0" aria-label="Local" />
+                          ) : (
+                            <Server className="size-3 shrink-0" aria-label="Remote" />
+                          )}
+                          <span className="shrink-0">{it.host}</span>
+                        </>
                       )}
-                    >
-                      <Hl text={it.secondary} idxs={it.hits[1]!} base="text-faint" hit="text-body" />
+                      {g.project && !it.task && <span className="truncate font-mono">{shortPath(it.path)}</span>}
+                      {it.task && (
+                        <>
+                          {!g.project && <span className="text-dim">·</span>}
+                          <span className="min-w-0 truncate">
+                            <Hl text={it.task} idxs={it.hits.task} base="text-faint" hit="text-body" />
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <span className="shrink-0 font-mono text-2xs whitespace-nowrap text-faint">{meta}</span>
+                  <span className={cn('shrink-0 font-mono text-2xs whitespace-nowrap', it.current ? 'text-muted-foreground' : 'text-faint')}>
+                    {meta}
+                  </span>
                   <span className="w-3.5 shrink-0 text-right font-mono text-2xs text-muted-foreground">
                     {i === sel ? '⏎' : ''}
                   </span>

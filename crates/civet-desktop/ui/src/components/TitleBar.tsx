@@ -1,6 +1,6 @@
 // Header of the main column (Cursor-style: the sidebar and the right panel
 // each have their own header row, so this one only spans the work area). It
-// holds the current worktree's title (opens the switcher), the worktree's
+// holds a compact worktree selector (opens the switcher), the worktree's
 // tabs as pills, a "+" menu (Claude Code / Codex / Terminal / splits), a "…" menu of
 // worktree actions and, when the right panel is closed, its toggle. With the
 // sidebar closed it also takes the traffic-light inset and the sidebar
@@ -16,7 +16,7 @@ import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
-import { paneDot, worktreeBranch, worktreeTask, type DotKind } from '@/lib/worktree-view'
+import { compactWorktreeName, paneDot, worktreeBranch, worktreeTask, type DotKind } from '@/lib/worktree-view'
 import {
   activateTab,
   closeTab,
@@ -29,7 +29,6 @@ import {
   useStore,
   wsKey
 } from '@/state/store'
-import { usePrefs } from '@/state/prefs'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,27 +85,31 @@ export function RightPanelToggle() {
   )
 }
 
+/**
+ * Compact worktree selector: a short branch name (`codex-tabs`) that opens
+ * the ⌘K switcher. The project, full branch, host and task are in the
+ * tooltip; the sidebar already shows the hierarchy, and the tabs need the room.
+ */
 function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const panes = useStore((s) => s.panes[hostId])
-  const labelPref = usePrefs((s) => s.worktreeLabel)
+  const hostLabel = useStore((s) => s.hosts[hostId]?.label ?? hostId)
   if (!wt) return null
   const { repo, info } = wt
+  const branch = worktreeBranch(info)
   const task = info.isMain ? null : worktreeTask(info, panesOfWorktree(panes, worktree))
-  const useTask = labelPref === 'task' && !!task
-  const title = useTask ? task! : worktreeBranch(info)
+  const tooltip = [branch, `${repo.name} · ${hostLabel}`, task, 'Switch worktree (⌘K)'].filter(Boolean).join('\n')
   return (
     <button
       type="button"
-      title={`${repo.name} · ${worktreeBranch(info)} — switch worktree (⌘K)`}
+      title={tooltip}
+      aria-label={`Worktree ${branch} in ${repo.name}. Switch worktree`}
+      aria-haspopup="dialog"
       onClick={() => useStore.setState({ switcherOpen: true })}
-      className="group -ml-1.5 flex h-7 max-w-[340px] min-w-0 shrink cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-base hover:bg-hover"
+      className="group -ml-1.5 flex h-7 max-w-[200px] min-w-0 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-quiet hover:bg-hover hover:text-foreground"
     >
-      <span className="shrink-0 whitespace-nowrap text-quiet">{repo.name}</span>
-      <span className="shrink-0 text-dim">/</span>
-      <span className={cn('min-w-0 truncate text-soft group-hover:text-foreground', !useTask && 'font-mono text-sm')}>
-        {title}
-      </span>
+      <GitBranch className="size-3.5 shrink-0 text-dim group-hover:text-quiet" />
+      <span className="min-w-0 truncate font-mono text-sm">{compactWorktreeName(branch)}</span>
       <ChevronDown className="size-3.5 shrink-0 text-dim" />
     </button>
   )

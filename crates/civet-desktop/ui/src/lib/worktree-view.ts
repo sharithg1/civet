@@ -58,6 +58,24 @@ export function worktreeBranch(wt: WorktreeInfo): string {
   return wt.branch ?? basename(wt.path)
 }
 
+/**
+ * Short, recognizable worktree name for the title bar: the branch's last
+ * segment, cut at a word boundary (`-`, `_`, `.`) to about `max` characters.
+ * `desktop/codex-tabs-resizable-sidebar` → `codex-tabs`. A first word longer
+ * than `max` is kept whole (CSS truncates it).
+ */
+export function compactWorktreeName(branch: string, max = 18): string {
+  const name = splitBranch(branch).name || branch
+  if (name.length <= max) return name
+  const [first = name, ...rest] = name.split(/(?=[-_.])/)
+  let out = first
+  for (const w of rest) {
+    if (out.length + w.length > max) break
+    out += w
+  }
+  return out
+}
+
 /** Strip leading spinner / status glyphs that agents put in terminal titles ("✳ Fix …"). */
 export function cleanTitle(title: string): string {
   return title.replace(/^[^\p{L}\p{N}]+/u, '').trim()
