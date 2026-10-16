@@ -1,0 +1,8 @@
+{
+  "name": "run-civet-desktop-driver",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.48.2"
+  }
+}
