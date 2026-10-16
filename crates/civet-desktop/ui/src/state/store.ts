@@ -54,8 +54,17 @@ import { termSize } from '../types'
 
 /** A tab of panes (terminals, agents) in a split layout. */
 export type PaneTab = { kind?: undefined; id: string; root: PaneNode; focused: PaneId }
-/** A read-only view of a worktree file (`path` relative to the worktree root). */
-export type FileTab = { kind: 'file'; id: string; path: string }
+/** Which side of a git change a diff tab shows (right panel → Changes). */
+export type DiffTarget = {
+  side: 'staged' | 'unstaged' | 'untracked' | 'conflicted'
+  /** Source of a rename / copy, diffed as a pair. */
+  oldPath: string | null
+}
+/**
+ * A read-only view of a worktree file (`path` relative to the worktree root),
+ * or with `diff` its uncommitted changes.
+ */
+export type FileTab = { kind: 'file'; id: string; path: string; diff?: DiffTarget }
 export type Tab = PaneTab | FileTab
 
 export const isPaneTab = (t: Tab): t is PaneTab => t.kind !== 'file'
@@ -879,9 +888,26 @@ export function openPaneInTab(
 /** Open a worktree file in a tab of its own, or activate the tab already showing it. */
 export function openFileTab(hostId: string, worktree: string, path: string): void {
   updateWorkspace(wsKey(hostId, worktree), (w) => {
-    const existing = w.tabs.find((t) => t.kind === 'file' && t.path === path)
+    const existing = w.tabs.find((t) => t.kind === 'file' && t.path === path && !t.diff)
     if (existing) return { ...w, activeTab: existing.id }
     const tab: FileTab = { kind: 'file', id: newTabId(), path }
+    return { tabs: [...w.tabs, tab], activeTab: tab.id }
+  })
+}
+
+/** Open a file's diff in a tab of its own (one per file and side), or activate it. */
+export function openDiffTab(
+  hostId: string,
+  worktree: string,
+  path: string,
+  diff: DiffTarget
+): void {
+  updateWorkspace(wsKey(hostId, worktree), (w) => {
+    const existing = w.tabs.find(
+      (t) => t.kind === 'file' && t.path === path && t.diff?.side === diff.side
+    )
+    if (existing) return { ...w, activeTab: existing.id }
+    const tab: FileTab = { kind: 'file', id: newTabId(), path, diff }
     return { tabs: [...w.tabs, tab], activeTab: tab.id }
   })
 }

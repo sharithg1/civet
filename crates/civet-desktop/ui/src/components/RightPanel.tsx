@@ -1,12 +1,13 @@
 // Right panel (Files / Changes / Branch / Ports), styled after Cursor's review pane:
 // its own header row of icon pills with the panel toggle at the far right,
 // then a PR-like branch view (state badge, branch → base, title, sections).
-// Files browses and previews the worktree's files (FilesTab.tsx). civetd does
-// not expose git status, diffs, commits or PRs yet, so Changes is an
-// explanatory empty state and Branch shows what the daemon does report
-// (branch, HEAD, path, sessions) plus "Remove worktree…". Ports lists
-// listening ports and port forwards (PortsTab.tsx).
-// Backend follow-up: git_status / git_diff / branch_info.
+// Files browses and previews the worktree's files (FilesTab.tsx); Changes
+// lists its git status and per-file diffs (ChangesTab.tsx; the tab label's
+// count keeps polling while the panel is open). civetd does not expose
+// commits or PRs yet, so Branch shows what the daemon does report (branch,
+// HEAD, path, sessions) plus "Remove worktree…". Ports lists listening ports
+// and port forwards (PortsTab.tsx).
+// Backend follow-up: branch_info.
 import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
 import { panesOfWorktree, pushToast, useStore, type RightTab } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
@@ -16,6 +17,7 @@ import { useWorktreeInfo } from './chrome'
 import { usePorts } from '@/state/ports'
 import { IconButton } from './IconButton'
 import { FilesTab } from './FilesTab'
+import { ChangesCount, ChangesTab } from './ChangesTab'
 import { PortsTab } from './PortsTab'
 import { StatusDot } from './StatusDot'
 import { RightPanelToggle } from './TitleBar'
@@ -52,6 +54,13 @@ export function RightPanel() {
             >
               <Icon className="size-3.5 shrink-0" />
               {label}
+              {id === 'changes' && active && (
+                <ChangesCount
+                  hostId={active.hostId}
+                  worktree={active.worktree}
+                  showing={tab === 'changes'}
+                />
+              )}
               {id === 'ports' && forwardCount > 0 && (
                 <span className="font-mono text-xs text-quiet">{forwardCount}</span>
               )}
@@ -79,14 +88,6 @@ function Empty({ icon: Icon, children }: { icon: typeof FileText; children: Reac
   )
 }
 
-function Code({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-[4px] bg-secondary px-1 py-px font-mono text-xs text-soft">
-      {children}
-    </span>
-  )
-}
-
 function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string; tab: RightTab }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const host = useStore((s) => s.hosts[hostId])
@@ -100,12 +101,7 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
     )
   }
   if (tab === 'changes') {
-    return (
-      <Empty icon={Diff}>
-        Git status and diffs aren&apos;t reported by civetd yet. Run <Code>git status</Code> in a
-        Terminal tab.
-      </Empty>
-    )
+    return <ChangesTab key={worktree} hostId={hostId} worktree={worktree} connected={connected} />
   }
   const { repo, info } = wt
   const branch = worktreeBranch(info)

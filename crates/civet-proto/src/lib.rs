@@ -63,9 +63,10 @@ pub use agent::{
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
     AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, DirListing,
-    ErrorCode, Event, FileEntry, FileKind, FileList, FilePreview, KillSignal, LaunchAgentRequest,
-    PaneInfo, PullRequestInfo, PullRequestState, RepoInfo, Request, Response, RpcError,
-    SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
+    ErrorCode, Event, FileEntry, FileKind, FileList, FilePreview, GitChangeKind, GitDiffInfo,
+    GitFileChange, GitStatusInfo, KillSignal, LaunchAgentRequest, PaneInfo, PullRequestInfo,
+    PullRequestState, RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo,
+    WorktreeInfo,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -122,6 +123,19 @@ pub const MAX_FILE_PREVIEW_BYTES: u64 = 1024 * 1024;
 
 /// Most paths in a [`FileList`] (`truncated` beyond).
 pub const MAX_ALL_FILES: usize = 50_000;
+
+/// Oldest daemon that understands [`Request::GitStatus`] and
+/// [`Request::GitDiff`] (appended within protocol 1 after the file requests).
+pub const GIT_STATUS_MIN_DAEMON_VERSION: &str = "0.1.11";
+
+/// Most entries a [`GitStatusInfo`] carries (all lists together).
+pub const MAX_GIT_STATUS_ENTRIES: usize = 5000;
+
+/// Largest patch a [`GitDiffInfo`] carries; bigger ones are `too_large`.
+pub const MAX_GIT_DIFF_BYTES: usize = 1024 * 1024;
+
+/// Most changed lines (added + deleted) a [`GitDiffInfo`] carries.
+pub const MAX_GIT_DIFF_LINES: u64 = 20_000;
 
 /// Largest [`Request::UploadFile`] payload (headroom under the frame limit).
 pub const MAX_UPLOAD_BYTES: usize = 15 * 1024 * 1024;

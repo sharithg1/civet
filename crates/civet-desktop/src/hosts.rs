@@ -1099,6 +1099,37 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::ListPullRequests { repo }).await?, Response::PullRequests(p) => p)
     }
 
+    /// `git_status`: the worktree's uncommitted changes.
+    pub async fn git_status(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+    ) -> Result<civet_proto::GitStatusInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::GIT_STATUS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::GitStatus { worktree }).await?, Response::GitStatus(s) => s)
+    }
+
+    /// `git_diff`: one file's unified diff.
+    pub async fn git_diff(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        path: String,
+        old_path: Option<String>,
+        staged: bool,
+        context_lines: u32,
+    ) -> Result<civet_proto::GitDiffInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::GIT_STATUS_MIN_DAEMON_VERSION)?;
+        let request = Request::GitDiff {
+            worktree,
+            path,
+            old_path,
+            staged,
+            context_lines,
+        };
+        expect_response!(self.request(host_id, request).await?, Response::GitDiff(d) => d)
+    }
+
     /// `create_worktree`
     pub async fn create_worktree(
         &self,

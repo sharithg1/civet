@@ -21,6 +21,7 @@
 //! See `docs/INTERFACES.md` (section 4) for the contract and `HOOKS.md` in
 //! this crate for wiring agent hooks to `$CIVET_STATUS_FILE`.
 
+mod changes;
 mod error;
 mod files;
 mod git;

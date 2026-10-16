@@ -87,6 +87,8 @@ export type TabView = {
   focused: PaneId | null
   /** A file tab's worktree-relative path. */
   file: string | null
+  /** A file tab showing the file's diff. */
+  diff: boolean
   paneCount: number
   what: { text: string; mono: boolean }
 }
@@ -125,8 +127,14 @@ export function worktreeTabs(
         agent: null,
         focused: null,
         file: g.path,
+        diff: !!g.diff,
         paneCount: 0,
-        what: { text: slash < 0 ? '' : g.path.slice(0, slash), mono: true }
+        what: {
+          text: [slash < 0 ? '' : g.path.slice(0, slash), g.diff ? diffWhat(g.diff.side) : '']
+            .filter(Boolean)
+            .join(' · '),
+          mono: true
+        }
       }
     }
     const l = labels[paneGroups.indexOf(g)]!
@@ -136,6 +144,7 @@ export function worktreeTabs(
       agent: l.agent,
       focused: g.focused,
       file: null,
+      diff: false,
       paneCount: g.ids.length,
       what: paneWhat(l.agent ?? panes?.[g.focused])
     }
@@ -154,4 +163,8 @@ export function useWorktreeInfo(
     if (info) return { repo, info }
   }
   return null
+}
+
+function diffWhat(side: NonNullable<FileTab['diff']>['side']): string {
+  return side === 'staged' ? 'staged changes' : side === 'conflicted' ? 'conflict' : 'changes'
 }

@@ -38,6 +38,8 @@ describe('TauriBackend commands', () => {
     await backend.removeRepo('h', 'x')
     await backend.listWorktrees('h', 'x')
     await backend.listPullRequests('h', 'x')
+    await backend.gitStatus('h', '/w')
+    await backend.gitDiff('h', '/w', 'b.rs', { oldPath: 'a.rs', staged: true })
     await backend.createWorktree('h', 'x', 'feat')
     await backend.removeWorktree('h', '/w', true)
     await backend.listFiles('h', '/w', 'src', false)
@@ -66,6 +68,18 @@ describe('TauriBackend commands', () => {
       ['remove_repo', { hostId: 'h', repo: 'x' }],
       ['list_worktrees', { hostId: 'h', repo: 'x' }],
       ['list_pull_requests', { hostId: 'h', repo: 'x' }],
+      ['git_status', { hostId: 'h', worktree: '/w' }],
+      [
+        'git_diff',
+        {
+          hostId: 'h',
+          worktree: '/w',
+          path: 'b.rs',
+          oldPath: 'a.rs',
+          staged: true,
+          contextLines: 3
+        }
+      ],
       ['create_worktree', { hostId: 'h', repo: 'x', branch: 'feat', base: null, path: null }],
       ['remove_worktree', { hostId: 'h', worktree: '/w', force: true }],
       ['list_files', { hostId: 'h', worktree: '/w', dir: 'src', includeIgnored: false }],

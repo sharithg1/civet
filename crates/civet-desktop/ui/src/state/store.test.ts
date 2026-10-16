@@ -60,6 +60,21 @@ function fakeBackend(over: Partial<CivetBackend> = {}): CivetBackend {
     listPullRequests: async () => [],
     listFiles: async () => ({ entries: [], truncated: false }),
     listAllFiles: async () => ({ paths: [], truncated: false }),
+    gitStatus: async () => ({
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      conflicted: [],
+      truncated: false
+    }),
+    gitDiff: async (_h: string, _w: string, path: string) => ({
+      path,
+      binary: false,
+      tooLarge: false,
+      additions: 0,
+      deletions: 0,
+      diff: ''
+    }),
     setPrediction: vi.fn(noop),
     notifyNetworkChange: noop,
     onHostState: un,
@@ -524,6 +539,19 @@ describe('store', () => {
     store.openFileTab('h', '/w', 'src/main.rs')
     expect(ws().tabs).toHaveLength(3)
     expect(ws().activeTab).toBe(main)
+
+    // A diff of the same file is a tab of its own, one per side.
+    store.openDiffTab('h', '/w', 'src/main.rs', { side: 'unstaged', oldPath: null })
+    store.openDiffTab('h', '/w', 'src/main.rs', { side: 'staged', oldPath: null })
+    store.openDiffTab('h', '/w', 'src/main.rs', { side: 'unstaged', oldPath: null })
+    expect(
+      ws().tabs.map((t) => (t.kind === 'file' ? `${t.path}:${t.diff?.side ?? ''}` : t.id))
+    ).toEqual(['p', 'src/main.rs:', 'README.md:', 'src/main.rs:unstaged', 'src/main.rs:staged'])
+    expect(ws().activeTab).toBe(ws().tabs[3]!.id)
+    store.openFileTab('h', '/w', 'src/main.rs')
+    expect(ws().activeTab).toBe(main)
+    for (const t of ws().tabs.slice(3)) store.closeTab(key, t.id)
+    expect(ws().tabs).toHaveLength(3)
 
     // Closing the pane keeps the file tabs.
     store.closeTab(key, 'p')
