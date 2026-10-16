@@ -200,6 +200,8 @@ export interface CivetBackend {
   openLocalUrl(url: string): Promise<void>
   /** Open a `https://<host>/<owner>/<repo>/pull/<n>` URL in the browser. */
   openPullRequest(url: string): Promise<void>
+  /** Open an `http(s)://` link (clicked in a Markdown preview) in the browser. */
+  openWebUrl(url: string): Promise<void>
 
   onHostState(cb: (e: HostStateEvent) => void): Promise<Unlisten>
   onBootstrapProgress(cb: (e: BootstrapProgressEvent) => void): Promise<Unlisten>
@@ -487,6 +489,9 @@ export class TauriBackend implements CivetBackend {
   }
   openPullRequest(url: string) {
     return this.callVoid('open_pull_request', { url })
+  }
+  openWebUrl(url: string) {
+    return this.callVoid('open_web_url', { url })
   }
 
   private on<T>(event: string, cb: (payload: T) => void): Promise<Unlisten> {

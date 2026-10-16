@@ -50,6 +50,7 @@ const COMMANDS: &[&str] = &[
     "list_forwards",
     "open_local_url",
     "open_pull_request",
+    "open_web_url",
     // src/updater.rs
     "app_info",
     "check_for_updates",
