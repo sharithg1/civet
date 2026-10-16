@@ -28,9 +28,23 @@ type FilesState = {
   all: Record<string, Loadable<FileList>>
   /** `fileKey(hostId, worktree, path)` → contents of a file open in a tab */
   previews: Record<string, Loadable<FilePreview>>
+  /** `fileKey`s of Markdown tabs showing their source instead of the preview */
+  showSource: Record<string, true>
 }
 
-export const useFiles = create<FilesState>(() => ({ dirs: {}, all: {}, previews: {} }))
+export const useFiles = create<FilesState>(() => ({
+  dirs: {},
+  all: {},
+  previews: {},
+  showSource: {}
+}))
+
+/** Switch a Markdown tab between its rendered preview and its source. */
+export function toggleSource(key: string): void {
+  useFiles.setState(({ showSource: { [key]: on, ...rest } }) => ({
+    showSource: on ? rest : { ...rest, [key]: true }
+  }))
+}
 
 function b(): CivetBackend {
   const be = useStore.getState().backend
