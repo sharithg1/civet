@@ -32,7 +32,7 @@ import {
 } from './store'
 
 /** Oldest civetd with `FileOp` / `ReadFileChunk` (civet_proto::FILE_OPS_MIN_DAEMON_VERSION). */
-export const FILE_OPS_MIN_DAEMON_VERSION = '0.1.14'
+export const FILE_OPS_MIN_DAEMON_VERSION = '0.1.15'
 
 /** Numeric `a.b.c` comparison; anything unparsable counts as 0. */
 export function versionAtLeast(version: string, min: string): boolean {

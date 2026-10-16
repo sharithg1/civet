@@ -533,6 +533,13 @@ impl Server {
                 .git_diff(&worktree, &path, old_path.as_deref(), staged, context_lines)
                 .await
                 .map(Response::GitDiff),
+            Request::GitBranch { worktree } => {
+                s.git_branch(&worktree).await.map(Response::GitBranch)
+            }
+            Request::GitAction { worktree, action } => s
+                .git_action(&worktree, action)
+                .await
+                .map(|snapshot| snapshot.map_or(Response::Ok, Response::GitDiscarded)),
             Request::FileOp { worktree, op } => {
                 s.file_op(&worktree, op).await.map(Response::FileOpDone)
             }

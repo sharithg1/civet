@@ -21,6 +21,8 @@ const COMMANDS: &[&str] = &[
     "list_pull_requests",
     "git_status",
     "git_diff",
+    "git_branch",
+    "git_action",
     "create_worktree",
     "remove_worktree",
     "list_files",

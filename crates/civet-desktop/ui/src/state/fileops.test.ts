@@ -69,12 +69,12 @@ describe('file op helpers', () => {
   })
 
   it('gates on the daemon version', () => {
-    expect(ops.versionAtLeast('0.1.14', '0.1.14')).toBe(true)
-    expect(ops.versionAtLeast('0.2.0', '0.1.14')).toBe(true)
-    expect(ops.versionAtLeast('0.1.13', '0.1.14')).toBe(false)
-    expect(ops.versionAtLeast('0.1.9', '0.1.14')).toBe(false)
+    expect(ops.versionAtLeast('0.1.15', '0.1.15')).toBe(true)
+    expect(ops.versionAtLeast('0.2.0', '0.1.15')).toBe(true)
+    expect(ops.versionAtLeast('0.1.14', '0.1.15')).toBe(false)
+    expect(ops.versionAtLeast('0.1.9', '0.1.15')).toBe(false)
     useStore.setState({
-      hosts: { h: { daemonVersion: '0.1.13' } as never, n: { daemonVersion: '0.1.14' } as never }
+      hosts: { h: { daemonVersion: '0.1.14' } as never, n: { daemonVersion: '0.1.15' } as never }
     })
     expect(ops.fileOpsSupported('h')).toBe(false)
     expect(ops.fileOpsSupported('n')).toBe(true)

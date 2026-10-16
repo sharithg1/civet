@@ -128,7 +128,7 @@ describe('MockBackend', () => {
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
     await vi.runAllTimersAsync()
     const s = await p
-    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.14', livePanes: 7 })
+    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.15', livePanes: 7 })
     expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
     // Reconnect keeps the stored target and transport.
     b.simulateFailure('old-box', 'lost')
@@ -142,7 +142,7 @@ describe('MockBackend', () => {
     await vi.runAllTimersAsync()
     const after = await restarted
     expect(after.upgrade).toBeNull()
-    expect(after.daemonVersion).toBe('0.1.14')
+    expect(after.daemonVersion).toBe('0.1.15')
     expect(after.instanceId).not.toBe(s.instanceId)
     expect(await b.listPanes('old-box')).toEqual([])
     await expect(b.reconnectHost('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
@@ -213,3 +213,119 @@ describe('MockBackend git', () => {
     expect((await b.gitDiff('devbox', wt.id, bin.path, { staged: false })).binary).toBe(true)
   })
 })
+
+describe('MockBackend git actions', () => {
+  /** Run a git action through the mock's fake delay. */
+  async function act<T>(p: Promise<T>): Promise<T> {
+    const settled = p.then(
+      (v) => ({ ok: true as const, v }),
+      (e: unknown) => ({ ok: false as const, e })
+    )
+    await vi.runAllTimersAsync()
+    const r = await settled
+    if (!r.ok) throw r.e
+    return r.v
+  }
+
+  it('stages, discards with undo, commits, pushes and stashes', async () => {
+    const { b } = await connected()
+    const wt = (await b.listWorktrees('devbox', 'civet'))[1]!
+    const paths = (s: { path: string }[]) => s.map((c) => c.path)
+    const before = await b.gitStatus('devbox', wt.id)
+    const untracked = before.untracked[0]!.path
+
+    await act(b.gitAction('devbox', wt.id, { stage: { paths: [untracked] } }))
+    let s = await b.gitStatus('devbox', wt.id)
+    expect(paths(s.untracked)).not.toContain(untracked)
+    expect(s.staged.find((c) => c.path === untracked)?.kind).toBe('added')
+    await act(b.gitAction('devbox', wt.id, { unstage: { paths: [untracked] } }))
+    expect(paths((await b.gitStatus('devbox', wt.id)).untracked)).toContain(untracked)
+
+    const legacy = 'crates/civet-transport/src/legacy.rs'
+    const snap = await act(
+      b.gitAction('devbox', wt.id, { discard: { paths: [legacy, untracked], staged: false } })
+    )
+    expect(snap?.entries.map((e) => [e.path, e.untracked, e.file === null])).toEqual([
+      [legacy, false, true],
+      [untracked, true, false]
+    ])
+    s = await b.gitStatus('devbox', wt.id)
+    expect([...paths(s.unstaged), ...paths(s.untracked)]).not.toContain(legacy)
+    await act(b.gitAction('devbox', wt.id, { restoreDiscarded: snap! }))
+    s = await b.gitStatus('devbox', wt.id)
+    expect(paths(s.unstaged)).toContain(legacy)
+    expect(paths(s.untracked)).toContain(untracked)
+
+    // Nothing staged and not "all": git's refusal.
+    await act(b.gitAction('devbox', wt.id, { unstage: { paths: paths(s.staged) } }))
+    await expect(
+      act(b.gitAction('devbox', wt.id, { commit: { message: 'x', amend: false, all: false } }))
+    ).rejects.toMatchObject({ code: 'git' })
+    const ahead = (await b.gitBranch('devbox', wt.id)).ahead
+    await act(b.gitAction('devbox', wt.id, { commit: { message: 'x', amend: false, all: true } }))
+    let br = await b.gitBranch('devbox', wt.id)
+    expect(br.ahead).toBe(ahead + 1)
+    expect(br.canUndoCommit).toBe(true)
+    expect(changed(await b.gitStatus('devbox', wt.id))).toBe(0)
+    await act(b.gitAction('devbox', wt.id, { undoCommit: { head: br.head! } }))
+    expect((await b.gitStatus('devbox', wt.id)).staged.length).toBeGreaterThan(0)
+
+    await act(b.gitAction('devbox', wt.id, 'stashAll'))
+    expect(changed(await b.gitStatus('devbox', wt.id))).toBe(0)
+    expect((await b.gitBranch('devbox', wt.id)).stashes).toBe(1)
+    await expect(act(b.gitAction('devbox', wt.id, 'stashAll'))).rejects.toMatchObject({
+      code: 'git'
+    })
+    await act(b.gitAction('devbox', wt.id, 'stashPop'))
+    expect(changed(await b.gitStatus('devbox', wt.id))).toBeGreaterThan(0)
+
+    // Behind after a fetch: push is rejected until a pull.
+    await act(b.gitAction('devbox', wt.id, 'fetch'))
+    expect((await b.gitBranch('devbox', wt.id)).behind).toBe(1)
+    await expect(act(b.gitAction('devbox', wt.id, 'push'))).rejects.toMatchObject({
+      message: expect.stringContaining('[rejected]')
+    })
+    await act(b.gitAction('devbox', wt.id, 'pull'))
+    await act(b.gitAction('devbox', wt.id, 'push'))
+    br = await b.gitBranch('devbox', wt.id)
+    expect([br.ahead, br.behind, br.canUndoCommit]).toEqual([0, 0, false])
+  })
+
+  it('resolves conflicts and publishes a branch without an upstream', async () => {
+    const { b } = await connected()
+    const wts = await b.listWorktrees('devbox', 'civet')
+    const flaky = wts.find((w) => w.path.endsWith('fix-flaky-e2e'))!
+    const conflict = (await b.gitStatus('devbox', flaky.id)).conflicted[0]!.path
+    await act(
+      b.gitAction('devbox', flaky.id, { acceptConflict: { paths: [conflict], side: 'theirs' } })
+    )
+    const s = await b.gitStatus('devbox', flaky.id)
+    expect(s.conflicted).toEqual([])
+    expect(s.staged.map((c) => c.path)).toEqual([conflict])
+
+    const fresh = wts.find((w) => !w.isMain && !/quic-resume|fix-flaky/.test(w.path))!
+    expect((await b.gitBranch('devbox', fresh.id)).upstream).toBeNull()
+    await expect(act(b.gitAction('devbox', fresh.id, 'pull'))).rejects.toMatchObject({
+      message: expect.stringContaining('no upstream')
+    })
+    await act(b.gitAction('devbox', fresh.id, 'push'))
+    expect((await b.gitBranch('devbox', fresh.id)).upstream).toBe(`origin/${fresh.branch}`)
+  })
+
+  it('a pre-0.1.14 civetd reports changes but refuses git actions', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git-box' })
+    await vi.runAllTimersAsync()
+    await p
+    const wt = (await b.listWorktrees('pre-git-box', 'civet'))[1]!
+    expect((await b.gitStatus('pre-git-box', wt.id)).unstaged.length).toBeGreaterThan(0)
+    await expect(b.gitBranch('pre-git-box', wt.id)).rejects.toMatchObject({ code: 'unsupported' })
+    await expect(b.gitAction('pre-git-box', wt.id, 'fetch')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+  })
+})
+
+function changed(s: { staged: unknown[]; unstaged: unknown[]; untracked: unknown[] }): number {
+  return s.staged.length + s.unstaged.length + s.untracked.length
+}

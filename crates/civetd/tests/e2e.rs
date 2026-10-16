@@ -1173,3 +1173,107 @@ async fn osc52_clipboard_event_reaches_subscribed_clients_only() {
     }
     daemon.shutdown("test done").await;
 }
+
+/// Git actions over the wire: a discard comes back as a snapshot that
+/// undoes it, the branch summary answers, and a path out of the worktree is
+/// an `InvalidArgument` error, not a dropped connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn git_actions_over_the_control_stream() {
+    use civet_proto::{ErrorCode, GitAction};
+    let (daemon, dir) = start_daemon().await;
+    let repo_dir = dir.path().join("proj");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(repo_dir.join("a.txt"), "a\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "a"]);
+    std::fs::write(repo_dir.join("a.txt"), "edited\n").unwrap();
+
+    let info = daemon.info().clone();
+    let client = QuicClient::new(false).unwrap();
+    let cfg = QuicClientConfig::new(daemon.quic_addr(), info.cert_fingerprint);
+    let mut q = Raw::new(
+        client
+            .connect(&cfg, hello(&info, ClientId::generate().unwrap()), vec![])
+            .await
+            .unwrap(),
+    );
+    let repo = match q
+        .request(Request::AddRepo {
+            path: repo_dir.display().to_string(),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Repo(r) => r,
+        other => panic!("{other:?}"),
+    };
+    let worktree = match q
+        .request(Request::ListWorktrees { repo: repo.id })
+        .await
+        .unwrap()
+    {
+        Response::Worktrees(w) => w[0].id.clone(),
+        other => panic!("{other:?}"),
+    };
+    match q
+        .request(Request::GitBranch {
+            worktree: worktree.clone(),
+        })
+        .await
+        .unwrap()
+    {
+        Response::GitBranch(b) => assert_eq!(b.branch.as_deref(), Some("main")),
+        other => panic!("{other:?}"),
+    }
+    let snapshot = match q
+        .request(Request::GitAction {
+            worktree: worktree.clone(),
+            action: GitAction::Discard {
+                paths: vec!["a.txt".into()],
+                staged: false,
+            },
+        })
+        .await
+        .unwrap()
+    {
+        Response::GitDiscarded(s) => s,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(std::fs::read(repo_dir.join("a.txt")).unwrap(), b"a\n");
+    assert!(matches!(
+        q.request(Request::GitAction {
+            worktree: worktree.clone(),
+            action: GitAction::RestoreDiscarded(snapshot),
+        })
+        .await
+        .unwrap(),
+        Response::Ok
+    ));
+    assert_eq!(std::fs::read(repo_dir.join("a.txt")).unwrap(), b"edited\n");
+    let err = q
+        .request(Request::GitAction {
+            worktree,
+            action: GitAction::Stage {
+                paths: vec!["../escape".into()],
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    q.conn.close().await;
+    daemon.shutdown("test done").await;
+}

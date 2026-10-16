@@ -60,6 +60,18 @@ const commands = {
   type: async (...text) => p.keyboard.type(text.join(' ')),
   'click-change': async (name) => change(name).click(),
   'dblclick-change': async (name) => change(name).dblclick(),
+  // ⌘- / ⇧-click a Changes row (multi-selection), hover one (shows its buttons).
+  'meta-click-change': async (name) => change(name).click({ modifiers: ['Meta'] }),
+  'shift-click-change': async (name) => change(name).click({ modifiers: ['Shift'] }),
+  'hover-change': async (name) => change(name).hover(),
+  // A button by its accessible name (icon buttons: their tooltip label), exact.
+  'click-button': async (...name) =>
+    p.getByRole('button', { name: name.join(' '), exact: true }).first().click(),
+  // An item of the open dropdown / context menu, by the start of its text.
+  'menu-item': async (...text) =>
+    p.getByRole('menuitem', { name: new RegExp(`^${esc(text.join(' '))}`) }).first().click(),
+  // Type into the Changes tab's commit message box.
+  'commit-message': async (...text) => p.getByLabel('Commit message').fill(text.join(' ')),
   'click-tab': async (...label) => editorTab(label.join(' ')).click(),
   'dblclick-tab': async (...label) => editorTab(label.join(' ')).dblclick(),
   'close-tab': async (...label) =>

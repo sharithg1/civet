@@ -64,17 +64,19 @@ function ToastCard({ toast: t }: { toast: Toast }) {
       <div className="min-w-0 flex-1">
         <div className={cn(t.kind !== 'info' && 'font-medium text-foreground')}>{t.title}</div>
         {t.body && (
-          <div className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{t.body}</div>
+          <div className="mt-0.5 line-clamp-3 text-xs whitespace-pre-line text-muted-foreground">
+            {t.body}
+          </div>
         )}
       </div>
       {t.action && (
         <button
           type="button"
-          className="-my-0.5 shrink-0 cursor-pointer rounded-[4px] px-1.5 py-0.5 text-sm font-medium text-foreground hover:bg-hover"
+          className="-my-0.5 shrink-0 cursor-pointer rounded-[4px] px-1.5 py-0.5 text-sm font-medium text-foreground hover:bg-hover-strong"
           onClick={(e) => {
             e.stopPropagation()
-            dismissToast(t.id)
             t.action?.run()
+            dismissToast(t.id)
           }}
         >
           {t.action.label}

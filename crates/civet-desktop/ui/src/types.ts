@@ -101,7 +101,7 @@ export type FilePreview = {
 export type FileList = { paths: string[]; truncated: boolean }
 
 /**
- * A change to worktree files (`file_op`, civetd >= 0.1.14). Paths are
+ * A change to worktree files (`file_op`, civetd >= 0.1.15). Paths are
  * relative to the worktree root; nothing is overwritten (`alreadyExists`)
  * and `.git` is off limits. File contents go through `uploadToWorktree`.
  */
@@ -159,6 +159,55 @@ export type GitDiffInfo = {
   /** `git diff` output (headers + hunks); empty when binary / tooLarge / unchanged. */
   diff: string
 }
+
+/** A worktree's branch vs. its upstream (`git_branch`, civetd >= 0.1.14). */
+export type GitBranchInfo = {
+  /** null: detached HEAD. */
+  branch: string | null
+  /** HEAD commit; null on an unborn branch. */
+  head: string | null
+  /** `origin/feat`; null without one or before the first push. */
+  upstream: string | null
+  ahead: number
+  behind: number
+  /** HEAD has a parent and is on no remote branch. */
+  canUndoCommit: boolean
+  /** Stash entries made on this branch. */
+  stashes: number
+  hasRemote: boolean
+}
+
+/** A blob in the object database and the git mode to restore it with. */
+export type GitBlobRef = { oid: string; mode: number }
+
+export type GitDiscardEntry = {
+  path: string
+  /** null: the file did not exist. */
+  file: GitBlobRef | null
+  restoreIndex: boolean
+  index: GitBlobRef | null
+  untracked: boolean
+}
+
+/** What a discard overwrote; send it back in `restoreDiscarded` to undo. */
+export type GitDiscardSnapshot = { entries: GitDiscardEntry[] }
+
+export type ConflictSide = 'ours' | 'theirs'
+
+/** `git_action` (civet_proto::GitAction, serde's externally tagged JSON). */
+export type GitAction =
+  | { stage: { paths: string[] } }
+  | { unstage: { paths: string[] } }
+  | { discard: { paths: string[]; staged: boolean } }
+  | { restoreDiscarded: GitDiscardSnapshot }
+  | { commit: { message: string; amend: boolean; all: boolean } }
+  | { acceptConflict: { paths: string[]; side: ConflictSide } }
+  | 'push'
+  | 'pull'
+  | 'fetch'
+  | { undoCommit: { head: string } }
+  | 'stashAll'
+  | 'stashPop'
 
 export type CommandSpec = { program: string; args: string[] }
 

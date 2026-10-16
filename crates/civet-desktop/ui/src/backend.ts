@@ -44,7 +44,10 @@ import type {
   FileOpResult,
   FilePreview,
   GitStatusInfo,
-  GitDiffInfo
+  GitDiffInfo,
+  GitBranchInfo,
+  GitAction,
+  GitDiscardSnapshot
 } from './types'
 
 export type Unlisten = () => void
@@ -120,6 +123,14 @@ export interface CivetBackend {
     path: string,
     opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
   ): Promise<GitDiffInfo>
+  /** Branch, upstream and ahead / behind of a worktree (needs civetd >= 0.1.14). */
+  gitBranch(hostId: string, worktree: WorktreeId): Promise<GitBranchInfo>
+  /** A git write operation; a discard resolves to the snapshot that undoes it, the rest to null. */
+  gitAction(
+    hostId: string,
+    worktree: WorktreeId,
+    action: GitAction
+  ): Promise<GitDiscardSnapshot | null>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -145,7 +156,7 @@ export interface CivetBackend {
   ): Promise<FilePreview>
   /** Every tracked and untracked, not ignored file, for quick-open. */
   listAllFiles(hostId: string, worktree: WorktreeId): Promise<FileList>
-  /** Create, move, copy, trash or restore worktree files (civetd >= 0.1.14). */
+  /** Create, move, copy, trash or restore worktree files (civetd >= 0.1.15). */
   fileOp(hostId: string, worktree: WorktreeId, op: FileOp): Promise<FileOpResult>
   /**
    * Copy local files and folders (dropped from Finder) into `dir` of a
@@ -322,6 +333,12 @@ export class TauriBackend implements CivetBackend {
       staged: opts.staged,
       contextLines: opts.contextLines ?? 3
     })
+  }
+  gitBranch(hostId: string, worktree: WorktreeId) {
+    return this.call<GitBranchInfo>('git_branch', { hostId, worktree })
+  }
+  gitAction(hostId: string, worktree: WorktreeId, action: GitAction) {
+    return this.call<GitDiscardSnapshot | null>('git_action', { hostId, worktree, action })
   }
   createWorktree(
     hostId: string,

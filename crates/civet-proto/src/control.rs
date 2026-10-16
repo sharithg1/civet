@@ -291,6 +291,147 @@ pub struct GitDiffInfo {
     pub diff: String,
 }
 
+/// A worktree's branch and how it relates to its upstream, as
+/// [`Request::GitBranch`] reports it (the Changes tab header).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchInfo {
+    /// Checked-out branch; None if HEAD is detached.
+    pub branch: Option<String>,
+    /// HEAD commit; None on an unborn branch.
+    pub head: Option<String>,
+    /// Remote-tracking branch of the upstream (`origin/feat`); None without
+    /// one, or while it is configured but not pushed yet.
+    pub upstream: Option<String>,
+    /// Commits on HEAD that the upstream lacks (0 without an upstream).
+    pub ahead: u64,
+    /// Commits on the upstream that HEAD lacks.
+    pub behind: u64,
+    /// HEAD has a parent and is not on its upstream, so
+    /// [`GitAction::UndoCommit`] may undo it.
+    pub can_undo_commit: bool,
+    /// Stash entries made on this branch (the only ones
+    /// [`GitAction::StashPop`] pops; the stash list is shared by every
+    /// worktree of the repository).
+    pub stashes: u64,
+    /// The repository has a remote to push to.
+    pub has_remote: bool,
+}
+
+/// A blob in the repository's object database and the mode to restore it
+/// with (`0o100644`, `0o100755` or `0o120000` for a symlink).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlobRef {
+    /// Object id (hex).
+    pub oid: String,
+    /// git file mode.
+    pub mode: u32,
+}
+
+/// One path's state before a [`GitAction::Discard`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiscardEntry {
+    /// Path relative to the worktree root.
+    pub path: String,
+    /// Working-tree content; None if the file did not exist.
+    pub file: Option<GitBlobRef>,
+    /// The discard also reset the index for this path, which held `index`
+    /// (None: the path was not in the index).
+    pub restore_index: bool,
+    /// Index entry before the discard (meaningful if `restore_index`).
+    pub index: Option<GitBlobRef>,
+    /// The file was untracked (the discard deleted it).
+    pub untracked: bool,
+}
+
+/// What a [`GitAction::Discard`] overwrote, so [`GitAction::RestoreDiscarded`]
+/// can put it back. Contents are written to the object database
+/// (`git hash-object -w`) before anything is touched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiscardSnapshot {
+    /// One entry per discarded path.
+    pub entries: Vec<GitDiscardEntry>,
+}
+
+/// Which side of a merge conflict to keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictSide {
+    /// The checked-out branch (`git checkout --ours`).
+    Ours,
+    /// The branch being merged in (`git checkout --theirs`).
+    Theirs,
+}
+
+/// A git write operation on a worktree ([`Request::GitAction`]). Paths are
+/// relative to the worktree root, may not leave it and never name `.git`.
+/// Append-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum GitAction {
+    /// `git add -A` the paths (also marks conflicts resolved).
+    Stage {
+        /// Paths.
+        paths: Vec<String>,
+    },
+    /// Reset the paths' index entries to HEAD (`git reset`).
+    Unstage {
+        /// Paths (both sides of a rename).
+        paths: Vec<String>,
+    },
+    /// Throw away changes: the working tree goes back to the index, or with
+    /// `staged` index and working tree back to HEAD; untracked files are
+    /// deleted. -> [`Response::GitDiscarded`] with what was overwritten.
+    /// Unmerged paths are refused.
+    Discard {
+        /// Paths (both sides of a staged rename).
+        paths: Vec<String>,
+        /// Also discard staged changes.
+        staged: bool,
+    },
+    /// Put back what a [`GitAction::Discard`] overwrote.
+    RestoreDiscarded(GitDiscardSnapshot),
+    /// `git commit`; with `all`, everything (untracked files too) is staged
+    /// first. With `amend`, an empty message keeps the last one.
+    Commit {
+        /// Commit message.
+        message: String,
+        /// `--amend`.
+        amend: bool,
+        /// Stage all changes first.
+        all: bool,
+    },
+    /// Resolve conflicts by taking one side's version of each path (or
+    /// removing the path if that side deleted it), and stage the result.
+    AcceptConflict {
+        /// Unmerged paths.
+        paths: Vec<String>,
+        /// Side to keep.
+        side: ConflictSide,
+    },
+    /// `git push`; a branch without an upstream is pushed to the remote of
+    /// the same name and tracks it (`-u`).
+    Push,
+    /// `git pull` from the upstream (a merge unless `pull.rebase` /
+    /// `pull.ff` say otherwise).
+    Pull,
+    /// `git fetch`.
+    Fetch,
+    /// `git reset --soft HEAD~1`, only while HEAD is `head` and not on the
+    /// upstream (see [`GitBranchInfo::can_undo_commit`]).
+    UndoCommit {
+        /// The commit the client means to undo.
+        head: String,
+    },
+    /// `git stash push -u` of every change.
+    StashAll,
+    /// Apply and drop the newest stash entry made on this branch.
+    StashPop,
+}
+
 /// Program + argv for a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -623,6 +764,24 @@ pub enum Request {
         /// Context lines around each hunk (`-U`).
         context_lines: u32,
     },
+    /// The worktree's branch, upstream and ahead / behind counts.
+    /// -> [`Response::GitBranch`]. Clients send it only to daemons of at
+    /// least [`crate::GIT_ACTIONS_MIN_DAEMON_VERSION`] (also
+    /// [`Request::GitAction`]).
+    GitBranch {
+        /// Worktree.
+        worktree: WorktreeId,
+    },
+    /// Run a git write operation in the worktree. -> [`Response::Ok`], or
+    /// [`Response::GitDiscarded`] for [`GitAction::Discard`]. git's own
+    /// refusals (nothing to commit, push rejected, conflicts) are `Git`
+    /// errors carrying its message.
+    GitAction {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// What to do.
+        action: GitAction,
+    },
     /// Create, rename / move, copy, trash or restore worktree files.
     /// -> [`Response::FileOpDone`]. Clients send it only to daemons of at
     /// least [`crate::FILE_OPS_MIN_DAEMON_VERSION`] (also
@@ -703,6 +862,11 @@ pub enum Response {
     GitStatus(GitStatusInfo),
     /// Reply to [`Request::GitDiff`].
     GitDiff(GitDiffInfo),
+    /// Reply to [`Request::GitBranch`].
+    GitBranch(GitBranchInfo),
+    /// Reply to a [`GitAction::Discard`]: what to send back in
+    /// [`GitAction::RestoreDiscarded`] to undo it.
+    GitDiscarded(GitDiscardSnapshot),
     /// Reply to [`Request::FileOp`].
     FileOpDone(FileOpResult),
     /// Reply to [`Request::ReadFileChunk`].

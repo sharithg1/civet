@@ -26,6 +26,7 @@ mod error;
 mod fileops;
 mod files;
 mod git;
+mod git_actions;
 mod github;
 mod hooks;
 mod manager;

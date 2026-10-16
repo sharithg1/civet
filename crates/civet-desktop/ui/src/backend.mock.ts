@@ -9,8 +9,10 @@
 // error (to show every v3 status dot), and an echo shell per pane. Shell commands:
 // help, seq N, status <running|needs|done|idle>, title T, drop, fail, replaced, exit.
 // A host whose name contains "old" runs an older civetd with live panes (the
-// "upgrade available" flow; Restart daemon starts a fresh one), "fail" never
-// connects, "udp-blocked" falls back to the SSH tunnel.
+// "upgrade available" flow; Restart daemon starts a fresh one), "pre-git" runs
+// a civetd that reports changes but takes no git actions, "fail" never
+// connects, "udp-blocked" falls back to the SSH tunnel. Git actions in the
+// Changes tab work on per-worktree fake state (MockGit).
 
 import {
   CivetError,
@@ -53,14 +55,19 @@ import type {
   FileOp,
   FileOpResult,
   FilePreview,
+  GitAction,
+  GitBranchInfo,
   GitDiffInfo,
+  GitDiscardSnapshot,
   GitFileChange,
   GitStatusInfo
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.1.14'
+export const MOCK_VERSION = '0.1.15'
 export const MOCK_OLD_VERSION = '0.1.1'
+/** A civetd with git status but without git actions (before 0.1.14). */
+export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
 export const MOCK_REPLACED_MESSAGE =
   "another Civet window or client took over this host's connection; reconnect here to take it back"
 
@@ -527,7 +534,7 @@ const MOCK_FILES: Record<string, string> = {
 }
 
 /** Mock daemons support file ops from this version on (like FILE_OPS_MIN_DAEMON_VERSION). */
-const MOCK_FILE_OPS_VERSION = '0.1.14'
+const MOCK_FILE_OPS_VERSION = '0.1.15'
 
 /**
  * A worktree's files in memory: file bodies by path plus the set of
@@ -670,6 +677,8 @@ const mockIgnored = (path: string) =>
 export class MockBackend implements CivetBackend {
   /** Status polls so far: the agent worktree's change grows with them. */
   private gitPolls = 0
+  /** wsKey-like `host\0worktree` → fake git state. */
+  private gits = new Map<string, MockGit>()
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
   private hosts = new Map<string, MockHost>()
@@ -793,7 +802,11 @@ export class MockBackend implements CivetBackend {
       ...summary,
       state: 'connected',
       transport: stream ? 'stream' : 'quic',
-      daemonVersion: old ? MOCK_OLD_VERSION : MOCK_VERSION,
+      daemonVersion: old
+        ? MOCK_OLD_VERSION
+        : hostId.includes('pre-git')
+          ? MOCK_PRE_GIT_ACTIONS_VERSION
+          : MOCK_VERSION,
       instanceId: replace ? '17179869185' : '17179869184',
       upgrade: old
         ? {
@@ -1050,7 +1063,40 @@ export class MockBackend implements CivetBackend {
 
   async gitStatus(hostId: string, worktree: string): Promise<GitStatusInfo> {
     this.checkGitSupport(hostId)
-    return mockGitStatus(worktree, this.gitPolls++)
+    return this.git(hostId, worktree).status(this.gitPolls++)
+  }
+
+  async gitBranch(hostId: string, worktree: string): Promise<GitBranchInfo> {
+    this.checkGitActions(hostId)
+    return this.git(hostId, worktree).branchInfo()
+  }
+
+  async gitAction(
+    hostId: string,
+    worktree: string,
+    action: GitAction
+  ): Promise<GitDiscardSnapshot | null> {
+    this.checkGitActions(hostId)
+    // Network actions take a moment, so the busy state shows.
+    await sleep(typeof action === 'string' && ['push', 'pull', 'fetch'].includes(action) ? 600 : 80)
+    return this.git(hostId, worktree).apply(action)
+  }
+
+  private git(hostId: string, worktree: string): MockGit {
+    const key = `${hostId}\u0000${worktree}`
+    let g = this.gits.get(key)
+    if (!g) this.gits.set(key, (g = new MockGit(worktree, this.gitPolls)))
+    return g
+  }
+
+  private checkGitActions(hostId: string): void {
+    this.checkGitSupport(hostId)
+    if (this.host(hostId).summary.daemonVersion === MOCK_PRE_GIT_ACTIONS_VERSION) {
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${MOCK_PRE_GIT_ACTIONS_VERSION}; this needs v0.1.14 or newer (restart the daemon to upgrade)`
+      )
+    }
   }
 
   async gitDiff(
@@ -1452,7 +1498,7 @@ const change = (
 /** Lines of the file an "agent" keeps writing in non-main worktrees. */
 const growingLines = (polls: number) => 4 + Math.min(40, polls)
 
-function mockGitStatus(worktree: string, polls: number): GitStatusInfo {
+function mockGitStatus(worktree: string): GitStatusInfo {
   const empty: GitStatusInfo = {
     staged: [],
     unstaged: [],
@@ -1477,11 +1523,246 @@ function mockGitStatus(worktree: string, polls: number): GitStatusInfo {
       change('docs/RESUME.md', 'added', 5, 0)
     ],
     unstaged: [
-      change('crates/civet-transport/src/session.rs', 'modified', growingLines(polls), 2),
+      change('crates/civet-transport/src/session.rs', 'modified', 4, 2),
       change('crates/civet-transport/src/legacy.rs', 'deleted', 0, 3),
       change('assets/logo.png', 'modified', null, null)
     ],
     untracked: [change('crates/civet-transport/tests/resume.rs', 'untracked', 4, 0)]
+  }
+}
+
+const GROWING = 'crates/civet-transport/src/session.rs'
+const fakeSha = () =>
+  Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+const gitErr = (message: string) => new CivetError('git', `git: ${message}`)
+
+type Lists = Pick<GitStatusInfo, 'staged' | 'unstaged' | 'untracked' | 'conflicted'>
+const cloneLists = (l: Lists): Lists => ({
+  staged: [...l.staged],
+  unstaged: [...l.unstaged],
+  untracked: [...l.untracked],
+  conflicted: [...l.conflicted]
+})
+
+/**
+ * One worktree's fake git: the seeded changes of mockGitStatus, a branch with
+ * an upstream (or none, like a fresh agent branch) and a stash, changed by
+ * GitActions roughly the way git would.
+ */
+class MockGit {
+  lists: Lists
+  branch: GitBranchInfo
+  /** Changes of each unpushed commit, newest last (what Undo puts back). */
+  private commits: GitFileChange[][] = []
+  private stash: Lists[] = []
+  private discarded = new WeakMap<GitDiscardSnapshot, Lists>()
+  /** The session.rs edit grows while the "agent" keeps writing (until touched). */
+  private growing = true
+
+  constructor(
+    worktree: string,
+    private readonly pollBase: number
+  ) {
+    const { truncated: _, ...lists } = mockGitStatus(worktree)
+    this.lists = lists
+    const name = worktree.split('/').pop() ?? 'main'
+    const branch = name === 'civet' ? 'main' : name
+    const published = name === 'civet' || name === 'quic-resume' || name === 'fix-flaky-e2e'
+    this.branch = {
+      branch,
+      head: fakeSha(),
+      upstream: published ? `origin/${branch}` : null,
+      ahead: name === 'quic-resume' ? 2 : name === 'fix-flaky-e2e' ? 1 : 0,
+      behind: name === 'fix-flaky-e2e' ? 1 : 0,
+      canUndoCommit: name === 'quic-resume',
+      stashes: 0,
+      hasRemote: true
+    }
+    if (name === 'quic-resume') this.commits = [[], []]
+  }
+
+  status(polls: number): GitStatusInfo {
+    const unstaged = this.lists.unstaged.map((c) =>
+      c.path === GROWING && this.growing
+        ? { ...c, additions: growingLines(polls - this.pollBase) }
+        : c
+    )
+    return { ...cloneLists(this.lists), unstaged, truncated: false }
+  }
+
+  branchInfo(): GitBranchInfo {
+    return { ...this.branch, stashes: this.stash.length }
+  }
+
+  apply(action: GitAction): GitDiscardSnapshot | null {
+    if (typeof action === 'string') {
+      this[action]()
+      return null
+    }
+    if ('stage' in action) this.stage(action.stage.paths)
+    else if ('unstage' in action) this.unstage(action.unstage.paths)
+    else if ('discard' in action) return this.discard(action.discard.paths, action.discard.staged)
+    else if ('restoreDiscarded' in action) this.restore(action.restoreDiscarded)
+    else if ('commit' in action) this.commit(action.commit)
+    else if ('acceptConflict' in action) this.stage(action.acceptConflict.paths)
+    else if ('undoCommit' in action) this.undoCommit(action.undoCommit.head)
+    return null
+  }
+
+  private take(side: keyof Lists, paths: string[]): GitFileChange[] {
+    const set = new Set(paths)
+    const hit = this.lists[side].filter((c) => set.has(c.path) || (c.oldPath && set.has(c.oldPath)))
+    this.lists[side] = this.lists[side].filter((c) => !hit.includes(c))
+    if (hit.some((c) => c.path === GROWING)) this.growing = false
+    return hit
+  }
+
+  private put(side: keyof Lists, changes: GitFileChange[]): void {
+    const paths = new Set(changes.map((c) => c.path))
+    this.lists[side] = [...this.lists[side].filter((c) => !paths.has(c.path)), ...changes].sort(
+      (a, b) => a.path.localeCompare(b.path)
+    )
+  }
+
+  private stage(paths: string[]): void {
+    this.put('staged', [
+      ...this.take('unstaged', paths),
+      ...this.take('untracked', paths).map((c) => ({ ...c, kind: 'added' as const })),
+      ...this.take('conflicted', paths).map((c) => ({ ...c, kind: 'modified' as const }))
+    ])
+  }
+
+  private unstage(paths: string[]): void {
+    const back = this.take('staged', paths)
+    this.put(
+      'untracked',
+      back.filter((c) => c.kind === 'added').map((c) => ({ ...c, kind: 'untracked' as const }))
+    )
+    this.put(
+      'unstaged',
+      back.filter((c) => c.kind !== 'added')
+    )
+  }
+
+  private discard(paths: string[], staged: boolean): GitDiscardSnapshot {
+    if (this.lists.conflicted.some((c) => paths.includes(c.path))) {
+      throw new CivetError(
+        'invalidArgument',
+        'invalid argument: resolve conflicts instead of discarding'
+      )
+    }
+    const before = cloneLists(this.lists)
+    const gone = [
+      ...this.take('unstaged', paths),
+      ...this.take('untracked', paths),
+      ...(staged ? this.take('staged', paths) : [])
+    ]
+    const snapshot: GitDiscardSnapshot = {
+      entries: gone.map((c) => ({
+        path: c.path,
+        file: c.kind === 'deleted' ? null : { oid: fakeSha(), mode: 0o100644 },
+        restoreIndex: staged,
+        index: null,
+        untracked: c.kind === 'untracked'
+      }))
+    }
+    this.discarded.set(snapshot, before)
+    return snapshot
+  }
+
+  private restore(snapshot: GitDiscardSnapshot): void {
+    const before = this.discarded.get(snapshot)
+    if (!before) throw gitErr('blob is gone')
+    const paths = new Set(snapshot.entries.map((e) => e.path))
+    for (const side of ['staged', 'unstaged', 'untracked'] as const) {
+      this.put(
+        side,
+        before[side].filter((c) => paths.has(c.path))
+      )
+    }
+  }
+
+  private commit(opts: { message: string; amend: boolean; all: boolean }): void {
+    if (!opts.message.trim() && !opts.amend) {
+      throw new CivetError('invalidArgument', 'invalid argument: the commit message is empty')
+    }
+    if (opts.all) {
+      this.stage([...this.lists.unstaged, ...this.lists.untracked].map((c) => c.path))
+    }
+    if (this.lists.staged.length === 0 && !opts.amend) {
+      throw gitErr('no changes added to commit (use "git add" and/or "git commit -a")')
+    }
+    const changes = this.take(
+      'staged',
+      this.lists.staged.map((c) => c.path)
+    )
+    if (opts.amend && this.commits.length > 0)
+      this.commits[this.commits.length - 1]!.push(...changes)
+    else {
+      this.commits.push(changes)
+      this.branch.ahead += 1
+    }
+    this.branch.head = fakeSha()
+    this.branch.canUndoCommit = true
+  }
+
+  private undoCommit(head: string): void {
+    if (head !== this.branch.head)
+      throw new CivetError('invalidArgument', 'invalid argument: HEAD moved; refresh and try again')
+    if (!this.branch.canUndoCommit)
+      throw new CivetError('invalidArgument', 'invalid argument: the last commit is already pushed')
+    this.put('staged', this.commits.pop() ?? [])
+    this.branch.ahead = Math.max(0, this.branch.ahead - 1)
+    this.branch.head = fakeSha()
+    this.branch.canUndoCommit = this.commits.length > 0 && this.branch.ahead > 0
+  }
+
+  private push(): void {
+    if (this.branch.behind > 0) {
+      throw gitErr(
+        `To github.com:example/civet.git\n ! [rejected]        ${this.branch.branch} -> ${this.branch.branch} (fetch first)\nerror: failed to push some refs to 'github.com:example/civet.git'\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally.`
+      )
+    }
+    this.branch.upstream = `origin/${this.branch.branch}`
+    this.branch.ahead = 0
+    this.branch.canUndoCommit = false
+    this.commits = []
+  }
+
+  private pull(): void {
+    if (!this.branch.upstream) {
+      throw gitErr(`${this.branch.branch} has no upstream branch to pull from (push it first)`)
+    }
+    if (this.branch.behind > 0) {
+      // Diverged: the merge is one more unpushed (empty) commit.
+      if (this.branch.ahead > 0) {
+        this.branch.ahead += 1
+        this.commits.push([])
+      }
+      this.branch.behind = 0
+      this.branch.head = fakeSha()
+    }
+  }
+
+  private fetch(): void {
+    // Someone else pushed to a published branch in the meantime.
+    if (this.branch.upstream && this.branch.branch !== 'main') this.branch.behind += 1
+  }
+
+  private stashAll(): void {
+    const l = this.lists
+    if (!l.staged.length && !l.unstaged.length && !l.untracked.length) {
+      throw gitErr('no local changes to stash')
+    }
+    this.stash.push({ ...cloneLists(l), conflicted: [] })
+    this.growing = false
+    this.lists = { staged: [], unstaged: [], untracked: [], conflicted: l.conflicted }
+  }
+
+  private stashPop(): void {
+    const top = this.stash.pop()
+    if (!top) throw gitErr('no stash entries for this branch')
+    for (const side of ['staged', 'unstaged', 'untracked'] as const) this.put(side, top[side])
   }
 }
 

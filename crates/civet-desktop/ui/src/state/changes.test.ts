@@ -30,9 +30,25 @@ const status = (patch: Partial<GitStatusInfo> = {}): GitStatusInfo => ({
   ...patch
 })
 
-function withBackend(gitStatus: CivetBackend['gitStatus']) {
-  useStore.setState({ backend: { gitStatus } as CivetBackend })
+function withBackend(
+  gitStatus: CivetBackend['gitStatus'],
+  gitBranch: CivetBackend['gitBranch'] = async () => {
+    throw new CivetError('unsupported', 'too old')
+  }
+) {
+  useStore.setState({ backend: { gitStatus, gitBranch } as CivetBackend })
   useChanges.setState({ byWorktree: {} })
+}
+
+const branch = {
+  branch: 'feat',
+  head: 'abc',
+  upstream: 'origin/feat',
+  ahead: 1,
+  behind: 0,
+  canUndoCommit: true,
+  stashes: 0,
+  hasRemote: true
 }
 
 describe('changes', () => {
@@ -90,5 +106,42 @@ describe('changes', () => {
     const entry = useChanges.getState().byWorktree[wsKey('h', '/w')]!
     expect(entry.error?.code).toBe('unsupported')
     expect(changedFileCount(entry.status)).toBe(1)
+  })
+
+  it('fetches the branch with the status and remembers a daemon without git actions', async () => {
+    const gitBranch = vi.fn(async () => branch)
+    withBackend(async () => status(), gitBranch)
+    await refreshChanges('h', '/w')
+    let entry = useChanges.getState().byWorktree[wsKey('h', '/w')]!
+    expect(entry.branch).toEqual(branch)
+    expect(entry.actions).toBe('supported')
+
+    const old = vi.fn(async () => {
+      throw new CivetError('unsupported', 'too old')
+    })
+    withBackend(async () => status(), old)
+    await refreshChanges('h', '/w')
+    await refreshChanges('h', '/w')
+    entry = useChanges.getState().byWorktree[wsKey('h', '/w')]!
+    expect(entry.actions).toBe('unsupported')
+    expect(entry.status).not.toBeNull()
+    // Asked once, then not again until the host reconnects.
+    expect(old).toHaveBeenCalledTimes(1)
+  })
+
+  it('a forced refresh during a running fetch fetches again afterwards', async () => {
+    const resolvers: ((s: GitStatusInfo) => void)[] = []
+    const gitStatus = vi.fn(() => new Promise<GitStatusInfo>((r) => resolvers.push(r)))
+    withBackend(gitStatus)
+    const first = refreshChanges('h', '/w')
+    await refreshChanges('h', '/w', 0, { force: true })
+    expect(gitStatus).toHaveBeenCalledTimes(1)
+    resolvers[0]!(status())
+    await first
+    await vi.waitFor(() => expect(gitStatus).toHaveBeenCalledTimes(2))
+    resolvers[1]!(status({ staged: [change('a')] }))
+    await vi.waitFor(() =>
+      expect(useChanges.getState().byWorktree[wsKey('h', '/w')]?.status?.staged).toHaveLength(1)
+    )
   })
 })

@@ -177,6 +177,11 @@ fn every_command_through_ipc() {
             "git_diff",
             json!({ "hostId": "x", "worktree": "/w", "path": "a", "oldPath": null, "staged": false, "contextLines": 3 }),
         ),
+        ("git_branch", json!({ "hostId": "x", "worktree": "/w" })),
+        (
+            "git_action",
+            json!({ "hostId": "x", "worktree": "/w", "action": { "discard": { "paths": ["a"], "staged": false } } }),
+        ),
         (
             "create_worktree",
             json!({ "hostId": "x", "repo": "r", "branch": "b", "base": null, "path": null }),
