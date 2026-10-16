@@ -49,9 +49,9 @@ export function FolderPathInput({
       versionAtLeast(h.daemonVersion, LIST_DIRS_MIN_DAEMON_VERSION)
     )
   })
-  // Listings by `${hostId}\0${dir}`; null while loading or after an error
-  // (a folder that does not exist yet just shows nothing).
-  const [listings, setListings] = useState<Record<string, HostDir[] | null>>({})
+  // Listings by `${hostId}\0${dir}`: null while loading, 'failed' after an
+  // error (a folder that does not exist yet just shows nothing).
+  const [listings, setListings] = useState<Record<string, HostDir[] | null | 'failed'>>({})
   const [focused, setFocused] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const [active, setActive] = useState(-1)
@@ -61,19 +61,31 @@ export function FolderPathInput({
   const dir = query?.dir ?? null
   const key = `${hostId}\u0000${dir}`
   const dirs = listings[key]
-  const matches = query && dirs ? matchFolders(dirs, query.prefix).slice(0, MAX_SHOWN) : []
+  const matches =
+    query && Array.isArray(dirs) ? matchFolders(dirs, query.prefix).slice(0, MAX_SHOWN) : []
   const open = focused && !dismissed && matches.length > 0
   const listed = key in listings
 
   // Each directory is listed once per dialog, shortly after typing stops
-  // in it.
+  // in it. A failed one is tried again only after moving to another
+  // directory and back, never in a loop.
+  useEffect(() => {
+    setListings((l) => {
+      const failed = Object.keys(l).filter((k) => k !== key && l[k] === 'failed')
+      if (!failed.length) return l
+      const next = { ...l }
+      for (const k of failed) delete next[k]
+      return next
+    })
+  }, [key])
+
   useEffect(() => {
     if (!backend || dir === null || listed) return
     const timer = setTimeout(() => {
       setListings((l) => ({ ...l, [key]: null }))
       backend.listDirs(hostId, dir).then(
         (r) => setListings((l) => ({ ...l, [key]: r.dirs })),
-        () => {}
+        () => setListings((l) => ({ ...l, [key]: 'failed' }))
       )
     }, 80)
     return () => clearTimeout(timer)
