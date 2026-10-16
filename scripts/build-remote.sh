@@ -18,7 +18,8 @@
 # Requirements: zig (brew install zig / your distro's package) and
 #   cargo install --locked cargo-zigbuild
 #   rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-# Uses the `dist` cargo profile (release + opt-level "z", thin LTO, stripped).
+# Uses the `dist` cargo profile (release + opt-level "z", thin LTO, stripped)
+# and --locked: Cargo.lock must be up to date.
 # Darwin targets build natively with cargo (no zig).
 #
 # CIVET_SKIP_DAEMONS=1 makes --bundle a no-op: UI-only builds (the app then
@@ -78,8 +79,8 @@ for t in "${targets[@]}"; do
     rustup target list --installed | grep -qx "$t" || rustup target add "$t"
     echo "==> civetd for $t"
     case "$t" in
-        *-apple-darwin) cargo build -p civetd --bin civetd --profile dist --target "$t" ;;
-        *) cargo zigbuild -p civetd --bin civetd --profile dist --target "$t" ;;
+        *-apple-darwin) cargo build --locked -p civetd --bin civetd --profile dist --target "$t" ;;
+        *) cargo zigbuild --locked -p civetd --bin civetd --profile dist --target "$t" ;;
     esac
     # Replace atomically (a running local daemon may execute the old file).
     cp "target/$t/dist/civetd" "$out/.civetd-$t.tmp"

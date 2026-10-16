@@ -48,6 +48,10 @@
     "allow-stop-forward",
     "allow-list-forwards",
     "allow-open-local-url",
-    "allow-open-pull-request"
+    "allow-open-pull-request",
+    "allow-app-info",
+    "allow-check-for-updates",
+    "allow-update-status",
+    "allow-install-update"
   ]
 }

@@ -45,6 +45,11 @@ const COMMANDS: &[&str] = &[
     "list_forwards",
     "open_local_url",
     "open_pull_request",
+    // src/updater.rs
+    "app_info",
+    "check_for_updates",
+    "update_status",
+    "install_update",
 ];
 
 /// Bundled daemon binaries (`bundle.resources` in tauri.conf.json):
@@ -55,7 +60,34 @@ const COMMANDS: &[&str] = &[
 /// workspace `civetd`).
 const BUNDLED_DIST: &str = "civet-dist";
 
+/// `git` output, trimmed; None on any failure (no git, not a checkout).
+fn git(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (out.status.success() && !s.is_empty()).then_some(s)
+}
+
+/// The commit (and its date) shown in the About window: `$CIVET_COMMIT`
+/// (release CI sets it, so a cached build script reruns per commit), else
+/// git's HEAD.
+fn build_commit() {
+    println!("cargo:rerun-if-env-changed=CIVET_COMMIT");
+    let commit = std::env::var("CIVET_COMMIT")
+        .ok()
+        .filter(|c| !c.is_empty())
+        .or_else(|| git(&["rev-parse", "HEAD"]))
+        .unwrap_or_default();
+    let date = if commit.is_empty() {
+        String::new()
+    } else {
+        git(&["show", "-s", "--format=%cI", &commit]).unwrap_or_default()
+    };
+    println!("cargo:rustc-env=CIVET_BUILD_COMMIT={commit}");
+    println!("cargo:rustc-env=CIVET_BUILD_DATE={date}");
+}
+
 fn main() {
+    build_commit();
     let dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets it"))
         .join(BUNDLED_DIST);
     std::fs::create_dir_all(&dir).expect("creating the bundled civet-dist dir");

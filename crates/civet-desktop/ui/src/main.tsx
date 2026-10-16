@@ -5,8 +5,17 @@ import '@xterm/xterm/css/xterm.css'
 import '@fontsource-variable/geist'
 import '@fontsource-variable/geist-mono'
 import './assets/main.css'
+import { isTauri } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { App } from './App'
+import { AboutWindow } from './components/AboutWindow'
 import { TooltipProvider } from './components/ui/tooltip'
+
+// The About window (src/updater.rs) loads this same bundle; `?about` previews
+// it in a browser.
+const isAbout = isTauri()
+  ? getCurrentWindow().label === 'about'
+  : new URLSearchParams(location.search).has('about')
 
 // xterm measures its cell size once when a terminal opens, so the terminal
 // font must be loaded before the first pane mounts. Bounded wait: a missing
@@ -25,8 +34,6 @@ void fontsReady.then(() =>
   createRoot(document.getElementById('root')!).render(
     // One provider for every tooltip (icon buttons); a short delay so sweeping
     // across the tab bar does not flash labels.
-    <TooltipProvider delayDuration={400}>
-      <App />
-    </TooltipProvider>
+    <TooltipProvider delayDuration={400}>{isAbout ? <AboutWindow /> : <App />}</TooltipProvider>
   )
 )

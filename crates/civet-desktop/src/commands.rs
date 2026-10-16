@@ -531,6 +531,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_forwards,
         open_local_url,
         open_pull_request,
+        crate::updater::app_info,
+        crate::updater::check_for_updates,
+        crate::updater::update_status,
+        crate::updater::install_update,
     ]
 }
 

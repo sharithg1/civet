@@ -85,6 +85,10 @@ tauri = { version = "2.12.4", features = [] }
 tauri-build = { version = "2.7.3", features = [] }
 tauri-plugin-notification = "2.7.0"
 tauri-plugin-dialog = "=2.7.3"
+# In-app updates. It needs zip ^4 (Windows only, never built here), and every
+# zip 4.x is yanked: Cargo.lock pins the yanked 4.6.1, which a locked build
+# accepts. A full `cargo update` fails to resolve until the plugin moves on.
+tauri-plugin-updater = "2.14.0"
 # macOS wake notification (NSWorkspaceDidWakeNotification) and the
 # clipboard (NSPasteboard, OSC 52 / Cmd+C); already in the
 # graph via tao/wry, only features are added.

@@ -59,5 +59,11 @@
     "resources": {
       "civet-dist/": "civet-dist/"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ0QUU0MEI4NkUwMDZBREIKUldUYmFnQnV1RUN1Uk9DZThNT09WbUNmc0JmbFhmSmpmOGt2VnZnM2Roa1VkMTJPR2hPdElNZWsK",
+      "endpoints": ["https://github.com/sharithg1/civet/releases/latest/download/latest.json"]
+    }
   }
 }

@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "about",
+  "description": "The About window: version info and updates.",
+  "windows": ["about"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "allow-app-info",
+    "allow-check-for-updates",
+    "allow-update-status",
+    "allow-install-update",
+    "allow-write-clipboard"
+  ]
+}
