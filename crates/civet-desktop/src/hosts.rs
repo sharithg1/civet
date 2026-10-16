@@ -1313,8 +1313,9 @@ impl HostManager {
 
     /// `download_file`: save a worktree file to `dest` on this Mac (chosen
     /// in a save dialog, so it may be replaced), in
-    /// [`civet_proto::MAX_FILE_CHUNK_BYTES`] slices. A failed download
-    /// leaves no partial file behind. Returns the bytes written.
+    /// [`civet_proto::MAX_FILE_CHUNK_BYTES`] slices. The data goes to
+    /// `<dest>.civet-part` first and replaces `dest` only once complete, so
+    /// a failed download leaves `dest` as it was. Returns the bytes written.
     pub async fn download_file(
         &self,
         host_id: &str,
@@ -1325,7 +1326,8 @@ impl HostManager {
         use tokio::io::AsyncWriteExt;
         self.check_daemon_version(host_id, civet_proto::FILE_OPS_MIN_DAEMON_VERSION)?;
         let io = |e: std::io::Error| CmdError::new("io", format!("{dest}: {e}"));
-        let mut file = tokio::fs::File::create(&dest).await.map_err(io)?;
+        let part = format!("{dest}.civet-part");
+        let mut file = tokio::fs::File::create(&part).await.map_err(io)?;
         let mut offset = 0u64;
         let r: Result<u64, CmdError> = async {
             loop {
@@ -1346,12 +1348,14 @@ impl HostManager {
                 }
             }
             file.flush().await.map_err(io)?;
+            file.sync_all().await.map_err(io)?;
+            tokio::fs::rename(&part, &dest).await.map_err(io)?;
             Ok(offset)
         }
         .await;
         if r.is_err() {
             drop(file);
-            let _ = tokio::fs::remove_file(&dest).await;
+            let _ = tokio::fs::remove_file(&part).await;
         }
         r
     }

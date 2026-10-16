@@ -105,14 +105,14 @@ fn apply_sync(root: &Path, trash: &Path, op: FileOp) -> Result<FileOpResult, Ses
                 return Ok(done(&to));
             }
             refuse_into_itself(&src, &dst, &from)?;
-            move_entry(&src, &dst).map_err(|e| io(&to, e))?;
+            move_entry(&src, &dst).map_err(|e| io(&to, e.into_io()))?;
             Ok(done(&to))
         }
         FileOp::Copy { from, to } => {
             let src = existing(root, &from)?;
             let dst = fresh(root, &to)?;
             refuse_into_itself(&src, &dst, &from)?;
-            copy_new(&src, &dst).map_err(|e| io(&to, e))?;
+            copy_new(&src, &dst, Keep::Files).map_err(|e| io(&to, e))?;
             Ok(done(&to))
         }
         FileOp::Trash { path } => {
@@ -256,14 +256,38 @@ fn write_new(path: &Path, data: &[u8]) -> std::io::Result<()> {
     r
 }
 
-/// Rename without replacing; across file systems, copy then delete.
-fn move_entry(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// A failed [`move_entry`].
+#[derive(Debug)]
+enum MoveError {
+    /// Nothing moved; `src` is as it was.
+    Failed(std::io::Error),
+    /// Across file systems: `dst` is a complete copy, but removing `src`
+    /// failed part way. `dst` must be kept (it may be the only whole copy).
+    Copied(std::io::Error),
+}
+
+impl MoveError {
+    fn into_io(self) -> std::io::Error {
+        match self {
+            MoveError::Failed(e) => e,
+            MoveError::Copied(e) => std::io::Error::new(
+                e.kind(),
+                format!("copied, but the original could not be removed completely: {e}"),
+            ),
+        }
+    }
+}
+
+/// Rename without replacing; across file systems, copy everything
+/// (`.git` included) then delete. Special files make such a move fail
+/// before anything is deleted.
+fn move_entry(src: &Path, dst: &Path) -> Result<(), MoveError> {
     match crate::sys::rename_noreplace(src, dst) {
         Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-            copy_new(src, dst)?;
-            remove_entry(src)
+            copy_new(src, dst, Keep::All).map_err(MoveError::Failed)?;
+            remove_entry(src).map_err(MoveError::Copied)
         }
-        r => r,
+        r => r.map_err(MoveError::Failed),
     }
 }
 
@@ -275,10 +299,19 @@ fn remove_entry(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// What [`copy_tree`] copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Keep {
+    /// The user's Copy: `.git` entries left out, special files skipped.
+    Files,
+    /// A move across file systems: everything; special files are an error.
+    All,
+}
+
 /// [`copy_tree`] to a path that does not exist; whatever was copied is
 /// removed again if it fails.
-fn copy_new(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let r = copy_tree(src, dst);
+fn copy_new(src: &Path, dst: &Path, keep: Keep) -> std::io::Result<()> {
+    let r = copy_tree(src, dst, keep);
     if let Err(e) = &r
         && e.kind() != std::io::ErrorKind::AlreadyExists
     {
@@ -287,10 +320,10 @@ fn copy_new(src: &Path, dst: &Path) -> std::io::Result<()> {
     r
 }
 
-/// Copy a file, symlink (as a link) or directory tree; `.git` entries are
-/// left out and nothing existing is replaced. Fifos, sockets and devices
-/// are skipped.
-fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// Copy a file, symlink (as a link) or directory tree, replacing nothing.
+/// With [`Keep::Files`], `.git` entries are left out and fifos, sockets and
+/// devices skipped; with [`Keep::All`] those fail the copy.
+fn copy_tree(src: &Path, dst: &Path, keep: Keep) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(src)?;
     let ft = meta.file_type();
     if ft.is_symlink() {
@@ -300,10 +333,10 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
         for entry in std::fs::read_dir(src)? {
             let entry = entry?;
             let name = entry.file_name();
-            if is_git(&name) {
+            if keep == Keep::Files && is_git(&name) {
                 continue;
             }
-            copy_tree(&entry.path(), &dst.join(&name))?;
+            copy_tree(&entry.path(), &dst.join(&name), keep)?;
         }
         std::fs::set_permissions(dst, std::fs::Permissions::from_mode(meta.mode() & 0o7777))
     } else if ft.is_file() {
@@ -315,6 +348,14 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
             .open(dst)?;
         std::io::copy(&mut from, &mut to)?;
         Ok(())
+    } else if keep == Keep::All {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!(
+                "{} is a fifo, socket or device, which can't be moved to another file system",
+                src.display()
+            ),
+        ))
     } else {
         Ok(())
     }
@@ -350,12 +391,17 @@ fn trash_entry(root: &Path, trash: &Path, src: &Path, rel: &str) -> Result<Strin
         dir.join(TRASH_META),
         serde_json::to_vec(&meta).map_err(std::io::Error::other)?,
     )
+    .map_err(MoveError::Failed)
     .and_then(|()| move_entry(src, &dir.join(TRASH_ITEM)));
-    if let Err(e) = r {
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(io(rel, e));
+    match r {
+        Ok(()) => Ok(id),
+        // The trash holds the only complete copy: keep it (restorable).
+        Err(e @ MoveError::Copied(_)) => Err(io(rel, e.into_io())),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(io(rel, e.into_io()))
+        }
     }
-    Ok(id)
 }
 
 fn restore(root: &Path, trash: &Path, id: &str) -> Result<FileOpResult, SessionError> {
@@ -377,7 +423,11 @@ fn restore(root: &Path, trash: &Path, id: &str) -> Result<FileOpResult, SessionE
         return Err(gone());
     }
     let dst = fresh(root, &meta.path)?;
-    move_entry(&item, &dst).map_err(|e| io(&meta.path, e))?;
+    match move_entry(&item, &dst) {
+        // Back in the worktree; what is left of the trash copy is purged.
+        Ok(()) | Err(MoveError::Copied(_)) => {}
+        Err(e) => return Err(io(&meta.path, e.into_io())),
+    }
     let _ = std::fs::remove_dir_all(&dir);
     Ok(done(&meta.path))
 }
@@ -432,6 +482,36 @@ mod tests {
         assert!(valid_trash_id(&id));
         assert!(!valid_trash_id("../x"));
         assert!(!valid_trash_id(""));
+    }
+
+    #[test]
+    fn moves_copy_everything_or_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("vendor");
+        std::fs::create_dir_all(src.join("lib/.git")).unwrap();
+        std::fs::write(src.join("lib/.git/HEAD"), "ref").unwrap();
+        std::fs::write(src.join("lib/a.rs"), "a").unwrap();
+        // The user's Copy leaves .git out; a move's copy keeps it.
+        copy_new(&src, &tmp.path().join("copy"), Keep::Files).unwrap();
+        assert!(!tmp.path().join("copy/lib/.git").exists());
+        copy_new(&src, &tmp.path().join("moved"), Keep::All).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("moved/lib/.git/HEAD")).unwrap(),
+            "ref"
+        );
+        // A special file fails a move's copy, and nothing of it is left.
+        let fifo =
+            std::ffi::CString::new(src.join("lib/pipe").into_os_string().into_encoded_bytes())
+                .unwrap();
+        // SAFETY: a valid NUL-terminated path, alive for the call.
+        #[allow(unsafe_code)]
+        let rc = unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) };
+        assert_eq!(rc, 0);
+        let err = copy_new(&src, &tmp.path().join("again"), Keep::All).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        assert!(!tmp.path().join("again").exists());
+        copy_new(&src, &tmp.path().join("files"), Keep::Files).unwrap();
+        assert!(!tmp.path().join("files/lib/pipe").exists());
     }
 
     #[test]

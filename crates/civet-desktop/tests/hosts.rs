@@ -704,7 +704,8 @@ async fn file_ops_uploads_and_downloads() {
         .unwrap();
     assert_eq!(n, data.len() as u64);
     assert!(std::fs::read(&dest).unwrap() == data);
-    // A failed download leaves nothing behind.
+    // A failed download leaves nothing behind, and a file it was to
+    // replace as it was.
     let missing = local.path().join("missing.bin");
     assert!(
         m.download_file(h, wt.clone(), "nope".into(), missing.display().to_string())
@@ -712,6 +713,20 @@ async fn file_ops_uploads_and_downloads() {
             .is_err()
     );
     assert!(!missing.exists());
+    assert!(
+        m.download_file(h, wt.clone(), "nope".into(), dest.display().to_string())
+            .await
+            .is_err()
+    );
+    assert!(std::fs::read(&dest).unwrap() == data);
+    let names: Vec<_> = std::fs::read_dir(local.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.ends_with(".civet-part")),
+        "{names:?}"
+    );
 
     // Trash and restore.
     let t = m
