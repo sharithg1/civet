@@ -194,6 +194,19 @@ fn all_requests() -> Vec<Request> {
         Request::ListPullRequests {
             repo: RepoId::from("r"),
         },
+        Request::ListFiles {
+            worktree: WorktreeId::from("/w"),
+            dir: "src/bin".into(),
+            include_ignored: true,
+        },
+        Request::ReadFile {
+            worktree: WorktreeId::from("/w"),
+            path: "src/main.rs".into(),
+            max_bytes: 65_536,
+        },
+        Request::ListAllFiles {
+            worktree: WorktreeId::from("/w"),
+        },
     ]
 }
 
@@ -241,6 +254,33 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             url: "https://github.com/o/r/pull/42".into(),
             state: PullRequestState::Merged,
         }])),
+        Ok(Response::Files(DirListing {
+            entries: vec![
+                FileEntry {
+                    name: "src".into(),
+                    kind: FileKind::Dir,
+                    size: 0,
+                    ignored: false,
+                },
+                FileEntry {
+                    name: "link".into(),
+                    kind: FileKind::Symlink,
+                    size: 7,
+                    ignored: true,
+                },
+            ],
+            truncated: false,
+        })),
+        Ok(Response::FilePreview(FilePreview {
+            size: 1_000_000,
+            binary: false,
+            truncated: true,
+            text: "fn main() {}\n".into(),
+        })),
+        Ok(Response::AllFiles(FileList {
+            paths: vec!["README.md".into(), "src/main.rs".into()],
+            truncated: false,
+        })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]

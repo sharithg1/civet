@@ -22,6 +22,7 @@
 //! this crate for wiring agent hooks to `$CIVET_STATUS_FILE`.
 
 mod error;
+mod files;
 mod git;
 mod github;
 mod hooks;

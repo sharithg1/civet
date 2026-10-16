@@ -40,6 +40,9 @@ describe('TauriBackend commands', () => {
     await backend.listPullRequests('h', 'x')
     await backend.createWorktree('h', 'x', 'feat')
     await backend.removeWorktree('h', '/w', true)
+    await backend.listFiles('h', '/w', 'src', false)
+    await backend.readFile('h', '/w', 'src/a.ts', 1024)
+    await backend.listAllFiles('h', '/w')
     await backend.listPanes('h')
     await backend.writeInput('h', 3, 'ls\r')
     await backend.writeInputBinary('h', 3, '\x00\xff')
@@ -65,6 +68,9 @@ describe('TauriBackend commands', () => {
       ['list_pull_requests', { hostId: 'h', repo: 'x' }],
       ['create_worktree', { hostId: 'h', repo: 'x', branch: 'feat', base: null, path: null }],
       ['remove_worktree', { hostId: 'h', worktree: '/w', force: true }],
+      ['list_files', { hostId: 'h', worktree: '/w', dir: 'src', includeIgnored: false }],
+      ['read_file', { hostId: 'h', worktree: '/w', path: 'src/a.ts', maxBytes: 1024 }],
+      ['list_all_files', { hostId: 'h', worktree: '/w' }],
       ['list_panes', { hostId: 'h' }],
       ['write_input', { hostId: 'h', pane: 3, data: 'ls\r' }],
       ['write_input_binary', { hostId: 'h', pane: 3, data: '\x00\xff' }],

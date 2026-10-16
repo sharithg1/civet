@@ -4,7 +4,7 @@
 import { leaves } from '@/layout/pane-tree'
 import { cn } from '@/lib/utils'
 import { paneWhat, tabLabels, tileColor } from '@/lib/worktree-view'
-import { useStore, wsKey, wtKey, type Tab } from '@/state/store'
+import { isPaneTab, useStore, wsKey, wtKey, type FileTab, type Tab } from '@/state/store'
 import type { PaneId, PaneInfo, RepoInfo, WorktreeInfo } from '@/types'
 
 /** Coloured square with the project's initial (sidebar 16px, title bar 14px, switcher 10px). */
@@ -83,7 +83,10 @@ export type TabView = {
   id: string | null
   label: string
   agent: PaneInfo | null
-  focused: PaneId
+  /** The focused pane; null for a file tab. */
+  focused: PaneId | null
+  /** A file tab's worktree-relative path. */
+  file: string | null
   paneCount: number
   what: { text: string; mono: boolean }
 }
@@ -104,22 +107,37 @@ export function worktreeTabs(
   panes: Record<PaneId, PaneInfo> | undefined,
   worktree: string
 ): TabView[] {
-  const groups: { id: string | null; ids: PaneId[]; focused: PaneId }[] = tabs?.length
-    ? tabs.map((t) => ({ id: t.id, ids: leaves(t.root), focused: t.focused }))
+  type Group = { id: string | null; ids: PaneId[]; focused: PaneId }
+  const groups: (Group | FileTab)[] = tabs?.length
+    ? tabs.map((t) => (isPaneTab(t) ? { id: t.id, ids: leaves(t.root), focused: t.focused } : t))
     : Object.values(panes ?? {})
         .filter((p) => p.worktree === worktree)
         .sort((a, b) => a.id - b.id)
         .map((p) => ({ id: null, ids: [p.id], focused: p.id }))
-  const labels = tabLabels(groups.map((g) => g.ids.map((id) => panes?.[id])))
-  return groups.map((g, i) => {
-    const agent = labels[i]!.agent
+  const paneGroups = groups.filter((g): g is Group => !('kind' in g))
+  const labels = tabLabels(paneGroups.map((g) => g.ids.map((id) => panes?.[id])))
+  return groups.map((g) => {
+    if ('kind' in g) {
+      const slash = g.path.lastIndexOf('/')
+      return {
+        id: g.id,
+        label: g.path.slice(slash + 1),
+        agent: null,
+        focused: null,
+        file: g.path,
+        paneCount: 0,
+        what: { text: slash < 0 ? '' : g.path.slice(0, slash), mono: true }
+      }
+    }
+    const l = labels[paneGroups.indexOf(g)]!
     return {
       id: g.id,
-      label: labels[i]!.label,
-      agent,
+      label: l.label,
+      agent: l.agent,
       focused: g.focused,
+      file: null,
       paneCount: g.ids.length,
-      what: paneWhat(agent ?? panes?.[g.focused])
+      what: paneWhat(l.agent ?? panes?.[g.focused])
     }
   })
 }

@@ -55,6 +55,7 @@ import {
   wsKey,
   wtKey
 } from '@/state/store'
+import { FileIcon } from './FilesTab'
 import type { HostView } from '@/state/store'
 import { applyOrder, clampSidebarWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
 import { dropLineClass, useReorder, type Reorder } from '@/lib/reorder'
@@ -770,7 +771,9 @@ function WorktreeRow({
                 >
                   {t.agent && hasAgentLogo(t.agent.agent) ? (
                     <AgentLogo agent={t.agent.agent} className="size-3" />
-                  ) : t.agent ? null : (
+                  ) : t.agent ? null : t.file != null ? (
+                    <FileIcon path={t.file} className="size-3 shrink-0 text-dim" />
+                  ) : (
                     <Terminal className="size-3 shrink-0 text-dim" />
                   )}
                   <span

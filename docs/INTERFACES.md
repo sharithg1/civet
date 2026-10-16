@@ -121,14 +121,15 @@ map. Everything is re-exported from the crate root.
 | Ports (`ports.rs`) | `ListeningPort { port, addrs: Vec<String>, pid, process, command, pane, worktree }`, `PortsUpdate { ports }` (sorted by port), `ForwardReply = Result<(), RpcError>`, `MAX_PORT_COMMAND_CHARS` (200) |
 | Envelopes | `ClientMessage::{Request(ControlRequest), Input(InputMessage), Ack(ScreenAck), Goodbye}`; `ServerMessage::{Response(ControlResponse), Event(Event), Screen(ScreenUpdate), InputAck { pane, seq }, Goodbye { reason }}` |
 | RPC | `ControlRequest { id, request: Request }`, `ControlResponse { id, result: Result<Response, RpcError> }`, `RpcError { code: ErrorCode, message }` |
-| Requests → responses | `Ping{nonce}`→`Pong{nonce, server_time_ms}`; `GetDaemonInfo`→`DaemonInfo`; `ListRepos`→`Repos`; `AddRepo{path}`→`Repo`; `RemoveRepo{repo}`→`Ok`; `ListWorktrees{repo}`→`Worktrees`; `CreateWorktree{repo, branch, base, path}`→`Worktree`; `RemoveWorktree{worktree, force}`→`Ok`; `SpawnPane(SpawnPaneRequest)`→`PaneSpawned(PaneInfo)`; `LaunchAgent(LaunchAgentRequest)`→`AgentLaunched{worktree, pane}`; `ResizePane{pane, size}`→`Ok`; `KillPane{pane, signal}`→`Ok`; `ListPanes`→`Panes`; `SubscribePane{pane, known_state}`→`Subscribed(SubscribeInfo)`; `UnsubscribePane{pane}`→`Ok`; `FetchScrollback(ScrollbackRequest)`→`Scrollback(ScrollbackPage)`; `SetAgentStatus{pane, status}`→`Ok` |
+| Requests → responses | `Ping{nonce}`→`Pong{nonce, server_time_ms}`; `GetDaemonInfo`→`DaemonInfo`; `ListRepos`→`Repos`; `AddRepo{path}`→`Repo`; `RemoveRepo{repo}`→`Ok`; `ListWorktrees{repo}`→`Worktrees`; `CreateWorktree{repo, branch, base, path}`→`Worktree`; `RemoveWorktree{worktree, force}`→`Ok`; `SpawnPane(SpawnPaneRequest)`→`PaneSpawned(PaneInfo)`; `LaunchAgent(LaunchAgentRequest)`→`AgentLaunched{worktree, pane}`; `ResizePane{pane, size}`→`Ok`; `KillPane{pane, signal}`→`Ok`; `ListPanes`→`Panes`; `SubscribePane{pane, known_state}`→`Subscribed(SubscribeInfo)`; `UnsubscribePane{pane}`→`Ok`; `FetchScrollback(ScrollbackRequest)`→`Scrollback(ScrollbackPage)`; `SetAgentStatus{pane, status}`→`Ok`; `UploadFile{name, data}`→`FileUploaded{path}`; `ListPullRequests{repo}`→`PullRequests` |
+| Files (appended in 0.1.10; clients gate on `LIST_FILES_MIN_DAEMON_VERSION`) | `ListFiles{worktree, dir, include_ignored}`→`Files(DirListing { entries: Vec<FileEntry>, truncated })`, `FileEntry { name, kind: FileKind::{File, Dir, Symlink}, size, ignored }` (one directory level, `lstat`, directories first then by name, at most `MAX_DIR_ENTRIES` = 10 000; gitignored entries left out unless `include_ignored`, `.git` never); `ReadFile{worktree, path, max_bytes}`→`FilePreview { size, binary, truncated, text }` (at most `MAX_FILE_PREVIEW_BYTES` = 1 MiB; binary = NUL in the first 8 KiB, `text` then empty; regular files only); `ListAllFiles{worktree}`→`AllFiles(FileList { paths, truncated })` (`git ls-files -co --exclude-standard`, sorted, at most `MAX_ALL_FILES` = 50 000). `dir` / `path` are relative to the worktree root (`""` = root); absolute paths, `..` components and anything whose canonical path (symlinks resolved) leaves the worktree are `InvalidArgument` |
 | Spawn | `SpawnPaneRequest { worktree, cwd, command: Option<CommandSpec>, env: Vec<(String,String)>, size: TermSize, title, agent }`, `CommandSpec { program, args }`, `LaunchAgentRequest { repo, branch, base, worktree_path, command, env, size, title, agent }`, `KillSignal::{Hangup (default), Terminate, Kill}` |
 | Info | `RepoInfo`, `WorktreeInfo`, `PaneInfo { id, worktree, cwd, command, title, size, agent, status, exit_code, exited, created_at_ms, state }`, `DaemonInfo`, `SubscribeInfo { pane, state, size, history_lines, last_input_seq }` |
 | Events (pushed to every client) | `Event::{PaneCreated(PaneInfo), PaneExited{pane, exit_code}, PaneClosed{pane}, PaneTitle{pane, title}, PaneResized{pane, size}, AgentStatus(AgentStatusEvent), Bell{pane}, ReposChanged, WorktreesChanged{repo}, Clipboard{pane, text}}`, `Event::pane()`. `Clipboard` (OSC 52 set, appended in 0.1.1 within protocol 1) is the exception: only sent to clients subscribed to the pane whose `client_version` is at least `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` (older clients cannot decode it), at most `MAX_CLIPBOARD_BYTES` (1 MiB), never replayed on resume / Full |
 | Terminal | `TermSize { cols, rows, pixel_width, pixel_height }` (`sanitized()` clamps to 1x1..=`MAX_TERM_COLS` x `MAX_TERM_ROWS` = 1000 x 500), `InputMessage { pane, seq, data }`, `ScreenUpdate { pane, state, base_state, kind: UpdateKind::{Full, Diff}, acked_input_seq, size, history_lines, history_start, payload }`, `ScreenAck { pane, state }` |
 | Scrollback | `ScrollbackRequest { req_id, pane, query }`, `ScrollbackQuery::{Before { end: Option<u64>, limit }, Range { start, end }}`, `ScrollbackPage { req_id, pane, start, lines: Vec<ScrollbackLine>, oldest_available, end_available }`, `ScrollbackLine { vt, wrapped }` |
 | Agent status | `AgentStatus::{Unknown (default), Running, NeedsInput, Done, Idle}` (`FromStr` is lenient), `AgentStatusSource::{EscapeCode, Hook, Heuristic, ProcessExit, Client}`, `AgentStatusEvent { pane, status, previous, source, message, at_ms }`, `parse_status_file(&str) -> Option<(AgentStatus, Option<String>)>` |
-| Constants | `PROTOCOL_VERSION = 1`, `MIN_PROTOCOL_VERSION`, `MAGIC = b"CIVT"`, `ALPN = b"civet/1"`, `MAX_INFLIGHT_UPDATES = 8`, `MAX_REPLAY_LINES = 2000`, `FULL_REPLAY_LINES = 1000`, `ECHO_ACK_DELAY_MS = 50`, `ENV_PANE_ID`, `ENV_STATUS_FILE`, `ENV_STATE_DIR`, `STATE_DIR_NAME`, `MAX_CLIPBOARD_BYTES` (1 MiB), `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` ("0.1.1"), `now_ms()`, `is_compatible(v)` |
+| Constants | `PROTOCOL_VERSION = 1`, `MIN_PROTOCOL_VERSION`, `MAGIC = b"CIVT"`, `ALPN = b"civet/1"`, `MAX_INFLIGHT_UPDATES = 8`, `MAX_REPLAY_LINES = 2000`, `FULL_REPLAY_LINES = 1000`, `ECHO_ACK_DELAY_MS = 50`, `ENV_PANE_ID`, `ENV_STATUS_FILE`, `ENV_STATE_DIR`, `STATE_DIR_NAME`, `MAX_CLIPBOARD_BYTES` (1 MiB), `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` ("0.1.1"), `UPLOAD_FILE_MIN_DAEMON_VERSION` ("0.1.4"), `LIST_PULL_REQUESTS_MIN_DAEMON_VERSION` ("0.1.5"), `LIST_FILES_MIN_DAEMON_VERSION` ("0.1.10"), `MAX_DIR_ENTRIES`, `MAX_FILE_PREVIEW_BYTES`, `MAX_ALL_FILES`, `now_ms()`, `is_compatible(v)` |
 
 ### Stream layout (normative)
 
@@ -1113,6 +1114,17 @@ impl SessionManager {
     /// already gone is pruned. Emits WorktreesChanged.
     pub async fn remove_worktree(&self, worktree: &WorktreeId, force: bool) -> Result<(), SessionError>;
 
+    // ----- files (read-only; paths relative to the worktree, never outside it) -----
+    /// One directory level; gitignored entries (one `git check-ignore
+    /// --stdin` call) left out unless `include_ignored`.
+    pub async fn list_files(&self, worktree: &WorktreeId, dir: &str, include_ignored: bool)
+        -> Result<DirListing, SessionError>;
+    /// The first `max_bytes` (capped at 1 MiB) of a regular file.
+    pub async fn read_file(&self, worktree: &WorktreeId, path: &str, max_bytes: u64)
+        -> Result<FilePreview, SessionError>;
+    /// `git ls-files -z -co --exclude-standard`, sorted, capped.
+    pub async fn list_all_files(&self, worktree: &WorktreeId) -> Result<FileList, SessionError>;
+
     // ----- panes -----
     /// Spawns the PTY (see "Process launch" below), starts the reader thread
     /// and status detection. Emits PaneCreated.
@@ -1682,6 +1694,9 @@ JSON forms unless shown. Errors reject the promise with
 | `list_worktrees` | `{ hostId, repo }` | `WorktreeInfo[]` |
 | `create_worktree` | `{ hostId, repo, branch, base?, path? }` | `WorktreeInfo` |
 | `remove_worktree` | `{ hostId, worktree, force }` | `null` |
+| `list_files` | `{ hostId, worktree, dir, includeIgnored }` | `DirListing` (error `unsupported` before civetd 0.1.10) |
+| `read_file` | `{ hostId, worktree, path, maxBytes }` | `FilePreview` |
+| `list_all_files` | `{ hostId, worktree }` | `FileList` |
 | `list_panes` | `{ hostId }` | `PaneInfo[]` |
 | `spawn_pane` | `{ hostId, request: SpawnPaneRequest }` | `PaneInfo` |
 | `launch_agent` | `{ hostId, request: LaunchAgentRequest }` | `{ worktree: WorktreeInfo, pane: PaneInfo }` |

@@ -46,7 +46,11 @@ import type {
   TermSize,
   TransportChoice,
   WorktreeInfo,
-  PullRequestInfo
+  PullRequestInfo,
+  DirListing,
+  FileEntry,
+  FileList,
+  FilePreview
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
@@ -498,6 +502,28 @@ function randomStep(): string {
 /** Local ports the mock pretends are already taken on this Mac. */
 const MOCK_TAKEN_LOCALLY = new Set([3001, 8080])
 
+/** Every mock worktree has these files; `target/` and `*.log` are gitignored. */
+const MOCK_FILES: Record<string, string> = {
+  '.gitignore': 'target/\n*.log\n',
+  'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
+  'README.md': '# Civet\n\nTerminals and agents on remote hosts, from your Mac.\n',
+  'crates/civet-proto/Cargo.toml': '[package]\nname = "civet-proto"\n',
+  'crates/civet-proto/src/lib.rs': '//! Wire protocol.\n\npub mod control;\npub mod frame;\n',
+  'crates/civet-proto/src/control.rs':
+    '//! Control RPC.\n\npub enum Request {\n    Ping { nonce: u64 },\n}\n',
+  'crates/civet-proto/src/frame.rs':
+    '//! Length-prefixed framing.\n\npub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;\n',
+  'crates/civetd/src/main.rs': 'fn main() {\n    println!("civetd");\n}\n',
+  'docs/INTERFACES.md': '# Civet crate interfaces\n',
+  'docs/logo.png': '\u0089PNG\u0000\u0000',
+  'scripts/release.sh': '#!/usr/bin/env bash\nset -euo pipefail\n',
+  'debug.log': 'connected\n',
+  'target/debug/civetd': '\u0000ELF'
+}
+
+const mockIgnored = (path: string) =>
+  path.startsWith('target/') || path === 'target' || path.endsWith('.log')
+
 export class MockBackend implements CivetBackend {
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
@@ -935,6 +961,73 @@ export class MockBackend implements CivetBackend {
         )
         h.event({ worktreesChanged: { repo } })
       }
+    }
+  }
+
+  private checkFiles(hostId: string): void {
+    const v = this.host(hostId).summary.daemonVersion
+    if (v === MOCK_OLD_VERSION)
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; this needs v0.1.10 or newer (restart the daemon to upgrade)`
+      )
+  }
+
+  async listFiles(
+    hostId: string,
+    _worktree: string,
+    dir: string,
+    includeIgnored: boolean
+  ): Promise<DirListing> {
+    this.checkFiles(hostId)
+    if (dir.split('/').includes('..') || dir.startsWith('/'))
+      throw new CivetError('invalidArgument', `"${dir}" is outside the worktree`)
+    const prefix = dir ? `${dir}/` : ''
+    const byName = new Map<string, FileEntry>()
+    for (const [path, body] of Object.entries(MOCK_FILES)) {
+      if (!path.startsWith(prefix)) continue
+      const [name, ...rest] = path.slice(prefix.length).split('/')
+      if (!name || byName.has(name)) continue
+      const kind = rest.length ? 'dir' : 'file'
+      const ignored = mockIgnored(prefix + name)
+      if (ignored && !includeIgnored) continue
+      byName.set(name, { name, kind, size: kind === 'dir' ? 0 : body.length, ignored })
+    }
+    if (dir && byName.size === 0) throw new CivetError('notFound', `"${dir}" not found`)
+    const entries = [...byName.values()].sort(
+      (a, b) =>
+        Number(a.kind !== 'dir') - Number(b.kind !== 'dir') ||
+        a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    )
+    return { entries, truncated: false }
+  }
+
+  async readFile(
+    hostId: string,
+    _worktree: string,
+    path: string,
+    maxBytes: number
+  ): Promise<FilePreview> {
+    this.checkFiles(hostId)
+    const body = MOCK_FILES[path]
+    if (body == null) throw new CivetError('notFound', `"${path}" not found`)
+    const binary = body.includes('\u0000')
+    const cap = Math.min(maxBytes, 1024 * 1024)
+    return {
+      size: body.length,
+      binary,
+      truncated: body.length > cap,
+      text: binary ? '' : body.slice(0, cap)
+    }
+  }
+
+  async listAllFiles(hostId: string, _worktree: string): Promise<FileList> {
+    this.checkFiles(hostId)
+    return {
+      paths: Object.keys(MOCK_FILES)
+        .filter((p) => !mockIgnored(p))
+        .sort(),
+      truncated: false
     }
   }
 

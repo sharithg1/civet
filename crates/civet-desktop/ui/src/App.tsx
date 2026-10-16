@@ -26,7 +26,9 @@ import {
   splitFocused,
   useStore,
   worktreesOf,
-  wsKey
+  wsKey,
+  closeTab,
+  isPaneTab
 } from './state/store'
 import { initPorts } from './state/ports'
 
@@ -165,7 +167,9 @@ function useShortcuts() {
           const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
           if (!tab) return
           e.preventDefault()
-          closePanes(active.hostId, leaves(tab.root).includes(tab.focused) ? [tab.focused] : [])
+          if (!isPaneTab(tab)) closeTab(wsKey(active.hostId, active.worktree), tab.id)
+          else
+            closePanes(active.hostId, leaves(tab.root).includes(tab.focused) ? [tab.focused] : [])
         }
         return
       }
