@@ -249,12 +249,41 @@ jobs:
             echo "Unsigned build (ad-hoc signature): see docs/RELEASING.md for the xattr workaround." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # Installed apps update themselves from latest.json (src/updater.rs),
+        # which needs the .app.tar.gz signed with this key: required for tags.
+        run: |
+          put() { { echo "$1<<__CIVET_EOF__"; echo "$2"; echo "__CIVET_EOF__"; } >> "$GITHUB_ENV"; }
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            put TAURI_SIGNING_PRIVATE_KEY "$TAURI_SIGNING_PRIVATE_KEY"
+            put TAURI_SIGNING_PRIVATE_KEY_PASSWORD "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            echo "UPDATER_ARTIFACTS=1" >> "$GITHUB_ENV"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY is not set: installed apps could not update to this release (docs/RELEASING.md)."
+            exit 1
+          else
+            echo "No updater key: building without the in-app update bundle." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: tauri build
         working-directory: crates/civet-desktop/ui
         env:
           # The daemons are already staged in civet-dist (see above).
           CIVET_SKIP_DAEMONS: '1'
-        run: pnpm tauri build --ci --target ${{ matrix.target }} --bundles app,dmg
+          # Shown in the About window (build.rs).
+          CIVET_COMMIT: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          args=(--ci --target "$TARGET" --bundles "app,dmg")
+          if [ "${UPDATER_ARTIFACTS:-}" = 1 ]; then
+            # Civet.app.tar.gz + .sig for the updater (off in tauri.conf.json
+            # so local builds need no key).
+            args+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+          fi
+          pnpm tauri build "${args[@]}"
 
       - name: check and collect bundle
         run: |
@@ -276,6 +305,10 @@ jobs:
           fi
           cp "${dmgs[0]}" "out/Civet_${VERSION}_macos-${{ matrix.arch }}.dmg"
           ditto -c -k --keepParent "$app" "out/Civet_${VERSION}_macos-${{ matrix.arch }}.app.zip"
+          if [ "${UPDATER_ARTIFACTS:-}" = 1 ]; then
+            cp "$bundle/macos/Civet.app.tar.gz" "out/Civet_${VERSION}_macos-${{ matrix.arch }}.app.tar.gz"
+            cp "$bundle/macos/Civet.app.tar.gz.sig" "out/Civet_${VERSION}_macos-${{ matrix.arch }}.app.tar.gz.sig"
+          fi
           ls -l out
       - uses: actions/upload-artifact@v4
         with:
@@ -295,6 +328,29 @@ jobs:
         with:
           path: assets
           merge-multiple: true
+      - name: latest.json (in-app updates)
+        working-directory: assets
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        # The updater reads releases/latest/download/latest.json: the newest
+        # published, non-prerelease release. The signatures live in it, so
+        # the .sig files are not uploaded.
+        run: |
+          base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/$TAG"
+          platforms='{}'
+          for arch in aarch64 x86_64; do
+            tgz="Civet_${VERSION}_macos-$arch.app.tar.gz"
+            [ -f "$tgz" ] && [ -f "$tgz.sig" ] || { echo "::error::missing $tgz or its .sig"; exit 1; }
+            platforms=$(jq --arg k "darwin-$arch" --arg url "$base/$tgz" --rawfile sig "$tgz.sig" \
+              '. + {($k): {url: $url, signature: $sig}}' <<<"$platforms")
+            rm "$tgz.sig"
+          done
+          jq -n --arg version "$VERSION" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
+          cat latest.json
       - name: checksums
         working-directory: assets
         run: |

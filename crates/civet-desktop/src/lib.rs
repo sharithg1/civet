@@ -10,6 +10,7 @@
 //! * [`wake`]: sleep/wake and network-change detection.
 //! * [`connect`]: ssh bootstrap, QUIC with stdio-tunnel fallback, local mode.
 //! * [`forwards`]: listening-port watch and TCP port forwarding per host.
+//! * [`updater`]: in-app updates, the app menu and the About window.
 //!
 //! The React frontend lives in `ui/`.
 
@@ -25,6 +26,7 @@ pub mod linkstate;
 pub mod pane;
 pub mod predict;
 pub mod records;
+pub mod updater;
 pub mod wake;
 
 use std::path::PathBuf;
@@ -192,6 +194,9 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .menu(updater::menu)
+        .on_menu_event(|app, e| updater::on_menu_event(app, e.id().as_ref()))
         .setup(move |app| {
             let ui = Arc::new(TauriUi {
                 app: app.handle().clone(),
@@ -224,12 +229,16 @@ pub fn run() {
                 os_wake_hosts.notify_network_change();
             });
             app.manage(AppState { hosts });
+            app.manage(Arc::new(updater::Updates::default()));
+            updater::spawn_periodic_checks(app.handle().clone());
             Ok(())
         })
         .on_page_load(|webview, payload| {
-            // A (re)loading webview has no live channels: keep the views
-            // cached for an instant re-attach.
+            // A (re)loading main webview has no live channels: keep the
+            // views cached for an instant re-attach. (The About window
+            // holds none.)
             if payload.event() == tauri::webview::PageLoadEvent::Started
+                && webview.label() == "main"
                 && let Some(state) = webview.try_state::<AppState>()
             {
                 state.hosts.detach_all();

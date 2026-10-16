@@ -1,10 +1,12 @@
 // Footer of the main column, like the line under Cursor's composer: the
 // worktree's branch, the active host + latency (click for the host popover)
 // and, on the right, the focused session.
-import { ChevronDown, GitBranch, Server } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowDownToLine, ChevronDown, GitBranch, Server } from 'lucide-react'
 import {
   isPaneTab,
   reconnectHost,
+  reportError,
   requestRestartDaemon,
   upgradeSummary,
   useStore,
@@ -15,6 +17,7 @@ import { DOT_LABEL, agentName, duration, paneDot, worktreeBranch } from '@/lib/w
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useWorktreeInfo } from './chrome'
 import { HostStateDot, hostMeta } from './Sidebar'
+import { installUpdate, useUpdateStatus } from '@/updates'
 
 export function StatusBar() {
   const active = useStore((s) => s.active)
@@ -44,7 +47,33 @@ export function StatusBar() {
       {!host && <span className="px-1.5">no host</span>}
       <span className="flex-1" />
       <span className="truncate px-1.5 text-dim">{right}</span>
+      <UpdatePill />
     </footer>
+  )
+}
+
+/** "Restart to update" once a newer Civet is downloaded (src/updater.rs). */
+function UpdatePill() {
+  const status = useUpdateStatus()
+  const [installing, setInstalling] = useState(false)
+  if (status?.phase !== 'ready') return null
+  return (
+    <button
+      type="button"
+      disabled={installing}
+      title={`Civet ${status.version} is downloaded. Restart to install it; sessions keep running and reattach.`}
+      className="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-default disabled:opacity-60"
+      onClick={() => {
+        setInstalling(true)
+        installUpdate().catch((err) => {
+          setInstalling(false)
+          reportError('Could not install the update', err)
+        })
+      }}
+    >
+      <ArrowDownToLine className="size-3.5" />
+      {installing ? 'Restarting…' : `Restart to update to ${status.version}`}
+    </button>
   )
 }
 
