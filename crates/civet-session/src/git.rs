@@ -510,8 +510,8 @@ pub(crate) fn numstat_total(text: &str) -> LineCounts {
         let (Some(a), Some(d)) = (a, d) else {
             return (None, None);
         };
-        adds += a;
-        dels += d;
+        adds = adds.saturating_add(a);
+        dels = dels.saturating_add(d);
     }
     (Some(adds), Some(dels))
 }
@@ -708,6 +708,8 @@ mod tests {
         assert_eq!(numstat_total(""), (Some(0), Some(0)));
         assert_eq!(numstat_total("3\t1\ta\0"), (Some(3), Some(1)));
         assert_eq!(numstat_total("3\t1\ta\0-\t-\tb\0"), (None, None));
+        let huge = format!("{}\t{}\ta\0{}\t1\tb\0", u64::MAX, u64::MAX, u64::MAX);
+        assert_eq!(numstat_total(&huge), (Some(u64::MAX), Some(u64::MAX)));
     }
 
     #[test]

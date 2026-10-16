@@ -199,7 +199,7 @@ pub(crate) async fn diff(
     };
     info.additions = Some(adds);
     info.deletions = Some(dels);
-    if adds + dels > MAX_GIT_DIFF_LINES {
+    if adds.saturating_add(dels) > MAX_GIT_DIFF_LINES {
         info.too_large = true;
         return Ok(info);
     }

@@ -71,13 +71,16 @@ export async function refreshChanges(
 /**
  * Poll a worktree's status every `intervalMs` while mounted, the host is
  * connected and the window visible (and right away when it becomes so).
- * Stops after an `unsupported` error (an older civetd).
+ * Stops after an `unsupported` error (an older civetd) until the host
+ * connects again: restarting the daemon is how it gets upgraded.
  */
 export function useChangesPolling(hostId: string, worktree: string, intervalMs: number): void {
   const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
   useEffect(() => {
     if (!connected) return
     const key = wsKey(hostId, worktree)
+    const entry = useChanges.getState().byWorktree[key]
+    if (entry?.error?.code === 'unsupported') setEntry(key, { ...entry, error: null })
     const tick = () => {
       if (document.visibilityState === 'hidden') return
       if (useChanges.getState().byWorktree[key]?.error?.code === 'unsupported') return
