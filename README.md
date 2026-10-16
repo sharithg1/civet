@@ -17,7 +17,7 @@
 <h3 align="center"><a href="https://github.com/sharithg1/civet/releases/latest"><ins>Download Civet</ins></a></h3>
 
 <p align="center">
-  <img width="960" alt="Civet running agents in parallel worktrees on a remote host" src="https://github.com/user-attachments/assets/6bf08b82-4e82-45b8-8bd0-b6a2b499990a" />
+  <img width="960" alt="Civet running agents in parallel worktrees on a remote host" src="https://github.com/user-attachments/assets/8bc260b2-acce-49ab-85b8-087bce883fc5" />
 </p>
 
 ## Why Civet
