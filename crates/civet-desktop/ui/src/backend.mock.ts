@@ -1511,7 +1511,11 @@ class MockGit {
       throw gitErr(`${this.branch.branch} has no upstream branch to pull from (push it first)`)
     }
     if (this.branch.behind > 0) {
-      this.branch.ahead += this.branch.ahead > 0 ? 1 : 0
+      // Diverged: the merge is one more unpushed (empty) commit.
+      if (this.branch.ahead > 0) {
+        this.branch.ahead += 1
+        this.commits.push([])
+      }
       this.branch.behind = 0
       this.branch.head = fakeSha()
     }

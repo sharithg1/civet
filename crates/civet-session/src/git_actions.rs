@@ -262,6 +262,8 @@ async fn discard(
 }
 
 /// Put back what [`discard`] overwrote: index entries first, then files.
+/// Refused if any path changed since the discard (an agent kept editing):
+/// that newer content has no snapshot, so overwriting it would lose it.
 async fn restore(git: &Git, dir: &Path, snapshot: &GitDiscardSnapshot) -> Result<(), SessionError> {
     let root = std::fs::canonicalize(dir)?;
     for e in &snapshot.entries {
@@ -270,6 +272,7 @@ async fn restore(git: &Git, dir: &Path, snapshot: &GitDiscardSnapshot) -> Result
             check_blob(b)?;
         }
     }
+    check_unchanged_since_discard(git, dir, &root, snapshot).await?;
     let mut index_info = Vec::new();
     let mut unindex = Vec::new();
     for e in snapshot.entries.iter().filter(|e| e.restore_index) {
@@ -306,6 +309,54 @@ async fn restore(git: &Git, dir: &Path, snapshot: &GitDiscardSnapshot) -> Result
                 write_file(&root, &e.path, &data, b.mode)?;
             }
             None => remove_file(&root, &e.path)?,
+        }
+    }
+    Ok(())
+}
+
+/// Each path still is as [`discard`] left it: no file for a deleted
+/// untracked one; for a staged discard, nothing in `git status` (index and
+/// file match HEAD); otherwise no working-tree change against the index.
+async fn check_unchanged_since_discard(
+    git: &Git,
+    dir: &Path,
+    root: &Path,
+    snapshot: &GitDiscardSnapshot,
+) -> Result<(), SessionError> {
+    let paths: Vec<&str> = snapshot.entries.iter().map(|e| e.path.as_str()).collect();
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec![
+        "--no-optional-locks",
+        "--literal-pathspecs",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--no-renames",
+        "--untracked-files=all",
+        "--",
+    ];
+    args.extend(&paths);
+    let out = git.run(dir, &args).await?;
+    // "XY path\0"
+    let status: HashMap<&str, &[u8]> = out
+        .split('\0')
+        .filter(|r| r.len() > 3)
+        .map(|r| (&r[3..], &r.as_bytes()[..2]))
+        .collect();
+    for e in &snapshot.entries {
+        let changed = match status.get(e.path.as_str()) {
+            _ if e.untracked => std::fs::symlink_metadata(inside(root, &e.path)?).is_ok(),
+            None => false,
+            Some(_) if e.restore_index => true,
+            Some(xy) => xy[1] != b' ',
+        };
+        if changed {
+            return Err(SessionError::InvalidArgument(format!(
+                "{} changed since the discard; undoing it would overwrite that",
+                e.path
+            )));
         }
     }
     Ok(())

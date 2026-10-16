@@ -38,6 +38,13 @@ export async function runGitAction(
   const b = useStore.getState().backend
   if (!b) return undefined
   const key = wsKey(hostId, worktree)
+  // One at a time: the controls are disabled meanwhile, but ⌘↵ or a toast's
+  // Undo can still get here, and an overlapping action would clear `busy` early.
+  const running = useChanges.getState().busy[key]
+  if (running) {
+    pushToast({ kind: 'info', title: `${labels.failed}: wait for "${running}" to finish` }, 4000)
+    return undefined
+  }
   setBusy(key, labels.busy)
   try {
     const result = await b.gitAction(hostId, worktree, action)

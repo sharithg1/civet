@@ -1704,6 +1704,42 @@ async fn git_discard_and_undo() {
         "index entry restored"
     );
 
+    // Undo refuses once a discarded path changed again (an agent's newer
+    // edit has no snapshot), and leaves that edit alone.
+    for staged in [false, true] {
+        let snap = act(
+            &f,
+            &wt,
+            GitAction::Discard {
+                paths: paths(&["mod.txt", "new/deep/untracked.bin"]),
+                staged,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        write("mod.txt", b"agent wrote this\n");
+        assert!(matches!(
+            act(&f, &wt, GitAction::RestoreDiscarded(snap.clone())).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+        assert_eq!(
+            std::fs::read(repo_dir.join("mod.txt")).unwrap(),
+            b"agent wrote this\n"
+        );
+        // Same for a deleted untracked file that came back.
+        git(&repo_dir, &["checkout", "-q", "--", "mod.txt"]);
+        write("new/deep/untracked.bin", b"recreated");
+        assert!(matches!(
+            act(&f, &wt, GitAction::RestoreDiscarded(snap)).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+        assert_eq!(
+            std::fs::read(repo_dir.join("new/deep/untracked.bin")).unwrap(),
+            b"recreated"
+        );
+    }
+
     // Paths that leave the worktree or touch .git are refused, by every
     // path-taking action, and nothing is changed.
     std::os::unix::fs::symlink(&f.root, repo_dir.join("out")).unwrap();

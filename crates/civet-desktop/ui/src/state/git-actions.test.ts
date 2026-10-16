@@ -96,6 +96,13 @@ describe('git actions', () => {
     const p = stageChanges('h', '/w', 'unstaged', [change('a')])
     expect(useChanges.getState().busy[key]).toBe('Staging…')
     expect(gitAction).toHaveBeenCalledWith('h', '/w', { stage: { paths: ['a'] } })
+    // A second action while one runs is refused, and the first stays busy.
+    expect(await runGitAction('h', '/w', 'push', { busy: 'Pushing…', failed: 'Push' })).toBe(
+      undefined
+    )
+    expect(gitAction).toHaveBeenCalledTimes(1)
+    expect(useChanges.getState().busy[key]).toBe('Staging…')
+    expect(useStore.getState().toasts.at(-1)?.title).toBe('Push: wait for "Staging…" to finish')
     release()
     await p
     expect(useChanges.getState().busy[key]).toBeUndefined()
