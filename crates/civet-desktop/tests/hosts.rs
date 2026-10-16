@@ -21,7 +21,8 @@ use civet_proto::{
 };
 use civet_term::{PaneTerminal, TermConfig};
 use civet_transport::{StreamDialer, TransportKind};
-use civetd::daemon::{Daemon, DaemonOptions};
+use civetd::bootstrap::exit_code;
+use civetd::daemon::{Daemon, DaemonOptions, ExitError};
 use futures::future::BoxFuture;
 use tokio::sync::mpsc;
 
@@ -197,7 +198,24 @@ impl Rig {
             d.shutdown("test restart").await;
         }
         tokio::time::sleep(pause).await;
-        self.daemon = Some(Daemon::start(daemon_opts(&self.state_dir)).await.unwrap());
+        // A child being spawned concurrently in this process can hold a copy
+        // of the lock's descriptor until its exec closes it (O_CLOEXEC), so
+        // the old daemon's lock may look held for a moment after shutdown.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let daemon = loop {
+            match Daemon::start(daemon_opts(&self.state_dir)).await {
+                Ok(d) => break d,
+                Err(e)
+                    if e.downcast_ref::<ExitError>()
+                        .is_some_and(|x| x.code == exit_code::ALREADY_RUNNING)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Err(e) => panic!("restarting civetd: {e:?}"),
+            }
+        };
+        self.daemon = Some(daemon);
     }
 }
 
