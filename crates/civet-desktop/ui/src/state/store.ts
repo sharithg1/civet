@@ -62,9 +62,17 @@ export type DiffTarget = {
 }
 /**
  * A read-only view of a worktree file (`path` relative to the worktree root),
- * or with `diff` its uncommitted changes.
+ * or with `diff` its uncommitted changes. A `preview` tab (VS Code's preview
+ * editor, at most one per worktree) is replaced by the next file or diff
+ * opened with a single click, until it is pinned.
  */
-export type FileTab = { kind: 'file'; id: string; path: string; diff?: DiffTarget }
+export type FileTab = {
+  kind: 'file'
+  id: string
+  path: string
+  diff?: DiffTarget
+  preview?: boolean
+}
 export type Tab = PaneTab | FileTab
 
 export const isPaneTab = (t: Tab): t is PaneTab => t.kind !== 'file'
@@ -885,14 +893,50 @@ export function openPaneInTab(
   }))
 }
 
-/** Open a worktree file in a tab of its own, or activate the tab already showing it. */
-export function openFileTab(hostId: string, worktree: string, path: string): void {
-  updateWorkspace(wsKey(hostId, worktree), (w) => {
-    const existing = w.tabs.find((t) => t.kind === 'file' && t.path === path && !t.diff)
-    if (existing) return { ...w, activeTab: existing.id }
-    const tab: FileTab = { kind: 'file', id: newTabId(), path }
-    return { tabs: [...w.tabs, tab], activeTab: tab.id }
+/**
+ * Open a file or diff tab, VS Code style. A tab already showing it is
+ * activated (and pinned unless `preview`). Otherwise a preview takes the
+ * place of the worktree's preview tab if there is one; anything else is
+ * inserted right after the active tab.
+ */
+function openViewTab(
+  key: string,
+  matches: (t: FileTab) => boolean,
+  tab: Omit<FileTab, 'id' | 'preview'>,
+  preview: boolean
+): void {
+  updateWorkspace(key, (w) => {
+    const existing = w.tabs.find((t): t is FileTab => t.kind === 'file' && matches(t))
+    if (existing) {
+      const tabs =
+        !preview && existing.preview
+          ? w.tabs.map((t) => (t === existing ? { ...existing, preview: false } : t))
+          : w.tabs
+      return { tabs, activeTab: existing.id }
+    }
+    const opened: FileTab = { ...tab, id: newTabId(), preview }
+    const old = preview ? w.tabs.findIndex((t) => t.kind === 'file' && t.preview) : -1
+    if (old >= 0) {
+      return { tabs: w.tabs.map((t, i) => (i === old ? opened : t)), activeTab: opened.id }
+    }
+    const at = w.tabs.findIndex((t) => t.id === w.activeTab) + 1 || w.tabs.length
+    return { tabs: [...w.tabs.slice(0, at), opened, ...w.tabs.slice(at)], activeTab: opened.id }
   })
+}
+
+/** Open a worktree file in a tab of its own, or activate the tab already showing it. */
+export function openFileTab(
+  hostId: string,
+  worktree: string,
+  path: string,
+  opts: { preview?: boolean } = {}
+): void {
+  openViewTab(
+    wsKey(hostId, worktree),
+    (t) => t.path === path && !t.diff,
+    { kind: 'file', path },
+    !!opts.preview
+  )
 }
 
 /** Open a file's diff in a tab of its own (one per file and side), or activate it. */
@@ -900,16 +944,25 @@ export function openDiffTab(
   hostId: string,
   worktree: string,
   path: string,
-  diff: DiffTarget
+  diff: DiffTarget,
+  opts: { preview?: boolean } = {}
 ): void {
-  updateWorkspace(wsKey(hostId, worktree), (w) => {
-    const existing = w.tabs.find(
-      (t) => t.kind === 'file' && t.path === path && t.diff?.side === diff.side
+  openViewTab(
+    wsKey(hostId, worktree),
+    (t) => t.path === path && t.diff?.side === diff.side,
+    { kind: 'file', path, diff },
+    !!opts.preview
+  )
+}
+
+/** Keep a preview tab open: the next single-click open no longer replaces it. */
+export function pinTab(key: string, tabId: string): void {
+  updateWorkspace(key, (w) => ({
+    ...w,
+    tabs: w.tabs.map((t) =>
+      t.id === tabId && t.kind === 'file' && t.preview ? { ...t, preview: false } : t
     )
-    if (existing) return { ...w, activeTab: existing.id }
-    const tab: FileTab = { kind: 'file', id: newTabId(), path, diff }
-    return { tabs: [...w.tabs, tab], activeTab: tab.id }
-  })
+  }))
 }
 
 /** The tab to activate once `active` is gone from `before`: its left neighbour, else the first. */

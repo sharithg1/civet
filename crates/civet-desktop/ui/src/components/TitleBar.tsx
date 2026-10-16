@@ -40,6 +40,7 @@ import {
   newAgentTab,
   newTerminalTab,
   panesOfWorktree,
+  pinTab,
   pushToast,
   splitFocused,
   useStore,
@@ -267,6 +268,9 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
               data-tab-id={id}
               title={t.what.text}
               onClick={() => activateTab(key, id)}
+              onDoubleClick={(e) => {
+                if (!(e.target as HTMLElement).closest('button')) pinTab(key, id)
+              }}
               onPointerDown={(e) => {
                 if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
                 drag.current = { id, startX: e.clientX, moved: false }
@@ -307,7 +311,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
               ) : (
                 <Terminal className="size-3.5 shrink-0 text-quiet" />
               )}
-              <span className="whitespace-nowrap">{t.label}</span>
+              <span className={cn('whitespace-nowrap', t.preview && 'italic')}>{t.label}</span>
               {count > 1 && (
                 <span className="text-sm text-dim" title={`${count} panes`}>
                   {count}

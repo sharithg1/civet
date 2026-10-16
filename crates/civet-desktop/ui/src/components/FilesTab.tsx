@@ -115,7 +115,7 @@ export function FilesTab({
     void navigator.clipboard?.writeText(text).catch(() => {})
     pushToast({ kind: 'info', title: `Copied ${text}` }, 3200)
   }
-  const open = (path: string) => openFileTab(hostId, worktree, path)
+  const open = (path: string, preview = true) => openFileTab(hostId, worktree, path, { preview })
   const pick = (path: string) => {
     revealPath(hostId, worktree, path)
     setQuery('')
@@ -195,7 +195,7 @@ export function FilesTab({
           <ContextMenuContent className="w-52">
             {!menu.dir && (
               <>
-                <ContextMenuItem onSelect={() => open(menu.path)}>
+                <ContextMenuItem onSelect={() => open(menu.path, false)}>
                   <FileText />
                   Open
                 </ContextMenuItem>
@@ -247,7 +247,8 @@ function DirRows({
   expanded: string[]
   selected: string | null
   onToggle: (dir: string) => void
-  onOpen: (path: string) => void
+  /** Single click: a preview tab (`preview` unset); double click: a pinned one. */
+  onOpen: (path: string, preview?: boolean) => void
   onMenu: (t: Target) => void
 }) {
   const listing = dirs?.[dir]
@@ -278,6 +279,7 @@ function DirRows({
               style={pad}
               title={isDir ? path : `${path} · ${formatBytes(e.size)}`}
               onClick={() => (isDir ? onToggle(path) : onOpen(path))}
+              onDoubleClick={() => !isDir && onOpen(path, false)}
               onContextMenu={() => onMenu({ path, dir: isDir })}
               className={cn(
                 'flex h-[22px] w-full cursor-pointer items-center gap-1 rounded-[4px] pr-2 text-left text-sm hover:bg-hover',
