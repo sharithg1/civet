@@ -62,8 +62,9 @@ pub use agent::{
 };
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
-    AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, DirListing,
-    ErrorCode, Event, FileEntry, FileKind, FileList, FilePreview, GitChangeKind, GitDiffInfo,
+    AgentStatusEvent, CommandSpec, ConflictSide, ControlRequest, ControlResponse, DaemonInfo,
+    DirListing, ErrorCode, Event, FileEntry, FileKind, FileList, FilePreview, GitAction,
+    GitBlobRef, GitBranchInfo, GitChangeKind, GitDiffInfo, GitDiscardEntry, GitDiscardSnapshot,
     GitFileChange, GitStatusInfo, KillSignal, LaunchAgentRequest, PaneInfo, PullRequestInfo,
     PullRequestState, RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo,
     WorktreeInfo,
@@ -136,6 +137,11 @@ pub const MAX_GIT_DIFF_BYTES: usize = 1024 * 1024;
 
 /// Most changed lines (added + deleted) a [`GitDiffInfo`] carries.
 pub const MAX_GIT_DIFF_LINES: u64 = 20_000;
+
+/// Oldest daemon that understands [`Request::GitBranch`] and
+/// [`Request::GitAction`] (appended within protocol 1 after the git status
+/// requests).
+pub const GIT_ACTIONS_MIN_DAEMON_VERSION: &str = "0.1.14";
 
 /// Largest [`Request::UploadFile`] payload (headroom under the frame limit).
 pub const MAX_UPLOAD_BYTES: usize = 15 * 1024 * 1024;

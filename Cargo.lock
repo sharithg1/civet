@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "civet-desktop"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "block2",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "civet-e2e"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "civet-proto",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "civet-proto"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "civet-session"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "civet-proto",
  "civet-term",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "civet-term"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "alacritty_terminal",
  "civet-proto",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "civet-transport"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "bytes",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "civetd"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "civet-proto",

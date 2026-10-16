@@ -218,9 +218,9 @@ impl std::fmt::Debug for HostManager {
 }
 
 macro_rules! expect_response {
-    ($resp:expr, $pat:pat => $val:expr) => {
+    ($resp:expr, $($pat:pat => $val:expr),+) => {
         match $resp {
-            $pat => Ok($val),
+            $($pat => Ok($val),)+
             other => Err(CmdError::code(
                 civet_proto::ErrorCode::Internal,
                 format!("unexpected response: {other:?}"),
@@ -1128,6 +1128,32 @@ impl HostManager {
             context_lines,
         };
         expect_response!(self.request(host_id, request).await?, Response::GitDiff(d) => d)
+    }
+
+    /// `git_branch`: the worktree's branch, upstream and ahead / behind.
+    pub async fn git_branch(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+    ) -> Result<civet_proto::GitBranchInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::GIT_ACTIONS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::GitBranch { worktree }).await?, Response::GitBranch(b) => b)
+    }
+
+    /// `git_action`: a git write operation in the worktree. Returns the
+    /// snapshot that undoes a discard, None for every other action.
+    pub async fn git_action(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        action: civet_proto::GitAction,
+    ) -> Result<Option<civet_proto::GitDiscardSnapshot>, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::GIT_ACTIONS_MIN_DAEMON_VERSION)?;
+        expect_response!(
+            self.request(host_id, Request::GitAction { worktree, action }).await?,
+            Response::Ok => None,
+            Response::GitDiscarded(s) => Some(s)
+        )
     }
 
     /// `create_worktree`

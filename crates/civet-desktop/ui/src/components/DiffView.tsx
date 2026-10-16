@@ -2,7 +2,8 @@
 // file's unified diff with old/new line numbers. The daemon flags binary
 // files and diffs too large to send; long diffs render in pages so a big file
 // can't stall the window. The worktree's status is polled while the tab
-// shows, and the diff is fetched again whenever the file's entry changes.
+// shows, and the diff is fetched again whenever the file's entry changes or a
+// git action runs in the worktree.
 import { useEffect, useMemo, useState } from 'react'
 import { Copy, RotateCw } from 'lucide-react'
 import { CivetError } from '@/backend'
@@ -68,6 +69,8 @@ export function DiffView({
   const change = useChanges((s) =>
     findChange(s.byWorktree[wsKey(hostId, worktree)]?.status, { ...target, path })
   )
+  // Bumped by every git action in the worktree (stage, discard…): fetch again.
+  const epoch = useChanges((s) => s.diffEpoch[wsKey(hostId, worktree)] ?? 0)
   const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
   const root = useWorktreeInfo(hostId, worktree)?.info.path
   const [state, setState] = useState<DiffState | null>(null)
@@ -79,6 +82,7 @@ export function DiffView({
   useEffect(() => {
     void sig
     void reload
+    void epoch
     const b = useStore.getState().backend
     if (!b || !connected) return
     let live = true
@@ -92,7 +96,7 @@ export function DiffView({
     return () => {
       live = false
     }
-  }, [hostId, worktree, path, target.oldPath, target.side, sig, reload, connected])
+  }, [hostId, worktree, path, target.oldPath, target.side, sig, reload, epoch, connected])
 
   const diff = state?.diff ?? null
   const parsed = useMemo(() => (diff?.diff ? parseUnifiedDiff(diff.diff) : null), [diff])

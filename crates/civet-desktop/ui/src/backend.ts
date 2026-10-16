@@ -42,7 +42,10 @@ import type {
   FileList,
   FilePreview,
   GitStatusInfo,
-  GitDiffInfo
+  GitDiffInfo,
+  GitBranchInfo,
+  GitAction,
+  GitDiscardSnapshot
 } from './types'
 
 export type Unlisten = () => void
@@ -118,6 +121,14 @@ export interface CivetBackend {
     path: string,
     opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
   ): Promise<GitDiffInfo>
+  /** Branch, upstream and ahead / behind of a worktree (needs civetd >= 0.1.14). */
+  gitBranch(hostId: string, worktree: WorktreeId): Promise<GitBranchInfo>
+  /** A git write operation; a discard resolves to the snapshot that undoes it, the rest to null. */
+  gitAction(
+    hostId: string,
+    worktree: WorktreeId,
+    action: GitAction
+  ): Promise<GitDiscardSnapshot | null>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -306,6 +317,12 @@ export class TauriBackend implements CivetBackend {
       staged: opts.staged,
       contextLines: opts.contextLines ?? 3
     })
+  }
+  gitBranch(hostId: string, worktree: WorktreeId) {
+    return this.call<GitBranchInfo>('git_branch', { hostId, worktree })
+  }
+  gitAction(hostId: string, worktree: WorktreeId, action: GitAction) {
+    return this.call<GitDiscardSnapshot | null>('git_action', { hostId, worktree, action })
   }
   createWorktree(
     hostId: string,

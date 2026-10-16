@@ -217,6 +217,70 @@ fn all_requests() -> Vec<Request> {
             staged: true,
             context_lines: 3,
         },
+        Request::GitBranch {
+            worktree: WorktreeId::from("/w"),
+        },
+    ]
+    .into_iter()
+    .chain(git_actions().into_iter().map(|action| Request::GitAction {
+        worktree: WorktreeId::from("/w"),
+        action,
+    }))
+    .collect()
+}
+
+fn discard_snapshot() -> GitDiscardSnapshot {
+    GitDiscardSnapshot {
+        entries: vec![
+            GitDiscardEntry {
+                path: "a.rs".into(),
+                file: Some(GitBlobRef {
+                    oid: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".into(),
+                    mode: 0o100755,
+                }),
+                restore_index: true,
+                index: None,
+                untracked: false,
+            },
+            GitDiscardEntry {
+                path: "new.txt".into(),
+                file: None,
+                restore_index: false,
+                index: None,
+                untracked: true,
+            },
+        ],
+    }
+}
+
+fn git_actions() -> Vec<GitAction> {
+    vec![
+        GitAction::Stage {
+            paths: vec!["a.rs".into(), "dir/b c.rs".into()],
+        },
+        GitAction::Unstage { paths: vec![] },
+        GitAction::Discard {
+            paths: vec!["a.rs".into()],
+            staged: true,
+        },
+        GitAction::RestoreDiscarded(discard_snapshot()),
+        GitAction::Commit {
+            message: "Fix it\n\nDetails ✓".into(),
+            amend: true,
+            all: false,
+        },
+        GitAction::AcceptConflict {
+            paths: vec!["a.rs".into()],
+            side: ConflictSide::Theirs,
+        },
+        GitAction::Push,
+        GitAction::Pull,
+        GitAction::Fetch,
+        GitAction::UndoCommit {
+            head: "abc123".into(),
+        },
+        GitAction::StashAll,
+        GitAction::StashPop,
     ]
 }
 
@@ -324,6 +388,27 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             deletions: Some(0),
             diff: "diff --git a/b.rs b/b.rs\n@@ -1 +1,2 @@\n x\n+y\n".into(),
         })),
+        Ok(Response::GitBranch(GitBranchInfo {
+            branch: Some("feat/x".into()),
+            head: Some("abc123".into()),
+            upstream: Some("origin/feat/x".into()),
+            ahead: 2,
+            behind: 1,
+            can_undo_commit: true,
+            stashes: 1,
+            has_remote: true,
+        })),
+        Ok(Response::GitBranch(GitBranchInfo {
+            branch: None,
+            head: None,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            can_undo_commit: false,
+            stashes: 0,
+            has_remote: false,
+        })),
+        Ok(Response::GitDiscarded(discard_snapshot())),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
