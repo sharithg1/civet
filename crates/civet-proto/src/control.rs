@@ -137,6 +137,84 @@ pub struct FileList {
     pub truncated: bool,
 }
 
+/// One change to a worktree's files ([`Request::FileOp`]). Paths follow the
+/// rules of [`Request::ListFiles`], and none may name `.git` or anything
+/// inside it. Nothing is overwritten: a target that already exists is
+/// `AlreadyExists`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum FileOp {
+    /// Create an empty file (its directory must exist).
+    CreateFile {
+        /// New file.
+        path: String,
+    },
+    /// Create a directory (its parent must exist).
+    CreateDir {
+        /// New directory.
+        path: String,
+    },
+    /// Rename or move a file or directory (a symlink itself, not its
+    /// target). A case-only rename of the same file is allowed.
+    Move {
+        /// Existing entry.
+        from: String,
+        /// New path.
+        to: String,
+    },
+    /// Copy a file or directory tree (symlinks copied as symlinks, `.git`
+    /// entries left out).
+    Copy {
+        /// Existing entry.
+        from: String,
+        /// New path.
+        to: String,
+    },
+    /// Move a file or directory to the daemon's trash (under its state
+    /// directory, not the worktree); [`FileOpResult::trash_id`] restores it.
+    /// Old trash is purged after a while.
+    Trash {
+        /// Existing entry.
+        path: String,
+    },
+    /// Put a trashed entry back at its old path (which must be free).
+    Restore {
+        /// From the [`FileOp::Trash`] result.
+        trash_id: String,
+    },
+    /// Create a file with these contents (e.g. dropped from Finder), at
+    /// most [`crate::MAX_UPLOAD_BYTES`].
+    Write {
+        /// New file.
+        path: String,
+        /// Contents.
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+}
+
+/// Outcome of a [`Request::FileOp`] ([`Response::FileOpDone`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOpResult {
+    /// The path the op created or changed, relative to the worktree root
+    /// (for [`FileOp::Restore`]: where the entry is back).
+    pub path: String,
+    /// Set by [`FileOp::Trash`]: pass it to [`FileOp::Restore`].
+    pub trash_id: Option<String>,
+}
+
+/// A slice of a file ([`Response::FileChunk`]), for downloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChunk {
+    /// Size of the whole file in bytes.
+    pub size: u64,
+    /// Bytes from the requested offset; empty at the end of the file.
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+}
+
 /// How a file changed, in a [`GitFileChange`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -545,6 +623,29 @@ pub enum Request {
         /// Context lines around each hunk (`-U`).
         context_lines: u32,
     },
+    /// Create, rename / move, copy, trash or restore worktree files.
+    /// -> [`Response::FileOpDone`]. Clients send it only to daemons of at
+    /// least [`crate::FILE_OPS_MIN_DAEMON_VERSION`] (also
+    /// [`Request::ReadFileChunk`]).
+    FileOp {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// The operation.
+        op: FileOp,
+    },
+    /// Up to `len` bytes of a regular file from `offset` (capped at
+    /// [`crate::MAX_FILE_CHUNK_BYTES`]), for downloading it whole.
+    /// -> [`Response::FileChunk`]. Same path rules as [`Request::ReadFile`].
+    ReadFileChunk {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// File relative to the worktree root.
+        path: String,
+        /// Start, in bytes.
+        offset: u64,
+        /// Most bytes wanted.
+        len: u64,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -602,6 +703,10 @@ pub enum Response {
     GitStatus(GitStatusInfo),
     /// Reply to [`Request::GitDiff`].
     GitDiff(GitDiffInfo),
+    /// Reply to [`Request::FileOp`].
+    FileOpDone(FileOpResult),
+    /// Reply to [`Request::ReadFileChunk`].
+    FileChunk(FileChunk),
 }
 
 /// Error category for a failed request.

@@ -40,6 +40,8 @@ import type {
   PullRequestInfo,
   DirListing,
   FileList,
+  FileOp,
+  FileOpResult,
   FilePreview,
   GitStatusInfo,
   GitDiffInfo
@@ -143,6 +145,20 @@ export interface CivetBackend {
   ): Promise<FilePreview>
   /** Every tracked and untracked, not ignored file, for quick-open. */
   listAllFiles(hostId: string, worktree: WorktreeId): Promise<FileList>
+  /** Create, move, copy, trash or restore worktree files (civetd >= 0.1.14). */
+  fileOp(hostId: string, worktree: WorktreeId, op: FileOp): Promise<FileOpResult>
+  /**
+   * Copy local files and folders (dropped from Finder) into `dir` of a
+   * worktree under their own names; `path` of each result is worktree-relative.
+   */
+  uploadToWorktree(
+    hostId: string,
+    worktree: WorktreeId,
+    dir: string,
+    paths: string[]
+  ): Promise<DroppedFile[]>
+  /** Save a worktree file on this Mac, asking where; the chosen path, or null if cancelled. */
+  downloadFile(hostId: string, worktree: WorktreeId, path: string): Promise<string | null>
   listPanes(hostId: string): Promise<PaneInfo[]>
   spawnPane(hostId: string, request: SpawnPaneRequest): Promise<PaneInfo>
   launchAgent(
@@ -327,6 +343,22 @@ export class TauriBackend implements CivetBackend {
   }
   listAllFiles(hostId: string, worktree: WorktreeId) {
     return this.call<FileList>('list_all_files', { hostId, worktree })
+  }
+  fileOp(hostId: string, worktree: WorktreeId, op: FileOp) {
+    return this.call<FileOpResult>('file_op', { hostId, worktree, op })
+  }
+  uploadToWorktree(hostId: string, worktree: WorktreeId, dir: string, paths: string[]) {
+    return this.call<DroppedFile[]>('upload_to_worktree', { hostId, worktree, dir, paths })
+  }
+  async downloadFile(hostId: string, worktree: WorktreeId, path: string) {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const dest = await save({
+      title: 'Download',
+      defaultPath: path.slice(path.lastIndexOf('/') + 1)
+    })
+    if (!dest) return null
+    await this.call<number>('download_file', { hostId, worktree, path, dest })
+    return dest
   }
   listPanes(hostId: string) {
     return this.call<PaneInfo[]>('list_panes', { hostId })

@@ -194,6 +194,22 @@ fn every_command_through_ipc() {
             json!({ "hostId": "x", "worktree": "/w", "path": "a", "maxBytes": 1024 }),
         ),
         ("list_all_files", json!({ "hostId": "x", "worktree": "/w" })),
+        (
+            "file_op",
+            json!({ "hostId": "x", "worktree": "/w", "op": { "move": { "from": "a", "to": "b/a" } } }),
+        ),
+        (
+            "file_op",
+            json!({ "hostId": "x", "worktree": "/w", "op": { "restore": { "trashId": "1-2-3" } } }),
+        ),
+        (
+            "upload_to_worktree",
+            json!({ "hostId": "x", "worktree": "/w", "dir": "src", "paths": ["/tmp/a.png"] }),
+        ),
+        (
+            "download_file",
+            json!({ "hostId": "x", "worktree": "/w", "path": "a", "dest": "/tmp/a" }),
+        ),
         ("list_panes", json!({ "hostId": "x" })),
         ("spawn_pane", json!({ "hostId": "x", "request": spawn })),
         ("launch_agent", json!({ "hostId": "x", "request": launch })),

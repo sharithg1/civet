@@ -96,6 +96,8 @@ export type Toast = {
   body?: string
   status?: 'done' | 'needsInput'
   target?: { hostId: string; worktree: string | null; pane: PaneId }
+  /** A button on the toast (e.g. Undo); clicking it also dismisses the toast. */
+  action?: { label: string; run: () => void }
 }
 
 export type ConfirmRequest = {
@@ -963,6 +965,40 @@ export function pinTab(key: string, tabId: string): void {
       t.id === tabId && t.kind === 'file' && t.preview ? { ...t, preview: false } : t
     )
   }))
+}
+
+/** `path` is `root` or inside it (worktree-relative paths). */
+const isUnder = (path: string, root: string) => path === root || path.startsWith(`${root}/`)
+
+/**
+ * File tabs (not diffs) of `from` and anything under it now show the same
+ * file at `to` (a rename / move in the Files tab).
+ */
+export function retargetFileTabs(hostId: string, worktree: string, from: string, to: string): void {
+  const key = wsKey(hostId, worktree)
+  if (!get().workspaces[key]) return
+  updateWorkspace(key, (w) => ({
+    ...w,
+    tabs: w.tabs.map((t) =>
+      t.kind === 'file' && !t.diff && isUnder(t.path, from)
+        ? { ...t, path: to + t.path.slice(from.length) }
+        : t
+    )
+  }))
+}
+
+/** Close the file tabs (not diffs) of `paths` and anything under them (deleted in the Files tab). */
+export function closeFileTabs(hostId: string, worktree: string, paths: string[]): void {
+  const key = wsKey(hostId, worktree)
+  if (!get().workspaces[key]) return
+  updateWorkspace(key, (w) => {
+    const tabs = w.tabs.filter(
+      (t) => !(t.kind === 'file' && !t.diff && paths.some((p) => isUnder(t.path, p)))
+    )
+    return tabs.length === w.tabs.length
+      ? w
+      : { tabs, activeTab: survivingActive(w.tabs, tabs, w.activeTab) }
+  })
 }
 
 /** The tab to activate once `active` is gone from `before`: its left neighbour, else the first. */

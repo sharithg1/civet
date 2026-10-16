@@ -251,6 +251,44 @@ pub async fn list_all_files(
 }
 
 #[tauri::command]
+pub async fn file_op(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    op: civet_proto::FileOp,
+) -> Res<civet_proto::FileOpResult> {
+    state.hosts.file_op(&host_id, worktree, op).await
+}
+
+#[tauri::command]
+pub async fn upload_to_worktree(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    dir: String,
+    paths: Vec<String>,
+) -> Res<Vec<crate::hosts::DroppedFile>> {
+    state
+        .hosts
+        .upload_to_worktree(&host_id, worktree, dir, paths)
+        .await
+}
+
+#[tauri::command]
+pub async fn download_file(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    path: String,
+    dest: String,
+) -> Res<u64> {
+    state
+        .hosts
+        .download_file(&host_id, worktree, path, dest)
+        .await
+}
+
+#[tauri::command]
 pub async fn list_panes(state: State<'_, AppState>, host_id: String) -> Res<Vec<PaneInfo>> {
     state.hosts.list_panes(&host_id).await
 }
@@ -512,6 +550,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_files,
         read_file,
         list_all_files,
+        file_op,
+        upload_to_worktree,
+        download_file,
         list_panes,
         spawn_pane,
         launch_agent,

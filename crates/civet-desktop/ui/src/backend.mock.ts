@@ -50,6 +50,8 @@ import type {
   DirListing,
   FileEntry,
   FileList,
+  FileOp,
+  FileOpResult,
   FilePreview,
   GitDiffInfo,
   GitFileChange,
@@ -57,7 +59,7 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.1.2'
+export const MOCK_VERSION = '0.1.14'
 export const MOCK_OLD_VERSION = '0.1.1'
 export const MOCK_REPLACED_MESSAGE =
   "another Civet window or client took over this host's connection; reconnect here to take it back"
@@ -524,6 +526,144 @@ const MOCK_FILES: Record<string, string> = {
   'target/debug/civetd': '\u0000ELF'
 }
 
+/** Mock daemons support file ops from this version on (like FILE_OPS_MIN_DAEMON_VERSION). */
+const MOCK_FILE_OPS_VERSION = '0.1.14'
+
+/**
+ * A worktree's files in memory: file bodies by path plus the set of
+ * directories (so empty ones exist). Same rules as the daemon: relative
+ * paths only, no `.git`, nothing overwritten.
+ */
+export class MockFs {
+  readonly files = new Map<string, string>()
+  readonly dirs = new Set<string>()
+
+  static seeded(bodies: Record<string, string>): MockFs {
+    const fs = new MockFs()
+    for (const [path, body] of Object.entries(bodies)) {
+      fs.files.set(path, body)
+      for (let d = mockParent(path); d; d = mockParent(d)) fs.dirs.add(d)
+    }
+    return fs
+  }
+
+  /** `path` normalized, or `invalidArgument`. */
+  static check(path: string): string {
+    const parts = path.split('/').filter((p) => p && p !== '.')
+    if (path.startsWith('/') || parts.includes('..'))
+      throw new CivetError('invalidArgument', `"${path}" is outside the worktree`)
+    if (parts.some((p) => p.toLowerCase() === '.git'))
+      throw new CivetError('invalidArgument', `"${path}" is in .git, which is off limits`)
+    if (!parts.length) throw new CivetError('invalidArgument', `"${path}" is the worktree root`)
+    return parts.join('/')
+  }
+
+  exists(path: string): boolean {
+    return this.files.has(path) || this.dirs.has(path)
+  }
+
+  /** Entries directly in `dir`. */
+  children(dir: string): { name: string; path: string; dir: boolean }[] {
+    const prefix = dir ? `${dir}/` : ''
+    const out: { name: string; path: string; dir: boolean }[] = []
+    for (const [set, isDir] of [
+      [this.dirs, true],
+      [this.files.keys(), false]
+    ] as const) {
+      for (const p of set) {
+        if (p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
+          out.push({ name: p.slice(prefix.length), path: p, dir: isDir })
+      }
+    }
+    return out
+  }
+
+  /** A fresh path whose parent is a directory. */
+  private fresh(path: string): string {
+    const p = MockFs.check(path)
+    const parent = mockParent(p)
+    if (parent && !this.dirs.has(parent)) {
+      if (this.files.has(parent))
+        throw new CivetError('invalidArgument', `"${parent}" is not a directory`)
+      throw new CivetError('notFound', `"${parent}" not found`)
+    }
+    if (this.exists(p)) throw new CivetError('alreadyExists', `already exists: "${p}"`)
+    return p
+  }
+
+  private existing(path: string): string {
+    const p = MockFs.check(path)
+    if (!this.exists(p)) throw new CivetError('notFound', `"${p}" not found`)
+    return p
+  }
+
+  /** A file (`body`) or, with null, a directory. */
+  create(path: string, body: string | null): string {
+    const p = this.fresh(path)
+    if (body == null) this.dirs.add(p)
+    else this.files.set(p, body)
+    return p
+  }
+
+  /** Remove `path` and everything under it, as a tree rooted at ''. */
+  take(path: string): MockFs {
+    const p = this.existing(path)
+    const out = new MockFs()
+    const rel = (q: string) => (q === p ? '' : q.slice(p.length + 1))
+    const under = (q: string) => q === p || q.startsWith(`${p}/`)
+    for (const [q, body] of [...this.files]) {
+      if (under(q)) {
+        out.files.set(rel(q), body)
+        this.files.delete(q)
+      }
+    }
+    for (const q of [...this.dirs]) {
+      if (under(q)) {
+        out.dirs.add(rel(q))
+        this.dirs.delete(q)
+      }
+    }
+    return out
+  }
+
+  /** Put a tree from `take` at a fresh `path`. */
+  put(path: string, tree: MockFs): string {
+    const p = this.fresh(path)
+    const at = (q: string) => (q ? `${p}/${q}` : p)
+    for (const [q, body] of tree.files) this.files.set(at(q), body)
+    for (const q of tree.dirs) this.dirs.add(at(q))
+    return p
+  }
+
+  private snapshot(p: string): MockFs {
+    const tree = this.take(p)
+    this.put(p, tree)
+    return tree
+  }
+
+  move(from: string, to: string): string {
+    const src = this.existing(from)
+    const dst = MockFs.check(to)
+    if (dst.startsWith(`${src}/`))
+      throw new CivetError('invalidArgument', `"${src}" cannot go inside itself`)
+    this.fresh(dst)
+    return this.put(dst, this.take(src))
+  }
+
+  copy(from: string, to: string): string {
+    const src = this.existing(from)
+    const dst = MockFs.check(to)
+    if (dst.startsWith(`${src}/`))
+      throw new CivetError('invalidArgument', `"${src}" cannot go inside itself`)
+    return this.put(dst, this.snapshot(src))
+  }
+}
+
+function mockParent(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i < 0 ? '' : path.slice(0, i)
+}
+
 const mockIgnored = (path: string) =>
   path.startsWith('target/') || path === 'target' || path.endsWith('.log')
 
@@ -541,6 +681,9 @@ export class MockBackend implements CivetBackend {
     this.emitter.on<DaemonEventEnvelope>('civet://daemon-event', ({ hostId }) =>
       this.refreshPorts(hostId)
     )
+    Object.assign(globalThis, {
+      __civetMockFileDrop: (e: FileDropEvent) => this.simulateFileDrop(e)
+    })
   }
   /** What each host was connected with (reconnect_host / restart_daemon reuse it). */
   readonly targets = new Map<string, { target: HostTarget; transport: TransportChoice }>()
@@ -993,52 +1136,70 @@ export class MockBackend implements CivetBackend {
     }
   }
 
-  private checkFiles(hostId: string): void {
+  private checkFiles(hostId: string, min = '0.1.10'): void {
     const v = this.host(hostId).summary.daemonVersion
     if (v === MOCK_OLD_VERSION)
       throw new CivetError(
         'unsupported',
-        `${hostId} runs civetd ${v}; this needs v0.1.10 or newer (restart the daemon to upgrade)`
+        `${hostId} runs civetd ${v}; this needs v${min} or newer (restart the daemon to upgrade)`
       )
+  }
+
+  /** Each worktree's files, seeded from MOCK_FILES on first use. */
+  private fs = new Map<string, MockFs>()
+  private trash = new Map<string, { key: string; path: string; files: MockFs }>()
+  private trashSeq = 0
+
+  /** The worktree's files (exported for tests). */
+  files(hostId: string, worktree: string): MockFs {
+    const key = `${hostId}\u0000${worktree}`
+    let fs = this.fs.get(key)
+    if (!fs) this.fs.set(key, (fs = MockFs.seeded(MOCK_FILES)))
+    return fs
   }
 
   async listFiles(
     hostId: string,
-    _worktree: string,
+    worktree: string,
     dir: string,
     includeIgnored: boolean
   ): Promise<DirListing> {
     this.checkFiles(hostId)
     if (dir.split('/').includes('..') || dir.startsWith('/'))
       throw new CivetError('invalidArgument', `"${dir}" is outside the worktree`)
-    const prefix = dir ? `${dir}/` : ''
-    const byName = new Map<string, FileEntry>()
-    for (const [path, body] of Object.entries(MOCK_FILES)) {
-      if (!path.startsWith(prefix)) continue
-      const [name, ...rest] = path.slice(prefix.length).split('/')
-      if (!name || byName.has(name)) continue
-      const kind = rest.length ? 'dir' : 'file'
-      const ignored = mockIgnored(prefix + name)
-      if (ignored && !includeIgnored) continue
-      byName.set(name, { name, kind, size: kind === 'dir' ? 0 : body.length, ignored })
+    const fs = this.files(hostId, worktree)
+    if (dir && !fs.dirs.has(dir)) {
+      if (fs.files.has(dir)) throw new CivetError('invalidArgument', `"${dir}" is not a directory`)
+      throw new CivetError('notFound', `"${dir}" not found`)
     }
-    if (dir && byName.size === 0) throw new CivetError('notFound', `"${dir}" not found`)
-    const entries = [...byName.values()].sort(
-      (a, b) =>
-        Number(a.kind !== 'dir') - Number(b.kind !== 'dir') ||
-        a.name.toLowerCase().localeCompare(b.name.toLowerCase())
-    )
+    const entries = fs
+      .children(dir)
+      .map(({ name, path, dir: isDir }): FileEntry => {
+        const body = fs.files.get(path) ?? ''
+        return {
+          name,
+          kind: isDir ? 'dir' : 'file',
+          size: isDir ? 0 : body.length,
+          ignored: mockIgnored(path)
+        }
+      })
+      .filter((e) => includeIgnored || !e.ignored)
+      .sort(
+        (a, b) =>
+          Number(a.kind !== 'dir') - Number(b.kind !== 'dir') ||
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+      )
     return { entries, truncated: false }
   }
 
   async readFile(
     hostId: string,
-    _worktree: string,
+    worktree: string,
     path: string,
     maxBytes: number
   ): Promise<FilePreview> {
     this.checkFiles(hostId)
-    const body = MOCK_FILES[path]
+    const body = this.files(hostId, worktree).files.get(path)
     if (body == null) throw new CivetError('notFound', `"${path}" not found`)
     const binary = body.includes('\u0000')
     const cap = Math.min(maxBytes, 1024 * 1024)
@@ -1050,14 +1211,72 @@ export class MockBackend implements CivetBackend {
     }
   }
 
-  async listAllFiles(hostId: string, _worktree: string): Promise<FileList> {
+  async listAllFiles(hostId: string, worktree: string): Promise<FileList> {
     this.checkFiles(hostId)
     return {
-      paths: Object.keys(MOCK_FILES)
-        .filter((p) => !mockIgnored(p))
-        .sort(),
+      paths: [...this.files(hostId, worktree).files.keys()].filter((p) => !mockIgnored(p)).sort(),
       truncated: false
     }
+  }
+
+  async fileOp(hostId: string, worktree: string, op: FileOp): Promise<FileOpResult> {
+    this.checkFiles(hostId, MOCK_FILE_OPS_VERSION)
+    await sleep(60)
+    const fs = this.files(hostId, worktree)
+    const done = (path: string): FileOpResult => ({ path, trashId: null })
+    if ('createFile' in op) return done(fs.create(op.createFile.path, ''))
+    if ('createDir' in op) return done(fs.create(op.createDir.path, null))
+    if ('move' in op) return done(fs.move(op.move.from, op.move.to))
+    if ('copy' in op) return done(fs.copy(op.copy.from, op.copy.to))
+    if ('trash' in op) {
+      const path = MockFs.check(op.trash.path)
+      const files = fs.take(path)
+      const trashId = `${Date.now()}-1-${this.trashSeq++}`
+      this.trash.set(trashId, { key: `${hostId}\u0000${worktree}`, path, files })
+      return { path, trashId }
+    }
+    const t = this.trash.get(op.restore.trashId)
+    if (!t || t.key !== `${hostId}\u0000${worktree}`)
+      throw new CivetError('notFound', `trash entry "${op.restore.trashId}" not found`)
+    fs.put(t.path, t.files)
+    this.trash.delete(op.restore.trashId)
+    return done(t.path)
+  }
+
+  async uploadToWorktree(
+    hostId: string,
+    worktree: string,
+    dir: string,
+    paths: string[]
+  ): Promise<DroppedFile[]> {
+    this.checkFiles(hostId, MOCK_FILE_OPS_VERSION)
+    const fs = this.files(hostId, worktree)
+    return paths.map((source) => {
+      const name = source.slice(source.lastIndexOf('/') + 1)
+      const path = dir ? `${dir}/${name}` : name
+      try {
+        fs.create(path, `uploaded from ${source}\n`)
+        return { source, path, error: null }
+      } catch (err) {
+        return { source, path: null, error: CivetError.from(err).message }
+      }
+    })
+  }
+
+  async downloadFile(hostId: string, worktree: string, path: string): Promise<string | null> {
+    this.checkFiles(hostId, MOCK_FILE_OPS_VERSION)
+    const body = this.files(hostId, worktree).files.get(path)
+    if (body == null) throw new CivetError('notFound', `"${path}" not found`)
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    // A browser download stands in for the save dialog.
+    if (typeof document !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([body]))
+      a.download = name
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }
+    return `~/Downloads/${name}`
   }
 
   async listPanes(hostId: string) {
@@ -1210,9 +1429,13 @@ export class MockBackend implements CivetBackend {
   async uploadFile(_hostId: string, name: string, _data: Uint8Array) {
     return `/tmp/civet-drops/mock/${name}`
   }
-  // A browser has no native file paths to drop.
-  async onFileDrop(_cb: (e: FileDropEvent) => void) {
-    return () => {}
+  // A browser has no native file paths to drop: `simulateFileDrop` (also
+  // `globalThis.__civetMockFileDrop`, for the UI driver) stands in for Finder.
+  async onFileDrop(cb: (e: FileDropEvent) => void) {
+    return this.emitter.on('file-drop', cb)
+  }
+  simulateFileDrop(e: FileDropEvent): void {
+    this.emitter.emit('file-drop', e)
   }
 }
 

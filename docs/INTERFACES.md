@@ -125,6 +125,7 @@ map. Everything is re-exported from the crate root.
 | Files (appended in 0.1.10; clients gate on `LIST_FILES_MIN_DAEMON_VERSION`) | `ListFiles{worktree, dir, include_ignored}`→`Files(DirListing { entries: Vec<FileEntry>, truncated })`, `FileEntry { name, kind: FileKind::{File, Dir, Symlink}, size, ignored }` (one directory level, `lstat`, directories first then by name, at most `MAX_DIR_ENTRIES` = 10 000; gitignored entries left out unless `include_ignored`, `.git` never); `ReadFile{worktree, path, max_bytes}`→`FilePreview { size, binary, truncated, text }` (at most `MAX_FILE_PREVIEW_BYTES` = 1 MiB; binary = NUL in the first 8 KiB, `text` then empty; regular files only); `ListAllFiles{worktree}`→`AllFiles(FileList { paths, truncated })` (`git ls-files -co --exclude-standard`, sorted, at most `MAX_ALL_FILES` = 50 000). `dir` / `path` are relative to the worktree root (`""` = root); absolute paths, `..` components and anything whose canonical path (symlinks resolved) leaves the worktree are `InvalidArgument` |
 | Spawn | `SpawnPaneRequest { worktree, cwd, command: Option<CommandSpec>, env: Vec<(String,String)>, size: TermSize, title, agent }`, `CommandSpec { program, args }`, `LaunchAgentRequest { repo, branch, base, worktree_path, command, env, size, title, agent }`, `KillSignal::{Hangup (default), Terminate, Kill}` |
 | Git changes (right panel → Changes) | `GitStatusInfo { staged, unstaged, untracked, conflicted: Vec<GitFileChange>, truncated }` (each list sorted by path; a path may be both staged and unstaged; at most `MAX_GIT_STATUS_ENTRIES` = 5000 entries in all), `GitFileChange { path, old_path, kind: GitChangeKind, additions: Option<u64>, deletions: Option<u64> }` (paths relative to the worktree root; counts None for binary files and for untracked files past the first 500 or over 1 MiB), `GitChangeKind::{Modified, Added, Deleted, Renamed, Copied, TypeChanged, Untracked, Conflicted}`, `GitDiffInfo { path, binary, too_large, additions, deletions, diff }` (`diff` = `git diff` output for the file, empty when `binary` / `too_large`; `too_large` past `MAX_GIT_DIFF_LINES` = 20 000 changed lines or `MAX_GIT_DIFF_BYTES` = 1 MiB). The daemon runs `git --no-optional-locks status --porcelain=v2 -z --untracked-files=all` plus `git diff [--cached -M] --numstat -z`; `GitDiff` diffs index vs. HEAD when `staged`, else working tree vs. index, and a path missing from the index against /dev/null (`--no-index`); `path` / `old_path` must stay inside the worktree (`invalidArgument`). Both appended in 0.1.11 within protocol 1, after the file requests: clients check `GIT_STATUS_MIN_DAEMON_VERSION` first |
+| File ops (right panel → Files; appended in 0.1.14 within protocol 1, after the git requests: clients check `FILE_OPS_MIN_DAEMON_VERSION` first) | `FileOp{worktree, op}`→`FileOpDone(FileOpResult { path, trash_id })` with `op` one of `FileOp::{CreateFile{path}, CreateDir{path}, Move{from, to}, Copy{from, to}, Trash{path}, Restore{trash_id}, Write{path, data}}`; `ReadFileChunk{worktree, path, offset, len}`→`FileChunk { size, data }` (at most `MAX_FILE_CHUNK_BYTES` = 8 MiB per call, regular files only; for downloads). Paths follow the `ListFiles` rules, and none may name `.git` or anything in it (also through a symlink); the root itself is never a source. Nothing is overwritten: an existing target is `AlreadyExists` (renames use `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`; a case-only rename of the same file is allowed). `Move` / `Trash` act on a symlink itself and refuse a directory with its own `.git` (nested repo, submodule); `Copy` recreates symlinks as links and leaves `.git` entries out; a directory into its own subtree is `InvalidArgument`. `Write` (at most `MAX_UPLOAD_BYTES`) creates a new file. `Trash` moves the entry to `<state>/trash/<id>/item` with `meta.json` (worktree, path, time) and returns the id; `Restore` puts it back at its old path in the same worktree (`NotFound` for an unknown id or another worktree). Entries older than 3 days, and all but the newest 200, are purged whenever something is trashed |
 | Info | `RepoInfo`, `WorktreeInfo`, `PaneInfo { id, worktree, cwd, command, title, size, agent, status, exit_code, exited, created_at_ms, state }`, `DaemonInfo`, `SubscribeInfo { pane, state, size, history_lines, last_input_seq }` |
 | Events (pushed to every client) | `Event::{PaneCreated(PaneInfo), PaneExited{pane, exit_code}, PaneClosed{pane}, PaneTitle{pane, title}, PaneResized{pane, size}, AgentStatus(AgentStatusEvent), Bell{pane}, ReposChanged, WorktreesChanged{repo}, Clipboard{pane, text}}`, `Event::pane()`. `Clipboard` (OSC 52 set, appended in 0.1.1 within protocol 1) is the exception: only sent to clients subscribed to the pane whose `client_version` is at least `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` (older clients cannot decode it), at most `MAX_CLIPBOARD_BYTES` (1 MiB), never replayed on resume / Full |
 | Terminal | `TermSize { cols, rows, pixel_width, pixel_height }` (`sanitized()` clamps to 1x1..=`MAX_TERM_COLS` x `MAX_TERM_ROWS` = 1000 x 500), `InputMessage { pane, seq, data }`, `ScreenUpdate { pane, state, base_state, kind: UpdateKind::{Full, Diff}, acked_input_seq, size, history_lines, history_start, payload }`, `ScreenAck { pane, state }` |
@@ -1115,7 +1116,7 @@ impl SessionManager {
     /// already gone is pruned. Emits WorktreesChanged.
     pub async fn remove_worktree(&self, worktree: &WorktreeId, force: bool) -> Result<(), SessionError>;
 
-    // ----- files (read-only; paths relative to the worktree, never outside it) -----
+    // ----- files (paths relative to the worktree, never outside it) -----
     /// One directory level; gitignored entries (one `git check-ignore
     /// --stdin` call) left out unless `include_ignored`.
     pub async fn list_files(&self, worktree: &WorktreeId, dir: &str, include_ignored: bool)
@@ -1125,6 +1126,13 @@ impl SessionManager {
         -> Result<FilePreview, SessionError>;
     /// `git ls-files -z -co --exclude-standard`, sorted, capped.
     pub async fn list_all_files(&self, worktree: &WorktreeId) -> Result<FileList, SessionError>;
+    /// Up to `len` bytes (capped at 8 MiB) of a regular file from `offset`.
+    pub async fn read_file_chunk(&self, worktree: &WorktreeId, path: &str, offset: u64, len: u64)
+        -> Result<FileChunk, SessionError>;
+    /// Create / move / copy / write / trash / restore (see the "File ops" protocol row);
+    /// trash lives in `<state_dir>/trash`.
+    pub async fn file_op(&self, worktree: &WorktreeId, op: FileOp)
+        -> Result<FileOpResult, SessionError>;
 
     // ----- panes -----
     /// Spawns the PTY (see "Process launch" below), starts the reader thread
@@ -1698,6 +1706,9 @@ JSON forms unless shown. Errors reject the promise with
 | `list_files` | `{ hostId, worktree, dir, includeIgnored }` | `DirListing` (error `unsupported` before civetd 0.1.10) |
 | `read_file` | `{ hostId, worktree, path, maxBytes }` | `FilePreview` |
 | `list_all_files` | `{ hostId, worktree }` | `FileList` |
+| `file_op` | `{ hostId, worktree, op: FileOp }` (`{ move: { from, to } }`, `{ restore: { trashId } }`…) | `FileOpResult { path, trashId }` (`unsupported` before civetd 0.1.14; `write` is refused here: contents go through `upload_to_worktree`) |
+| `upload_to_worktree` | `{ hostId, worktree, dir, paths: string[] }` | `DroppedFile[]` (one per local path, `path` worktree-relative): copies files and folders dropped from Finder into `dir` under their own names (`FileOp::Write` / `CreateDir`; `.git`, symlinks and special files skipped; files over `MAX_UPLOAD_BYTES` fail) |
+| `download_file` | `{ hostId, worktree, path, dest }` | bytes written: saves the file at `dest` on this Mac (picked in a save dialog by the UI) in `ReadFileChunk` slices; a failed download removes `dest` |
 | `list_panes` | `{ hostId }` | `PaneInfo[]` |
 | `spawn_pane` | `{ hostId, request: SpawnPaneRequest }` | `PaneInfo` |
 | `launch_agent` | `{ hostId, request: LaunchAgentRequest }` | `{ worktree: WorktreeInfo, pane: PaneInfo }` |
@@ -1903,6 +1914,7 @@ Remote/host side (`~/.civet`, or `$CIVET_STATE_DIR`):
 | `cert.der`, `key.der` (0600) | daemon TLS identity |
 | `repos.json` | registered repos `[{ "id", "name", "path" }]` |
 | `status/<pane>.status` | per-pane hook file (`CIVET_STATUS_FILE`) |
+| `trash/<id>/` | files deleted from the desktop's Files tab (`item` + `meta.json`), restorable with `FileOp::Restore`; purged after 3 days / beyond 200 entries |
 | `hooks/claude-settings.json` | generated Claude Code hook settings |
 | `hooks/civet-status-hook.sh` | status hook helper |
 | `hooks/bin/claude`, `hooks/bin/codex` | PATH shims adding Civet's hooks (first on every pane's PATH) |

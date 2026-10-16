@@ -63,10 +63,10 @@ pub use agent::{
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
     AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, DirListing,
-    ErrorCode, Event, FileEntry, FileKind, FileList, FilePreview, GitChangeKind, GitDiffInfo,
-    GitFileChange, GitStatusInfo, KillSignal, LaunchAgentRequest, PaneInfo, PullRequestInfo,
-    PullRequestState, RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo,
-    WorktreeInfo,
+    ErrorCode, Event, FileChunk, FileEntry, FileKind, FileList, FileOp, FileOpResult, FilePreview,
+    GitChangeKind, GitDiffInfo, GitFileChange, GitStatusInfo, KillSignal, LaunchAgentRequest,
+    PaneInfo, PullRequestInfo, PullRequestState, RepoInfo, Request, Response, RpcError,
+    SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -137,7 +137,16 @@ pub const MAX_GIT_DIFF_BYTES: usize = 1024 * 1024;
 /// Most changed lines (added + deleted) a [`GitDiffInfo`] carries.
 pub const MAX_GIT_DIFF_LINES: u64 = 20_000;
 
-/// Largest [`Request::UploadFile`] payload (headroom under the frame limit).
+/// Oldest daemon that understands [`Request::FileOp`] and
+/// [`Request::ReadFileChunk`] (appended within protocol 1 after the git
+/// requests).
+pub const FILE_OPS_MIN_DAEMON_VERSION: &str = "0.1.14";
+
+/// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
+pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Largest [`Request::UploadFile`] payload, and of a [`FileOp::Write`]
+/// (headroom under the frame limit).
 pub const MAX_UPLOAD_BYTES: usize = 15 * 1024 * 1024;
 
 /// First four bytes of every [`ClientHello`]; lets the daemon reject

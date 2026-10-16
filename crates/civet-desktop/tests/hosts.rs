@@ -606,6 +606,132 @@ async fn stream_link_repos_worktrees_and_agents() {
     m.disconnect_host(h).await.unwrap();
 }
 
+/// File management through the commands: `file_op`, uploads of dropped
+/// files and folders into a worktree, and chunked downloads to this Mac.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn file_ops_uploads_and_downloads() {
+    use civet_proto::FileOp;
+    let rig = Rig::new(fast()).await;
+    let m = &rig.mgr;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Ssh)
+        .await
+        .unwrap();
+    let repo_dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(repo_dir.path()).unwrap();
+    let st = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(st.status.success());
+    let repo = m.add_repo(h, root.display().to_string()).await.unwrap();
+    let wt = m.list_worktrees(h, repo.id.clone()).await.unwrap()[0]
+        .id
+        .clone();
+
+    // Contents only go through upload_to_worktree.
+    let err = m
+        .file_op(
+            h,
+            wt.clone(),
+            FileOp::Write {
+                path: "x".into(),
+                data: vec![],
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "invalidArgument");
+
+    // A dropped folder (its .git left out), a file, an existing name and an
+    // oversized file.
+    let local = tempfile::tempdir().unwrap();
+    let drop_dir = local.path().join("assets");
+    std::fs::create_dir_all(drop_dir.join("img/.git")).unwrap();
+    std::fs::write(drop_dir.join("img/a.png"), b"png").unwrap();
+    std::fs::write(drop_dir.join("img/.git/HEAD"), b"x").unwrap();
+    std::fs::write(drop_dir.join("notes.md"), b"# n").unwrap();
+    std::fs::write(local.path().join("one.txt"), b"1").unwrap();
+    let big = local.path().join("big.bin");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(civet_proto::MAX_UPLOAD_BYTES as u64 + 1)
+        .unwrap();
+    m.file_op(h, wt.clone(), FileOp::CreateDir { path: "in".into() })
+        .await
+        .unwrap();
+    let paths = [drop_dir.clone(), local.path().join("one.txt"), big]
+        .map(|p| p.display().to_string())
+        .to_vec();
+    let up = m
+        .upload_to_worktree(h, wt.clone(), "in".into(), paths.clone())
+        .await
+        .unwrap();
+    let got: Vec<_> = up.iter().map(|u| u.path.as_deref()).collect();
+    assert_eq!(got, [Some("in/assets"), Some("in/one.txt"), None]);
+    assert!(up[2].error.as_deref().unwrap().contains("MiB"));
+    assert_eq!(
+        std::fs::read(root.join("in/assets/img/a.png")).unwrap(),
+        b"png"
+    );
+    assert_eq!(
+        std::fs::read(root.join("in/assets/notes.md")).unwrap(),
+        b"# n"
+    );
+    assert!(!root.join("in/assets/img/.git").exists());
+    let again = m
+        .upload_to_worktree(h, wt.clone(), "in".into(), paths[1..2].to_vec())
+        .await
+        .unwrap();
+    assert!(
+        again[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("already exists")
+    );
+
+    // Download a file bigger than one chunk.
+    let data: Vec<u8> = (0..civet_proto::MAX_FILE_CHUNK_BYTES as usize + 12_345)
+        .map(|i| (i % 251) as u8)
+        .collect();
+    std::fs::write(root.join("big.bin"), &data).unwrap();
+    let dest = local.path().join("down.bin");
+    let n = m
+        .download_file(h, wt.clone(), "big.bin".into(), dest.display().to_string())
+        .await
+        .unwrap();
+    assert_eq!(n, data.len() as u64);
+    assert!(std::fs::read(&dest).unwrap() == data);
+    // A failed download leaves nothing behind.
+    let missing = local.path().join("missing.bin");
+    assert!(
+        m.download_file(h, wt.clone(), "nope".into(), missing.display().to_string())
+            .await
+            .is_err()
+    );
+    assert!(!missing.exists());
+
+    // Trash and restore.
+    let t = m
+        .file_op(h, wt.clone(), FileOp::Trash { path: "in".into() })
+        .await
+        .unwrap();
+    assert!(!root.join("in").exists());
+    m.file_op(
+        h,
+        wt.clone(),
+        FileOp::Restore {
+            trash_id: t.trash_id.unwrap(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(root.join("in/assets/img/a.png").is_file());
+    m.disconnect_host(h).await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn daemon_restart_rebootstraps_with_reconnecting_only_after_1s() {
     let mut rig = Rig::new(fast()).await;

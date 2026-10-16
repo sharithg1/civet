@@ -37,8 +37,27 @@ const commands = {
   worktree: async (...name) => p.getByText(name.join(' ')).first().click(),
   // Right panel: Files | Changes | Branch | Ports.
   right: async (name) => p.getByRole('tab', { name: new RegExp(`^${name}`, 'i') }).click(),
-  'click-file': async (name) => row(name).click(),
-  'dblclick-file': async (name) => row(name).dblclick(),
+  'click-file': async (...name) => row(name.join(' ')).click(),
+  'dblclick-file': async (...name) => row(name.join(' ')).dblclick(),
+  'rclick-file': async (...name) => row(name.join(' ')).click({ button: 'right' }),
+  // ⌘-click (add to / remove from the selection) or ⇧-click (range).
+  'cmd-click-file': async (...name) => row(name.join(' ')).click({ modifiers: ['Meta'] }),
+  'shift-click-file': async (...name) => row(name.join(' ')).click({ modifiers: ['Shift'] }),
+  // Drag a Files row onto another (`drag-file a -> b`; a folder, or a file: its folder).
+  'drag-file': async (...args) => {
+    const [from, to] = args.join(' ').split(' -> ')
+    const a = await row(from).boundingBox()
+    const b = await row(to).boundingBox()
+    await p.mouse.move(a.x + 20, a.y + a.height / 2)
+    await p.mouse.down()
+    await p.mouse.move(a.x + 30, a.y + a.height / 2 + 6, { steps: 3 })
+    await p.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 8 })
+    await p.mouse.up()
+  },
+  // An item of the open context menu, by its text.
+  menu: async (...label) =>
+    p.getByRole('menuitem', { name: new RegExp(`^${esc(label.join(' '))}`) }).click(),
+  type: async (...text) => p.keyboard.type(text.join(' ')),
   'click-change': async (name) => change(name).click(),
   'dblclick-change': async (name) => change(name).dblclick(),
   'click-tab': async (...label) => editorTab(label.join(' ')).click(),

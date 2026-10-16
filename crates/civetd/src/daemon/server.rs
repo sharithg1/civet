@@ -533,6 +533,18 @@ impl Server {
                 .git_diff(&worktree, &path, old_path.as_deref(), staged, context_lines)
                 .await
                 .map(Response::GitDiff),
+            Request::FileOp { worktree, op } => {
+                s.file_op(&worktree, op).await.map(Response::FileOpDone)
+            }
+            Request::ReadFileChunk {
+                worktree,
+                path,
+                offset,
+                len,
+            } => s
+                .read_file_chunk(&worktree, &path, offset, len)
+                .await
+                .map(Response::FileChunk),
             Request::CreateWorktree {
                 repo,
                 branch,

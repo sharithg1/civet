@@ -31,6 +31,8 @@ const TICK: Duration = Duration::from_millis(50);
 /// Hook files are polled every this many ticks (250 ms).
 const HOOK_POLL_TICKS: u32 = 5;
 const REPOS_FILE: &str = "repos.json";
+/// Files trashed from the Files tab (see [`crate::fileops`]).
+const TRASH_DIR: &str = "trash";
 
 /// A registered repository as persisted in `repos.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -577,6 +579,31 @@ impl SessionManager {
     ) -> Result<civet_proto::FilePreview, SessionError> {
         let root = self.worktree_root(worktree).await?;
         crate::files::read_file(&root, path, max_bytes).await
+    }
+
+    /// Up to `len` bytes of a worktree file from `offset`, for downloads
+    /// (same path rules as [`Self::list_files`]).
+    pub async fn read_file_chunk(
+        &self,
+        worktree: &WorktreeId,
+        path: &str,
+        offset: u64,
+        len: u64,
+    ) -> Result<civet_proto::FileChunk, SessionError> {
+        let root = self.worktree_root(worktree).await?;
+        crate::files::read_chunk(&root, path, offset, len).await
+    }
+
+    /// Create, move, copy, write, trash or restore worktree files (see
+    /// [`crate::fileops`]). Trash goes to `<state>/trash`.
+    pub async fn file_op(
+        &self,
+        worktree: &WorktreeId,
+        op: civet_proto::FileOp,
+    ) -> Result<civet_proto::FileOpResult, SessionError> {
+        let root = self.worktree_root(worktree).await?;
+        let trash = self.inner.config.state_dir.join(TRASH_DIR);
+        crate::fileops::apply(&root, trash, op).await
     }
 
     /// Every tracked and untracked, not ignored file of a worktree.

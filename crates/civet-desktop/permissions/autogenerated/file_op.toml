@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-file-op"
+description = "Enables the file_op command without any pre-configured scope."
+commands.allow = ["file_op"]
+
+[[permission]]
+identifier = "deny-file-op"
+description = "Denies the file_op command without any pre-configured scope."
+commands.deny = ["file_op"]

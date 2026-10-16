@@ -743,6 +743,124 @@ async fn ping_pong() {
     daemon.shutdown("test done").await;
 }
 
+/// File ops over the wire: create, write, chunked read, trash + restore
+/// (into the daemon's state dir), and the error codes clients key on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn file_ops_round_trip() {
+    use civet_proto::{ErrorCode, FileOp};
+    let (daemon, dir) = start_daemon().await;
+    let info = daemon.info().clone();
+    let repo = dir.path().join("proj");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README"), "hi\n").unwrap();
+    let sock = tokio::net::UnixStream::connect(daemon.socket_path())
+        .await
+        .unwrap();
+    let mut c = Raw::new(
+        civet_transport::connect_stream(sock, hello(&info, ClientId::generate().unwrap()), vec![])
+            .await
+            .unwrap(),
+    );
+    let Response::Repo(r) = c
+        .request(Request::AddRepo {
+            path: repo.display().to_string(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("AddRepo")
+    };
+    let Response::Worktrees(w) = c
+        .request(Request::ListWorktrees { repo: r.id })
+        .await
+        .unwrap()
+    else {
+        panic!("ListWorktrees")
+    };
+    let worktree = w[0].id.clone();
+    let op = |op: FileOp| Request::FileOp {
+        worktree: worktree.clone(),
+        op,
+    };
+
+    let data: Vec<u8> = (0..=255u8).cycle().take(100_000).collect();
+    let resp = c
+        .request(op(FileOp::Write {
+            path: "blob.bin".into(),
+            data: data.clone(),
+        }))
+        .await
+        .unwrap();
+    assert!(
+        matches!(resp, Response::FileOpDone(ref r) if r.path == "blob.bin"),
+        "{resp:?}"
+    );
+    let Response::FileChunk(chunk) = c
+        .request(Request::ReadFileChunk {
+            worktree: worktree.clone(),
+            path: "blob.bin".into(),
+            offset: 60_000,
+            len: 1 << 20,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ReadFileChunk")
+    };
+    assert_eq!(
+        (chunk.size, chunk.data.as_slice()),
+        (100_000, &data[60_000..])
+    );
+
+    let err = c
+        .request(op(FileOp::CreateFile {
+            path: "README".into(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::AlreadyExists);
+    let err = c
+        .request(op(FileOp::CreateFile {
+            path: ".git/hooks/x".into(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+
+    let Response::FileOpDone(t) = c
+        .request(op(FileOp::Trash {
+            path: "README".into(),
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("Trash")
+    };
+    assert!(!repo.join("README").exists());
+    let id = t.trash_id.unwrap();
+    assert!(dir.path().join("trash").join(&id).join("item").is_file());
+    c.request(op(FileOp::Restore { trash_id: id }))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README")).unwrap(),
+        "hi\n"
+    );
+    c.conn.close().await;
+    daemon.shutdown("test done").await;
+}
+
 /// Graceful shutdown: every client (QUIC session and stream link) gets
 /// `Goodbye` before the connection closes; daemon.json and the socket are
 /// removed and the lock is released.
