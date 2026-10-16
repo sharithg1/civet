@@ -46,20 +46,35 @@ part of the release version.)
 The workflow then:
 
 1. **version**: `scripts/check-version.sh vX.Y.Z` fails the run unless the
-   tag, `Cargo.toml` and `tauri.conf.json` all say `X.Y.Z`.
-2. **daemons** (macOS runner): builds all four `civetd` binaries with
-   `scripts/build-remote.sh` (`dist` profile; Linux via `cargo-zigbuild`) and
-   checks each one's embedded version marker.
-3. **app** (aarch64 and x86_64, both cross-built on an Apple Silicon runner):
-   copies the two Linux daemons and the matching Mac daemon from step 2 into
+   tag, `Cargo.toml` and `tauri.conf.json` all say `X.Y.Z`, and decides the
+   signing policy (see [Signing and notarization](#signing-and-notarization)).
+2. **CI**: the whole CI workflow (`ci.yml`, called as a reusable workflow)
+   on the release commit. A tag, or a commit pushed by Cut release, does not
+   trigger CI by itself, so this is the only CI run that commit gets;
+   nothing is published unless it passes.
+3. **daemons**: one job per `civetd` target, in parallel (Linux musl on
+   Ubuntu via `cargo-zigbuild`, macOS on a macOS runner), each running
+   `scripts/build-remote.sh` (`dist` profile, `--locked`) and checking the
+   binary's embedded version marker.
+4. **app** (aarch64 and x86_64, both cross-built on an Apple Silicon runner):
+   copies the two Linux daemons and the matching Mac daemon from step 3 into
    `crates/civet-desktop/civet-dist`, then `CIVET_SKIP_DAEMONS=1 pnpm tauri
    build --target <triple> --bundles app,dmg`. Because the bundled daemons are
-   the files from step 2, they are the release version: the app refuses a
+   the files from step 3, they are the release version: the app refuses a
    `civetd` from another version ("is civetd 0.1.3, expected 0.1.4"). The job
    checks the bundled daemons' versions, `Info.plist` and the signature.
-4. **publish**: writes `SHA256SUMS` and runs `gh release create --generate-notes`.
-   Tags with a suffix (`v0.2.0-rc.1`) become pre-releases. Re-running a
-   failed run replaces the assets of an existing release.
+5. **publish**: writes `SHA256SUMS`, uploads everything into a **draft**
+   release (`--generate-notes`), downloads the draft's assets back and
+   compares their checksums, then publishes the draft. Tags with a suffix
+   (`v0.2.0-rc.1`) become pre-releases. Re-running a failed run replaces an
+   unpublished draft, but never touches a published release: its assets are
+   what users downloaded. To replace a published release, delete it on
+   GitHub first (or, better, cut a new version).
+
+Builds are reproducible from the tag: Rust is pinned by `rust-toolchain.toml`,
+`cargo-zigbuild` and zig by version in `release.yml`, and every build uses
+the committed `Cargo.lock` (`--locked`, or `cargo fetch --locked` before
+`tauri build`). Bump the toolchain in its own PR so CI checks it.
 
 Pull requests that change `release.yml`, `scripts/build-remote.sh`,
 `scripts/check-version.sh` or `tauri.conf.json`, and manual runs on a branch
@@ -67,16 +82,25 @@ Pull requests that change `release.yml`, `scripts/build-remote.sh`,
 manual run on a tag publishes, which is how Cut release starts it); the app and daemon
 builds are kept as workflow artifacts.
 
-If the tag check fails (tagged the wrong commit, forgot the bump): delete the
-tag locally and on GitHub (`git push origin :refs/tags/vX.Y.Z`), fix, and
-tag again.
+If the tag check or CI fails (tagged the wrong commit, forgot the bump, a
+broken test): delete the tag locally and on GitHub
+(`git push origin :refs/tags/vX.Y.Z`), fix, and tag again.
 
 ## Signing and notarization
 
-Without secrets the app gets an ad-hoc signature (`APPLE_SIGNING_IDENTITY=-`):
-the bundle is sealed but not from an identified developer, so macOS blocks
-the downloaded app ("cannot be opened" / "is damaged"). Users clear the
-quarantine flag once after installing:
+**Policy.** A stable tag (`vX.Y.Z`, no suffix) must be signed with a
+Developer ID and notarized: the run fails before publishing if any of the
+six secrets below is missing. Pre-release tags (`v0.2.0-rc.1`), pull
+requests and branch runs sign when the secrets exist and fall back to an
+ad-hoc signature otherwise. To publish unsigned stable releases on purpose
+(no Apple Developer account yet), set the repository **variable**
+`ALLOW_UNSIGNED_RELEASES` to `true` (Settings → Secrets and variables →
+Actions → Variables); the run summary then says "signing: optional".
+
+With an ad-hoc signature (`APPLE_SIGNING_IDENTITY=-`) the bundle is sealed
+but not from an identified developer, so macOS blocks the downloaded app
+("cannot be opened" / "is damaged"). Users clear the quarantine flag once
+after installing:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Civet.app
@@ -87,8 +111,7 @@ Anyway, depending on the macOS version). The standalone `civetd` downloads
 are not affected when fetched with `curl`/`wget`; if downloaded with a
 browser, run `xattr -d com.apple.quarantine civetd-*-apple-darwin`.
 
-Signing and notarization turn on by themselves when these repository secrets
-exist (Settings → Secrets and variables → Actions):
+Repository secrets (Settings → Secrets and variables → Actions):
 
 | Secret | Value |
 |---|---|

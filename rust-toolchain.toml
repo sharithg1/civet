@@ -1,3 +1,5 @@
+# Pinned so CI, releases and rebuilds of an old tag use the same compiler.
+# Bump deliberately (and fix any new clippy lints in the same PR).
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]

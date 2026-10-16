@@ -41,7 +41,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable # cargo, to refresh Cargo.lock
+      - name: Rust (rust-toolchain.toml) # cargo, to refresh Cargo.lock
+        run: rustup toolchain install
       - name: git identity
         run: |
           git config user.name "${GITHUB_ACTOR}"

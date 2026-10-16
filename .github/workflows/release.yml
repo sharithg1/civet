@@ -29,7 +29,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   LINUX_TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-  DARWIN_TARGETS: aarch64-apple-darwin x86_64-apple-darwin
 
 jobs:
   version:
@@ -37,63 +36,101 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      signing: ${{ steps.v.outputs.signing }}
     steps:
       - uses: actions/checkout@v4
       - id: v
         name: tag, Cargo.toml and tauri.conf.json agree
+        env:
+          ALLOW_UNSIGNED: ${{ vars.ALLOW_UNSIGNED_RELEASES }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             version=$(scripts/check-version.sh "$GITHUB_REF_NAME")
           else
             version=$(scripts/check-version.sh)
           fi
+          # Signing policy: a stable tag (no "-suffix") must be signed with a
+          # Developer ID and notarized, unless the repository variable
+          # ALLOW_UNSIGNED_RELEASES is "true". Pre-release tags, pull requests
+          # and branch runs sign when the secrets exist and are ad-hoc otherwise.
+          signing=optional
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            case "$version" in
+              *-*) ;;
+              *) [ "$ALLOW_UNSIGNED" = true ] || signing=required ;;
+            esac
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Civet $version" >> "$GITHUB_STEP_SUMMARY"
+          echo "signing=$signing" >> "$GITHUB_OUTPUT"
+          echo "Civet $version (signing: $signing)" >> "$GITHUB_STEP_SUMMARY"
 
-  # Every civetd the release ships, built once: published standalone and
-  # copied into each app bundle, so the bundled and the downloadable daemons
-  # are the same files.
+  # The release commit is pushed with GITHUB_TOKEN (Cut release) or as a tag,
+  # neither of which runs CI on it: run it here and publish only if it passes.
+  ci:
+    name: CI
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/ci.yml
+
+  # Every civetd the release ships, built once (one job per target, in
+  # parallel): published standalone and copied into each app bundle, so the
+  # bundled and the downloadable daemons are the same files.
   daemons:
-    name: civetd (linux-musl + darwin)
+    name: civetd (${{ matrix.target }})
     needs: version
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # run: the runner can execute the binary (checked with `civetd version`).
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, run: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, run: false }
+          - { target: aarch64-apple-darwin, os: macos-latest, run: true }
+          - { target: x86_64-apple-darwin, os: macos-latest, run: false }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: mlugg/setup-zig@v2
+      - name: Rust (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - if: contains(matrix.target, '-linux-')
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - uses: taiki-e/install-action@v2
+      - if: contains(matrix.target, '-linux-')
+        uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild
+          tool: cargo-zigbuild@0.23.4
       - uses: Swatinem/rust-cache@v2
         with:
-          key: daemons
+          key: daemon-${{ matrix.target }}
       - name: build
+        run: scripts/build-remote.sh --out dist ${{ matrix.target }}
+      - name: check version
         run: |
-          # shellcheck disable=SC2086 # split the target lists into arguments
-          scripts/build-remote.sh --out dist $LINUX_TARGETS $DARWIN_TARGETS
-      - name: check versions
+          f=dist/civetd-${{ matrix.target }}
+          # The marker the app checks before using a daemon (bootstrap::VERSION_MARKER).
+          v=$(perl -0777 -ne 'print $1 if /\0CIVETD_VERSION=([^\0]{1,64})\0/' "$f")
+          [ "$v" = "$VERSION" ] || { echo "::error::$f is civetd '$v', expected $VERSION"; exit 1; }
+          if [ "${{ matrix.run }}" = true ]; then
+            "$f" version
+            "$f" version | grep -q "civetd $VERSION "
+          fi
+      - name: sign
+        if: contains(matrix.target, '-apple-darwin')
         env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          for f in dist/civetd-*; do
-            # The marker the app checks before using a daemon (bootstrap::VERSION_MARKER).
-            v=$(perl -0777 -ne 'print $1 if /\0CIVETD_VERSION=([^\0]{1,64})\0/' "$f")
-            [ "$v" = "$VERSION" ] || { echo "::error::$f is civetd '$v', expected $VERSION"; exit 1; }
-          done
-          dist/civetd-aarch64-apple-darwin version
-          dist/civetd-aarch64-apple-darwin version | grep -q "civetd $VERSION "
-      - name: sign darwin daemons (if signing secrets are set)
-        env:
+          SIGNING: ${{ needs.version.outputs.signing }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "No signing secrets: darwin daemons keep their linker ad-hoc signature."
+            if [ "$SIGNING" = required ]; then
+              echo "::error::Stable releases must be signed: set the APPLE_* secrets, or the repository variable ALLOW_UNSIGNED_RELEASES=true (docs/RELEASING.md)."
+              exit 1
+            fi
+            echo "No signing secrets: the daemon keeps its linker ad-hoc signature."
             exit 0
           fi
           keychain="$RUNNER_TEMP/civet-signing.keychain-db"
@@ -108,15 +145,13 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_pass" "$keychain" >/dev/null
           # shellcheck disable=SC2046
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          for t in $DARWIN_TARGETS; do
-            codesign --force --options runtime --timestamp \
-              --sign "$APPLE_SIGNING_IDENTITY" "dist/civetd-$t"
-            codesign --verify --verbose "dist/civetd-$t"
-          done
+          f=dist/civetd-${{ matrix.target }}
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+          codesign --verify --verbose "$f"
       - uses: actions/upload-artifact@v4
         with:
-          name: daemons
-          path: dist/civetd-*
+          name: daemon-${{ matrix.target }}
+          path: dist/civetd-${{ matrix.target }}
           if-no-files-found: error
 
   app:
@@ -135,9 +170,14 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Rust (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - name: Cargo.lock is up to date
+        # `tauri build` runs cargo without --locked; fail here instead of
+        # building from a lockfile it silently rewrote.
+        run: cargo fetch --locked
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-${{ matrix.target }}
@@ -154,7 +194,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: daemons
+          pattern: daemon-*
+          merge-multiple: true
           path: ${{ runner.temp }}/daemons
       - name: stage bundled daemons
         # The app bundles civetd for both Linux remotes and its own Mac
@@ -169,6 +210,7 @@ jobs:
 
       - name: signing configuration
         env:
+          SIGNING: ${{ needs.version.outputs.signing }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -179,6 +221,14 @@ jobs:
         # APPLE_CERTIFICATE would make it try (and fail) to import one.
         run: |
           put() { { echo "$1<<__CIVET_EOF__"; echo "$2"; echo "__CIVET_EOF__"; } >> "$GITHUB_ENV"; }
+          if [ "$SIGNING" = required ]; then
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              if [ -z "${!v}" ]; then
+                echo "::error::Stable releases must be signed and notarized: secret $v is not set (or set the repository variable ALLOW_UNSIGNED_RELEASES=true; see docs/RELEASING.md)."
+                exit 1
+              fi
+            done
+          fi
           if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
             echo "::add-mask::$APPLE_SIGNING_IDENTITY"
             put APPLE_CERTIFICATE "$APPLE_CERTIFICATE"
@@ -236,7 +286,7 @@ jobs:
   publish:
     name: publish GitHub Release
     if: github.ref_type == 'tag'
-    needs: [version, daemons, app]
+    needs: [version, ci, daemons, app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -250,18 +300,36 @@ jobs:
         run: |
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
-      - name: create release
+      - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+        # A published release is never changed: its assets are what users
+        # downloaded and checked against SHA256SUMS. The assets go into a
+        # draft first, are downloaded back and compared, and only then is the
+        # draft published, so a failed upload never leaves a half-replaced release.
         run: |
+          while draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); do
+            if [ "$draft" != true ]; then
+              echo "::error::Release $TAG is already published; leaving its assets alone. To replace it, delete the release on GitHub and re-run, or cut a new version."
+              exit 1
+            fi
+            echo "Deleting the unpublished draft of $TAG left by an earlier run."
+            gh release delete "$TAG" --yes
+          done
+
           flags=()
           case "$TAG" in *-*) flags+=(--prerelease) ;; esac
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # Re-run of the workflow: refresh the assets, keep the notes.
-            gh release upload "$TAG" assets/* --clobber
-          else
-            gh release create "$TAG" assets/* --verify-tag --generate-notes \
-              --title "Civet $TAG" "${flags[@]}"
-          fi
+          gh release create "$TAG" assets/* --draft --verify-tag --generate-notes \
+            --title "Civet $TAG" "${flags[@]}"
+
+          mkdir uploaded
+          gh release download "$TAG" --dir uploaded
+          diff <(cd assets && sha256sum -- *) <(cd uploaded && sha256sum -- *) || {
+            echo "::error::The draft's assets differ from the built ones; the draft is left unpublished."
+            exit 1
+          }
+
+          gh release edit "$TAG" --draft=false
+          echo "Published ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

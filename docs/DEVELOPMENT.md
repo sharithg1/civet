@@ -52,7 +52,8 @@ packet, not a new TCP + SSH + WebSocket handshake.
 
 ## Build and run
 
-Requirements: a stable Rust toolchain (pinned by `rust-toolchain.toml`),
+Requirements: Rust (the version pinned by `rust-toolchain.toml`; rustup
+installs it on first use),
 `git`; for the desktop app Node + pnpm; for remote binaries zig +
 `cargo-zigbuild`.
 
