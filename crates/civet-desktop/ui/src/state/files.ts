@@ -30,14 +30,24 @@ type FilesState = {
   previews: Record<string, Loadable<FilePreview>>
   /** `fileKey`s of Markdown tabs showing their source instead of the preview */
   showSource: Record<string, true>
+  /** `fileKey` → heading to scroll to once that Markdown tab renders (`other.md#x` links) */
+  pendingAnchor: Record<string, string>
 }
 
 export const useFiles = create<FilesState>(() => ({
   dirs: {},
   all: {},
   previews: {},
-  showSource: {}
+  showSource: {},
+  pendingAnchor: {}
 }))
+
+/** Scroll the Markdown tab of `key` to heading `id` when it next renders (null: done). */
+export function setPendingAnchor(key: string, id: string | null): void {
+  useFiles.setState(({ pendingAnchor: { [key]: _, ...rest } }) => ({
+    pendingAnchor: id ? { ...rest, [key]: id } : rest
+  }))
+}
 
 /** Switch a Markdown tab between its rendered preview and its source. */
 export function toggleSource(key: string): void {

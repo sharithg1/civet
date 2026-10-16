@@ -61,14 +61,24 @@ export function slugify(text: string): string {
     .replace(/\s/g, '-')
 }
 
-/** Ids for a document's headings in order, de-duplicated like GitHub (`x`, `x-1`, …). */
+/**
+ * Ids for a document's headings in order, de-duplicated like GitHub (`x`,
+ * `x-1`, …), skipping suffixes another heading already took (`A-1`, `A`, `A`
+ * → `a-1`, `a`, `a-2`).
+ */
 export class Slugger {
-  private seen = new Map<string, number>()
+  private used = new Set<string>()
 
   slug(text: string): string {
     const base = slugify(text)
-    const n = this.seen.get(base)
-    this.seen.set(base, (n ?? -1) + 1)
-    return n === undefined ? base : `${base}-${n + 1}`
+    let id = base
+    for (let n = 1; this.used.has(id); n++) id = `${base}-${n}`
+    this.used.add(id)
+    return id
   }
+}
+
+/** `data:` URLs of raster images, the only images the preview shows. */
+export function isDataImage(url: string): boolean {
+  return /^data:image\/(png|jpe?g|gif|webp|avif)[;,]/i.test(url)
 }

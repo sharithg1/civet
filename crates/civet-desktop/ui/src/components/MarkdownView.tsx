@@ -4,11 +4,12 @@
 // worktree files open in a tab, `#heading` scrolls. Images other than
 // `data:` show as a placeholder (the CSP blocks remote ones, and worktree
 // files are not served to the webview).
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { ImageIcon } from 'lucide-react'
-import Markdown, { type Components } from 'react-markdown'
+import Markdown, { type Components, type UrlTransform, defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Slugger, resolveLink } from '@/lib/markdown'
+import { Slugger, isDataImage, isMarkdownPath, resolveLink } from '@/lib/markdown'
+import { fileKey, setPendingAnchor, useFiles } from '@/state/files'
 import { openFileTab, pushToast, useStore } from '@/state/store'
 
 export function MarkdownView({
@@ -23,6 +24,21 @@ export function MarkdownView({
   text: string
 }) {
   const root = useRef<HTMLDivElement>(null)
+  const key = fileKey(hostId, worktree, path)
+  const pending = useFiles((s) => s.pendingAnchor[key])
+
+  const scrollTo = (id: string) =>
+    root.current
+      ?.querySelector(`[data-anchor="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ block: 'start' })
+
+  // A link from another file (`this.md#x`) left a heading to scroll to.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rerun when the text renders
+  useEffect(() => {
+    if (!pending) return
+    scrollTo(pending)
+    setPendingAnchor(key, null)
+  }, [pending, key, text])
 
   const follow = (href: string) => {
     const link = resolveLink(path, href)
@@ -34,10 +50,11 @@ export function MarkdownView({
         pushToast({ kind: 'error', title: 'Could not open link', body: err.message }, 6000)
       })
     } else if (link.kind === 'anchor') {
-      root.current
-        ?.querySelector(`[data-anchor="${CSS.escape(link.id)}"]`)
-        ?.scrollIntoView({ block: 'start' })
+      scrollTo(link.id)
     } else {
+      if (link.hash && isMarkdownPath(link.path)) {
+        setPendingAnchor(fileKey(hostId, worktree, link.path), link.hash)
+      }
       openFileTab(hostId, worktree, link.path)
     }
   }
@@ -56,7 +73,7 @@ export function MarkdownView({
       </a>
     ),
     img: ({ src, alt }) => {
-      if (typeof src === 'string' && src.startsWith('data:image/')) {
+      if (typeof src === 'string' && isDataImage(src)) {
         return <img src={src} alt={alt ?? ''} />
       }
       const target = typeof src === 'string' ? resolveLink(path, src) : null
@@ -84,6 +101,7 @@ export function MarkdownView({
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHeadingAnchors]}
           components={components}
+          urlTransform={urlTransform}
         >
           {text}
         </Markdown>
@@ -91,6 +109,10 @@ export function MarkdownView({
     </div>
   )
 }
+
+/** The default (safe protocols and relative URLs), plus raster `data:` images. */
+const urlTransform: UrlTransform = (url, key, node) =>
+  key === 'src' && node.tagName === 'img' && isDataImage(url) ? url : defaultUrlTransform(url)
 
 /** The bits of a hast node the anchor plugin reads. */
 type HastNode = {

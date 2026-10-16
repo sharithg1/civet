@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Slugger, isMarkdownPath, resolveLink, slugify } from './markdown'
+import { Slugger, isDataImage, isMarkdownPath, resolveLink, slugify } from './markdown'
 
 describe('isMarkdownPath', () => {
   it('matches markdown extensions only', () => {
@@ -72,5 +72,17 @@ describe('slugs', () => {
       'usage-1',
       'usage-2'
     ])
+    const t = new Slugger()
+    expect([t.slug('A-1'), t.slug('A'), t.slug('A')]).toEqual(['a-1', 'a', 'a-2'])
+  })
+})
+
+describe('isDataImage', () => {
+  it('takes raster data URLs only', () => {
+    expect(isDataImage('data:image/png;base64,iVBOR')).toBe(true)
+    expect(isDataImage('data:image/jpeg,xyz')).toBe(true)
+    expect(isDataImage('data:image/svg+xml,<svg/>')).toBe(false)
+    expect(isDataImage('data:text/html,<b>')).toBe(false)
+    expect(isDataImage('https://x.dev/a.png')).toBe(false)
   })
 })
