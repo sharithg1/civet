@@ -1715,7 +1715,7 @@ JSON forms unless shown. Errors reject the promise with
 | `forward_port` | `{ hostId, remotePort, localPort?: number \| null }` | `ForwardView`. Listens on `127.0.0.1:localPort` (null: `remotePort` if free, else any free port; on This Mac never `remotePort`) and tunnels each connection over a `Forward` stream of the host's current session, so forwards survive reconnects and re-bootstraps; `disconnect_host` drops them. Idempotent per remote port (`alreadyExists` if a different `localPort` is asked for, or if `localPort` is taken) |
 | `stop_forward` | `{ hostId, remotePort }` | `null` (`notFound` if not forwarded); closes the listener and its connections |
 | `list_forwards` | `{ hostId }` | `ForwardView[]` |
-| `git_status` | `{ hostId, worktree }` | `GitStatusInfo` (`unsupported` from a daemon older than 0.1.11). The Changes tab polls it every 2.5 s while showing, every 15 s while the panel shows another tab |
+| `git_status` | `{ hostId, worktree }` | `GitStatusInfo` (`unsupported` from a daemon older than 0.1.11). The Changes tab polls it every 2.5 s while showing (and so does an open diff tab), every 15 s while the panel shows another tab |
 | `git_diff` | `{ hostId, worktree, path, oldPath: string \| null, staged: boolean, contextLines: number }` | `GitDiffInfo` |
 | `open_local_url` | `{ url }` | `null`: opens an `http(s)://localhost` / `127.0.0.1` URL in the default browser (anything else is `invalidArgument`) |
 

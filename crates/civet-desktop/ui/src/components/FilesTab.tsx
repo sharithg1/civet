@@ -82,7 +82,7 @@ export function FilesTab({
   const selected = useStore((s) => {
     const ws = s.workspaces[key]
     const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
-    return tab?.kind === 'file' ? tab.path : null
+    return tab?.kind === 'file' && !tab.diff ? tab.path : null
   })
   const [query, setQuery] = useState('')
   const [sel, setSel] = useState(0)

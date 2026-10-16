@@ -66,6 +66,16 @@ describe('changes', () => {
     expect(useChanges.getState().byWorktree[wsKey('h', '/w')]).toBe(entry)
   })
 
+  it('skips a poll when another poller fetched moments ago', async () => {
+    const gitStatus = vi.fn(async () => status())
+    withBackend(gitStatus)
+    await refreshChanges('h', '/other', 1000)
+    await refreshChanges('h', '/other', 1000)
+    expect(gitStatus).toHaveBeenCalledTimes(1)
+    await refreshChanges('h', '/other')
+    expect(gitStatus).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the last status when a fetch fails', async () => {
     withBackend(async () => status({ unstaged: [change('a')] }))
     await refreshChanges('h', '/w')

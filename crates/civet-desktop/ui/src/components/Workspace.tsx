@@ -1,5 +1,5 @@
 // Main area for the selected worktree: connection banner and the active
-// tab's split layout, or a file tab's contents (tabs live in the TitleBar). Only the active tab is
+// tab's split layout, or a file or diff tab's contents (tabs live in the TitleBar). Only the active tab is
 // mounted; switching tabs detaches the hidden panes and re-attaching replays
 // a Full (cheap in the mosh model, and it keeps WebGL contexts bounded).
 // While the worktree is being removed its panes are inert under a
@@ -9,6 +9,7 @@ import { leaves } from '@/layout/pane-tree'
 import { Spinner } from '@/components/ui/spinner'
 import { Kbd } from './chrome'
 import { ConnectionBanner } from './ConnectionBanner'
+import { DiffView } from './DiffView'
 import { FileView } from './FileView'
 import { SplitLayout } from './SplitLayout'
 
@@ -41,7 +42,15 @@ export function Workspace() {
         inert={removing}
         data-removing={removing ? 'true' : undefined}
       >
-        {tab?.kind === 'file' ? (
+        {tab?.kind === 'file' && tab.diff ? (
+          <DiffView
+            key={tab.id}
+            hostId={active.hostId}
+            worktree={active.worktree}
+            path={tab.path}
+            target={tab.diff}
+          />
+        ) : tab?.kind === 'file' ? (
           <FileView
             key={tab.id}
             hostId={active.hostId}

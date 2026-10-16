@@ -14,6 +14,7 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronDown,
   Copy,
+  Diff,
   GitBranch,
   MoreHorizontal,
   PanelRight,
@@ -299,6 +300,8 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                 <span className="grid size-3.5 shrink-0 place-items-center">
                   <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} size={6} />
                 </span>
+              ) : t.diff ? (
+                <Diff className="size-3.5 shrink-0 text-quiet" />
               ) : t.file != null ? (
                 <FileIcon path={t.file} className="size-3.5 shrink-0 text-quiet" />
               ) : (
