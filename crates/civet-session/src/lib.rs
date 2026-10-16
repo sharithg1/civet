@@ -73,6 +73,10 @@ pub struct SessionConfig {
     /// How often worktree metadata is checked for changes made outside
     /// Civet (then [`civet_proto::Event::WorktreesChanged`]). Default 2 s.
     pub worktree_poll: Duration,
+    /// Program behind the `civet` PATH shim in panes (`<state>/hooks/bin/
+    /// civet`, e.g. `civet handoff`): the daemon's own binary. None = no
+    /// `civet` shim. Default None.
+    pub cli_program: Option<PathBuf>,
 }
 
 impl SessionConfig {
@@ -85,6 +89,7 @@ impl SessionConfig {
             idle_after: Duration::from_secs(8),
             git: PathBuf::from("git"),
             worktree_poll: Duration::from_secs(2),
+            cli_program: None,
         }
     }
 

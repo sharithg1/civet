@@ -135,7 +135,7 @@ impl SessionManager {
     /// ticker thread.
     pub fn new(config: SessionConfig) -> Result<Self, SessionError> {
         std::fs::create_dir_all(config.state_dir.join("status"))?;
-        let hook_files = hooks::install(&config.state_dir)?;
+        let hook_files = hooks::install(&config.state_dir, config.cli_program.as_deref())?;
         let repos = load_repos(&config.state_dir.join(REPOS_FILE));
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let inner = Arc::new(Inner {

@@ -7,12 +7,16 @@
 //! * [`paths`]: state-directory layout shared by both sides.
 //! * `daemon` (feature `server`, default on): the daemon itself (`serve`,
 //!   server-side `bootstrap`, `stdio-tunnel`).
+//! * `handoff` (feature `server`): `civetd handoff` / `install-skills`, run
+//!   in panes through the `civet` shim.
 //!
 //! See `docs/INTERFACES.md` section 5 for the contract.
 
 pub mod bootstrap;
 #[cfg(feature = "server")]
 pub mod daemon;
+#[cfg(feature = "server")]
+pub mod handoff;
 pub mod paths;
 
 /// `civetd` version (semver), the same for the daemon and the client crate.

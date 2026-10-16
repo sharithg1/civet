@@ -3,8 +3,10 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use civetd::bootstrap::exit_code;
 use civetd::daemon::{self, DaemonOptions, ExitError};
+use civetd::handoff;
 use civetd::paths::{StatePaths, create_private_dir, state_dir_or_default};
 use clap::{Parser, Subcommand};
 
@@ -50,6 +52,58 @@ enum Cmd {
         /// State directory (default $CIVET_STATE_DIR or ~/.civet).
         #[arg(long)]
         state_dir: Option<PathBuf>,
+    },
+    /// From an agent in a Civet pane: create a worktree of the current
+    /// repo and start a new agent there on PROMPT. Prints JSON. In panes:
+    /// `civet handoff …`.
+    Handoff {
+        /// Prompt for the new agent (the task brief).
+        #[arg(
+            long,
+            conflicts_with = "prompt_file",
+            required_unless_present = "prompt_file"
+        )]
+        prompt: Option<String>,
+        /// Read the prompt from FILE (`-` = stdin).
+        #[arg(long, value_name = "FILE")]
+        prompt_file: Option<PathBuf>,
+        /// Agent to start: claude or codex.
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Pane title (default: the prompt's first line).
+        #[arg(long)]
+        title: Option<String>,
+        /// Branch (default: a slug of the title, suffixed -2, -3… if taken).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Rev to branch from (default: HEAD of the current worktree).
+        #[arg(long)]
+        base: Option<String>,
+        /// A directory of the source checkout (default: the current one).
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Copy uncommitted changes (incl. untracked files) to the new worktree.
+        #[arg(long)]
+        carry_changes: bool,
+        /// Run even without CIVET_PANE_ID (targets the daemon of the state dir).
+        #[arg(long)]
+        outside_pane: bool,
+        /// State directory (default $CIVET_STATE_DIR or ~/.civet).
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+        /// Command to run instead of the agent; the prompt is appended.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
+    /// Install the civet-handoff skill for Claude Code (~/.claude/skills)
+    /// and Codex (~/.codex/skills). Default: both.
+    InstallSkills {
+        /// Claude Code only.
+        #[arg(long)]
+        claude: bool,
+        /// Codex only.
+        #[arg(long)]
+        codex: bool,
     },
     /// Print the version.
     Version {
@@ -142,6 +196,57 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let mut out = std::io::stdout().lock();
             out.write_all(info.to_json_line().as_bytes())?;
             out.flush()?;
+            Ok(())
+        }
+        Cmd::Handoff {
+            prompt,
+            prompt_file,
+            agent,
+            title,
+            branch,
+            base,
+            from,
+            carry_changes,
+            outside_pane,
+            state_dir,
+            command,
+        } => {
+            init_stderr_logging("warn");
+            let prompt = match (prompt, prompt_file) {
+                (Some(p), _) => p,
+                (None, Some(f)) if f.as_os_str() == "-" => {
+                    std::io::read_to_string(std::io::stdin()).context("reading the prompt")?
+                }
+                (None, Some(f)) => std::fs::read_to_string(&f)
+                    .with_context(|| format!("reading {}", f.display()))?,
+                (None, None) => anyhow::bail!("--prompt or --prompt-file is required"),
+            };
+            let opts = handoff::HandoffOptions {
+                prompt,
+                title,
+                branch,
+                base,
+                agent,
+                command,
+                from,
+                carry_changes,
+                state_dir,
+                outside_pane,
+            };
+            let done = runtime()?.block_on(handoff::handoff(opts))?;
+            println!("{}", serde_json::to_string(&done)?);
+            Ok(())
+        }
+        Cmd::InstallSkills { claude, codex } => {
+            use handoff::SkillTarget;
+            let targets = match (claude, codex) {
+                (true, false) => vec![SkillTarget::Claude],
+                (false, true) => vec![SkillTarget::Codex],
+                _ => vec![SkillTarget::Claude, SkillTarget::Codex],
+            };
+            for f in handoff::install_skills(&targets)? {
+                println!("{}", f.display());
+            }
             Ok(())
         }
         Cmd::StdioTunnel { state_dir } => {
