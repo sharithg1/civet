@@ -555,7 +555,36 @@ const MOCK_TAKEN_LOCALLY = new Set([3001, 8080])
 const MOCK_FILES: Record<string, string> = {
   '.gitignore': 'target/\n*.log\n',
   'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
-  'README.md': '# Civet\n\nTerminals and agents on remote hosts, from your Mac.\n',
+  'README.md': [
+    '# Civet',
+    '',
+    'Terminals and agents on remote hosts, from your Mac. See [the interfaces](docs/INTERFACES.md#crates) and [Usage](#usage).',
+    '',
+    '![Civet logo](docs/logo.png)',
+    '',
+    '## Usage',
+    '',
+    '- Add a project, then open a worktree',
+    '- Run `civet handoff` from a pane',
+    '  - nested item with **bold** and ~~strike~~',
+    '',
+    '- [x] Markdown preview',
+    '- [ ] Editing',
+    '',
+    '> Agents run on the host; the app only draws them.',
+    '',
+    '| Crate | Role |',
+    '| --- | --- |',
+    '| civetd | daemon |',
+    '| civet-proto | wire protocol |',
+    '',
+    '```sh',
+    'cargo build --release',
+    '```',
+    '',
+    'More at https://github.com.',
+    ''
+  ].join('\n'),
   'crates/civet-proto/Cargo.toml': '[package]\nname = "civet-proto"\n',
   'crates/civet-proto/src/lib.rs': '//! Wire protocol.\n\npub mod control;\npub mod frame;\n',
   'crates/civet-proto/src/control.rs':
@@ -563,7 +592,8 @@ const MOCK_FILES: Record<string, string> = {
   'crates/civet-proto/src/frame.rs':
     '//! Length-prefixed framing.\n\npub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;\n',
   'crates/civetd/src/main.rs': 'fn main() {\n    println!("civetd");\n}\n',
-  'docs/INTERFACES.md': '# Civet crate interfaces\n',
+  'docs/INTERFACES.md':
+    '# Civet crate interfaces\n\n## Crates\n\nBack to the [README](../README.md).\n',
   'docs/logo.png': '\u0089PNG\u0000\u0000',
   'scripts/release.sh': '#!/usr/bin/env bash\nset -euo pipefail\n',
   'debug.log': 'connected\n',
@@ -1014,6 +1044,10 @@ export class MockBackend implements CivetBackend {
   }
 
   async openPullRequest(url: string) {
+    window.open(url, '_blank', 'noopener')
+  }
+
+  async openWebUrl(url: string) {
     window.open(url, '_blank', 'noopener')
   }
 

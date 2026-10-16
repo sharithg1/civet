@@ -17,8 +17,15 @@ the previous tag; edit them on the release page afterwards if needed.
 
 ## Cutting a release
 
-**From GitHub:** Actions → **Cut release** → Run workflow (on `main`), enter
-the version (`0.1.5`; tick "Dry run" to only see the bump). It runs
+**From GitHub:** Actions → **Cut release** → Run workflow (on `main`), pick
+the bump from the dropdown: `patch` (default), `minor` or `major`. The next
+version is computed from `[workspace.package] version` in the root
+`Cargo.toml` (`0.1.16` → `0.1.17` / `0.2.0` / `1.0.0`; from a prerelease
+such as `0.2.0-rc.1`, `patch` releases `0.2.0` and `minor` / `major` bump
+the base to `0.3.0` / `1.0.0`). To release something else, e.g. a
+prerelease, type an exact version (`0.2.0-rc.1`, no leading `v`) in the
+optional version field; it overrides the bump. Tick "Dry run" to only see
+the bump; the run summary shows the resolved version either way. It runs
 `scripts/release.sh` on `main`, pushes the "Release vX.Y.Z" commit and the
 tag, and starts the Release workflow on the tag (a tag pushed by a workflow
 does not trigger `push: tags` itself, so it is dispatched explicitly). If

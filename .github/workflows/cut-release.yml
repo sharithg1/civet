@@ -1,7 +1,9 @@
 name: Cut release
 
-# Actions → Cut release → Run workflow: does what `scripts/release.sh X.Y.Z`
-# plus the push do on a laptop (bump Cargo.toml / tauri.conf.json /
+# Actions → Cut release → Run workflow: pick patch / minor / major (the next
+# version is computed from [workspace.package] in Cargo.toml), or type an
+# exact version to override it (e.g. a prerelease). Then does what
+# `scripts/release.sh X.Y.Z` plus the push do on a laptop (bump Cargo.toml / tauri.conf.json /
 # Cargo.lock, commit "Release vX.Y.Z" on main, tag, push both), then starts
 # the Release workflow on the new tag. A tag pushed with GITHUB_TOKEN does
 # not trigger other workflows; a workflow_dispatch does, so Release is
@@ -10,9 +12,18 @@ name: Cut release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release, e.g. 0.1.5 or 0.2.0-rc.1 (no leading v)'
+      bump:
+        description: 'Version bump from the current Cargo.toml version'
         required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      version:
+        description: 'Optional exact version, e.g. 0.2.0-rc.1 (no leading v); overrides bump'
+        required: false
         type: string
       dry_run:
         description: 'Dry run: show the bump, push nothing'
@@ -47,9 +58,44 @@ jobs:
         run: |
           git config user.name "${GITHUB_ACTOR}"
           git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+      - name: resolve version
+        id: version
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ -n "$VERSION_OVERRIDE" ]; then
+            version="${VERSION_OVERRIDE#v}"
+            how="exact version (overrides bump)"
+          else
+            current=$(awk '
+              /^\[/ { in_pkg = ($0 == "[workspace.package]"); next }
+              in_pkg && /^version[[:space:]]*=/ { gsub(/^version[[:space:]]*=[[:space:]]*"|".*$/, ""); print; exit }
+            ' Cargo.toml)
+            if ! [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Cannot parse [workspace.package] version in Cargo.toml (got '${current}')."
+              exit 1
+            fi
+            major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]} pre=${BASH_REMATCH[4]}
+            case "$BUMP" in
+              # A prerelease (0.2.0-rc.1) is already ahead of its base: patch releases the base.
+              patch) [ -n "$pre" ] || patch=$((patch + 1)) ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              *) echo "::error::Unknown bump '$BUMP'."; exit 1 ;;
+            esac
+            version="$major.$minor.$patch"
+            how="$BUMP bump from $current"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          suffix=""
+          [ "$DRY_RUN" = true ] && suffix=" (dry run)"
+          echo "Version \`$version\`: $how$suffix." >> "$GITHUB_STEP_SUMMARY"
+          echo "Resolved version $version ($how)."
       - name: release.sh
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           flags=()
@@ -58,7 +104,7 @@ jobs:
       - name: push
         if: ${{ !inputs.dry_run }}
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           tag="v${VERSION#v}"
           git push --atomic origin main "$tag"
@@ -67,7 +113,7 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           tag="v${VERSION#v}"
           gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag"
