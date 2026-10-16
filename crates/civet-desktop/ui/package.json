@@ -9,7 +9,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "biome check .",
+    "fix": "biome check --write .",
+    "format": "biome format --write .",
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "cd .. && tauri"
@@ -34,20 +36,16 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.0",
+    "@biomejs/biome": "2.5.15",
     "@tailwindcss/vite": "^4.2.4",
     "@tauri-apps/cli": "2.12.3",
     "@types/node": "^24.19.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "eslint": "^9.39.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.0.0",
     "tailwindcss": "^4.2.4",
     "tw-animate-css": "^1.4.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.71.2",
     "vite": "^8.0.0",
     "vitest": "^5.0.4"
   }
