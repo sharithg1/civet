@@ -2581,6 +2581,15 @@ async fn folder_projects() {
             .await,
         Err(SessionError::InvalidArgument(_))
     ));
+    // Any other git failure is an error, not a folder: it may hide a real
+    // repository (a broken `.git` here; "dubious ownership" in practice).
+    let broken = f.root.join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join(".git"), "not a gitfile\n").unwrap();
+    assert!(matches!(
+        f.mgr.add_project(&broken.to_string_lossy()).await,
+        Err(SessionError::Git(_))
+    ));
     // Inside a repository, AddProject adds the repository.
     std::fs::create_dir_all(repo_dir.join("sub")).unwrap();
     let repo = f

@@ -342,7 +342,10 @@ impl SessionManager {
             .await
         {
             Ok(c) => c,
-            Err(SessionError::Git(msg)) => {
+            // Why only this message (git runs with LC_ALL=C): any other
+            // failure (git missing, "dubious ownership") may hide a real
+            // repository, which must not be registered as a folder.
+            Err(SessionError::Git(msg)) if msg.contains("not a git repository") => {
                 tracing::debug!("{} is not in a git repository: {msg}", dir.display());
                 return Ok(None);
             }
