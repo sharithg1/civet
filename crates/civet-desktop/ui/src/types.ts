@@ -47,11 +47,19 @@ export type AgentStatus = 'unknown' | 'running' | 'needsInput' | 'done' | 'idle'
 export type AgentStatusSource = 'escapeCode' | 'hook' | 'heuristic' | 'processExit' | 'client'
 export type KillSignal = 'hangup' | 'terminate' | 'kill'
 
+/**
+ * A project is a git repository (worktrees, sessions, changes) or a plain
+ * folder: one worktree (its root) with file tabs only.
+ */
+export type ProjectKind = 'git' | 'folder'
+
 export type RepoInfo = {
   id: RepoId
   name: string
   path: string
   defaultBranch: string | null
+  /** Missing from backends that predate folder projects: a repository. */
+  kind?: ProjectKind
 }
 
 export type WorktreeInfo = {
@@ -88,7 +96,7 @@ export type FileEntry = {
 /** One directory level: directories first, then by name. */
 export type DirListing = { entries: FileEntry[]; truncated: boolean }
 
-/** A subdirectory of a host directory (`list_dirs`, civetd >= 0.1.17). */
+/** A subdirectory of a host directory (`list_dirs`, civetd >= 0.1.18). */
 export type HostDir = {
   name: string
   /** Has `.git` (repository or worktree root) or is a bare repository. */

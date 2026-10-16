@@ -66,7 +66,7 @@ describe('MockBackend', () => {
     expect(summary).toMatchObject({ hostId: 'devbox', state: 'connected', transport: 'quic' })
     expect(states.map((s) => s.state)).toEqual(['connecting', 'connected'])
     const repos = await b.listRepos('devbox')
-    expect(repos.map((r) => r.id)).toEqual(['civet', 'orca'])
+    expect(repos.map((r) => r.id)).toEqual(['civet', 'orca', 'notes'])
     expect((await b.listWorktrees('devbox', 'civet')).length).toBe(5)
     const panes = await b.listPanes('devbox')
     expect(panes.length).toBe(7)
@@ -121,6 +121,54 @@ describe('MockBackend', () => {
     expect(kinds).toContain(RecordKind.PaneClosed)
   })
 
+  it('has folder projects: files without ignores, no git or sessions', async () => {
+    const { b } = await connected()
+    const notes = (await b.listRepos('devbox')).find((r) => r.id === 'notes')!
+    expect(notes).toMatchObject({ kind: 'folder', defaultBranch: null })
+    const [root] = await b.listWorktrees('devbox', 'notes')
+    expect(root).toMatchObject({ isMain: true, branch: null, head: null, path: notes.path })
+    const all = await b.listAllFiles('devbox', root!.id)
+    expect(all.paths).toContain('debug.log')
+    expect(all.paths).toContain('meetings/2026-10-14.md')
+    const listing = await b.listFiles('devbox', root!.id, '', false)
+    expect(listing.entries.every((e) => !e.ignored)).toBe(true)
+    await expect(b.gitStatus('devbox', root!.id)).rejects.toMatchObject({ code: 'unsupported' })
+    await expect(b.createWorktree('devbox', 'notes', 'x')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    await expect(
+      b.spawnPane('devbox', {
+        worktree: root!.id,
+        cwd: null,
+        command: null,
+        env: [],
+        size: { cols: 80, rows: 24, pixelWidth: 0, pixelHeight: 0 },
+        title: null,
+        agent: null
+      })
+    ).rejects.toMatchObject({ code: 'unsupported' })
+
+    // Add project: a path with a src directory is a repository, else a folder.
+    expect(await b.addRepo('devbox', '/home/dev/src/web')).toMatchObject({ kind: 'git' })
+    const docs = await b.addRepo('devbox', '/home/dev/docs')
+    expect(docs).toMatchObject({ kind: 'folder', name: 'docs' })
+    expect(await b.listWorktrees('devbox', docs.id)).toEqual([
+      expect.objectContaining({ id: '/home/dev/docs', isMain: true, branch: null })
+    ])
+  })
+
+  it('an older daemon lists no folders and refuses to add one', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'old-box' }, 'ssh')
+    await vi.runAllTimersAsync()
+    await p
+    expect((await b.listRepos('old-box')).map((r) => r.id)).toEqual(['civet', 'orca'])
+    await expect(b.addRepo('old-box', '/home/dev/docs')).rejects.toMatchObject({
+      code: 'invalidArgument',
+      message: expect.stringMatching(/not a git repository.*v0\.1\.17 or newer/)
+    })
+  })
+
   it('offers a daemon upgrade on an "old" host; restart_daemon replaces it', async () => {
     const b = new MockBackend()
     const states: HostStateEvent[] = []
@@ -128,7 +176,7 @@ describe('MockBackend', () => {
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
     await vi.runAllTimersAsync()
     const s = await p
-    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.17', livePanes: 7 })
+    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.18', livePanes: 7 })
     expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
     // Reconnect keeps the stored target and transport.
     b.simulateFailure('old-box', 'lost')
@@ -142,7 +190,7 @@ describe('MockBackend', () => {
     await vi.runAllTimersAsync()
     const after = await restarted
     expect(after.upgrade).toBeNull()
-    expect(after.daemonVersion).toBe('0.1.17')
+    expect(after.daemonVersion).toBe('0.1.18')
     expect(after.instanceId).not.toBe(s.instanceId)
     expect(await b.listPanes('old-box')).toEqual([])
     await expect(b.reconnectHost('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
@@ -227,7 +275,7 @@ describe('MockBackend folders', () => {
     await failed
   })
 
-  it('is unsupported before civetd 0.1.17', async () => {
+  it('is unsupported before civetd 0.1.18', async () => {
     const b = new MockBackend()
     const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
     await vi.runAllTimersAsync()

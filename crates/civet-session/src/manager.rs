@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use civet_proto::{
     AgentStatus, ClientId, Event, InputMessage, KillSignal, LaunchAgentRequest, PaneId, PaneInfo,
-    RepoId, RepoInfo, ScrollbackPage, ScrollbackRequest, SpawnPaneRequest, TermSize, WorktreeId,
-    WorktreeInfo,
+    ProjectInfo, ProjectKind, RepoId, RepoInfo, ScrollbackPage, ScrollbackRequest,
+    SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -34,12 +34,47 @@ const REPOS_FILE: &str = "repos.json";
 /// Files trashed from the Files tab (see [`crate::fileops`]).
 const TRASH_DIR: &str = "trash";
 
-/// A registered repository as persisted in `repos.json`.
+/// A registered repository (or folder project) as persisted in
+/// `repos.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredRepo {
     id: String,
     name: String,
     path: String,
+    /// Missing in files written before folder projects: a repository.
+    #[serde(default)]
+    kind: ProjectKind,
+}
+
+impl StoredRepo {
+    fn is_folder(&self) -> bool {
+        self.kind == ProjectKind::Folder
+    }
+
+    /// Unsupported for a folder project: `what` needs git.
+    fn require_git(&self, what: &str) -> Result<(), SessionError> {
+        if self.is_folder() {
+            return Err(SessionError::Unsupported(format!(
+                "{} is a folder, not a git repository: no {what}",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// The only "worktree" of a folder project: its root.
+    fn folder_root(&self) -> WorktreeInfo {
+        let path = path_string(&canonical_lenient(Path::new(&self.path)));
+        WorktreeInfo {
+            id: WorktreeId(path.clone()),
+            repo: RepoId(self.id.clone()),
+            path,
+            branch: None,
+            head: None,
+            is_main: true,
+            locked: false,
+        }
+    }
 }
 
 struct Inner {
@@ -122,6 +157,18 @@ fn load_repos(path: &Path) -> Vec<StoredRepo> {
     }
 }
 
+/// `path` (`~` expanded) if it is a directory, else InvalidArgument.
+fn project_dir(path: &str) -> Result<PathBuf, SessionError> {
+    let dir = expand_home(path.trim());
+    if !dir.is_dir() {
+        return Err(SessionError::InvalidArgument(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    Ok(dir)
+}
+
 /// First word of a command string (for `program` given as a whole string).
 fn first_word(s: &str) -> &str {
     s.split_whitespace().next().unwrap_or("")
@@ -190,7 +237,7 @@ impl SessionManager {
 
     async fn repo_info(&self, r: &StoredRepo) -> RepoInfo {
         let path = Path::new(&r.path);
-        let default_branch = if path.is_dir() {
+        let default_branch = if !r.is_folder() && path.is_dir() {
             self.inner.git.default_branch(path).await
         } else {
             None
@@ -214,43 +261,98 @@ impl SessionManager {
             .ok_or_else(|| SessionError::NotFound(format!("repo {repo}")))
     }
 
-    /// Registered repositories.
+    /// Registered repositories (folder projects left out: see
+    /// [`Self::list_projects`]).
     pub async fn list_repos(&self) -> Result<Vec<RepoInfo>, SessionError> {
         let repos = self.inner.repos.lock().await.clone();
         let mut out = Vec::with_capacity(repos.len());
-        for r in &repos {
+        for r in repos.iter().filter(|r| !r.is_folder()) {
             out.push(self.repo_info(r).await);
+        }
+        Ok(out)
+    }
+
+    /// Registered projects: repositories and folders, in the order added.
+    pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>, SessionError> {
+        let repos = self.inner.repos.lock().await.clone();
+        let mut out = Vec::with_capacity(repos.len());
+        for r in &repos {
+            out.push(ProjectInfo {
+                repo: self.repo_info(r).await,
+                kind: r.kind,
+            });
         }
         Ok(out)
     }
 
     /// Register the repository containing `path`. RepoId = hex of the first
     /// 8 bytes of SHA-256(canonical common git dir). Persists repos.json and
-    /// emits ReposChanged. AlreadyExists if registered.
+    /// emits ReposChanged. AlreadyExists if registered; InvalidArgument if
+    /// `path` is in no git repository.
     pub async fn add_repo(&self, path: &str) -> Result<RepoInfo, SessionError> {
-        let dir = expand_home(path.trim());
-        if !dir.is_dir() {
-            return Err(SessionError::InvalidArgument(format!(
-                "{} is not a directory",
-                dir.display()
-            )));
-        }
+        let dir = project_dir(path)?;
+        let stored = match self.git_repo_at(&dir).await? {
+            Some(stored) => stored,
+            None => {
+                return Err(SessionError::InvalidArgument(format!(
+                    "{} is not a git repository",
+                    dir.display()
+                )));
+            }
+        };
+        let stored = self.register(stored).await?;
+        Ok(self.repo_info(&stored).await)
+    }
+
+    /// Like [`Self::add_repo`], but a directory in no git repository is
+    /// registered as a [`ProjectKind::Folder`] (RepoId: the same hash of its
+    /// canonical path).
+    pub async fn add_project(&self, path: &str) -> Result<ProjectInfo, SessionError> {
+        let dir = project_dir(path)?;
+        let stored = match self.git_repo_at(&dir).await? {
+            Some(stored) => stored,
+            None => {
+                let root = canonical_or_same(&dir);
+                StoredRepo {
+                    id: repo_id_for(&root),
+                    name: root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path_string(&root)),
+                    path: path_string(&root),
+                    kind: ProjectKind::Folder,
+                }
+            }
+        };
+        let stored = self.register(stored).await?;
+        Ok(ProjectInfo {
+            repo: self.repo_info(&stored).await,
+            kind: stored.kind,
+        })
+    }
+
+    /// The repository containing `dir`, or None if git says there is none.
+    async fn git_repo_at(&self, dir: &Path) -> Result<Option<StoredRepo>, SessionError> {
         let git = &self.inner.git;
-        let common = git
+        let common = match git
             .run(
-                &dir,
+                dir,
                 &["rev-parse", "--path-format=absolute", "--git-common-dir"],
             )
             .await
-            .map_err(|e| match e {
-                SessionError::Git(msg) => SessionError::InvalidArgument(format!(
-                    "{} is not a git repository: {msg}",
-                    dir.display()
-                )),
-                other => other,
-            })?;
+        {
+            Ok(c) => c,
+            // Why only this message (git runs with LC_ALL=C): any other
+            // failure (git missing, "dubious ownership") may hide a real
+            // repository, which must not be registered as a folder.
+            Err(SessionError::Git(msg)) if msg.contains("not a git repository") => {
+                tracing::debug!("{} is not in a git repository: {msg}", dir.display());
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
         let common = canonical_or_same(Path::new(common.trim()));
-        let list = git.run(&dir, &["worktree", "list", "--porcelain"]).await?;
+        let list = git.run(dir, &["worktree", "list", "--porcelain"]).await?;
         let main = parse_worktree_porcelain(&list)
             .into_iter()
             .next()
@@ -268,11 +370,17 @@ impl SessionManager {
         } else {
             raw_name
         };
-        let stored = StoredRepo {
+        Ok(Some(StoredRepo {
             id: repo_id_for(&common),
             name,
             path: path_string(&main_path),
-        };
+            kind: ProjectKind::Git,
+        }))
+    }
+
+    /// Persist a new project and emit ReposChanged (AlreadyExists if its id
+    /// is registered).
+    async fn register(&self, stored: StoredRepo) -> Result<StoredRepo, SessionError> {
         {
             let mut repos = self.inner.repos.lock().await;
             if repos.iter().any(|r| r.id == stored.id) {
@@ -284,9 +392,9 @@ impl SessionManager {
             repos.push(stored.clone());
             self.save_repos(&repos).await?;
         }
-        tracing::info!(repo = %stored.id, path = %stored.path, "repo added");
+        tracing::info!(repo = %stored.id, path = %stored.path, kind = ?stored.kind, "repo added");
         self.emit(Event::ReposChanged);
-        Ok(self.repo_info(&stored).await)
+        Ok(stored)
     }
 
     /// Unregister a repository (files and worktrees are untouched).
@@ -312,6 +420,9 @@ impl SessionManager {
         r: &StoredRepo,
         prunable: bool,
     ) -> Result<Vec<WorktreeInfo>, SessionError> {
+        if r.is_folder() {
+            return Ok(vec![r.folder_root()]);
+        }
         let out = self
             .inner
             .git
@@ -351,6 +462,7 @@ impl SessionManager {
         repo: &RepoId,
     ) -> Result<Vec<civet_proto::PullRequestInfo>, SessionError> {
         let r = self.find_repo(repo).await?;
+        r.require_git("pull requests")?;
         crate::github::list_pull_requests(Path::new(&r.path)).await
     }
 
@@ -359,7 +471,8 @@ impl SessionManager {
         &self,
         worktree: &WorktreeId,
     ) -> Result<civet_proto::GitStatusInfo, SessionError> {
-        let (_, w) = self.find_worktree(worktree).await?;
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("changes")?;
         crate::changes::status(&self.inner.git, Path::new(&w.path)).await
     }
 
@@ -372,7 +485,8 @@ impl SessionManager {
         staged: bool,
         context_lines: u32,
     ) -> Result<civet_proto::GitDiffInfo, SessionError> {
-        let (_, w) = self.find_worktree(worktree).await?;
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("diffs")?;
         crate::changes::diff(
             &self.inner.git,
             Path::new(&w.path),
@@ -389,7 +503,8 @@ impl SessionManager {
         &self,
         worktree: &WorktreeId,
     ) -> Result<civet_proto::GitBranchInfo, SessionError> {
-        let (_, w) = self.find_worktree(worktree).await?;
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("branch")?;
         crate::git_actions::branch(&self.inner.git, Path::new(&w.path)).await
     }
 
@@ -401,7 +516,8 @@ impl SessionManager {
         worktree: &WorktreeId,
         action: civet_proto::GitAction,
     ) -> Result<Option<civet_proto::GitDiscardSnapshot>, SessionError> {
-        let (_, w) = self.find_worktree(worktree).await?;
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("git actions")?;
         let out = crate::git_actions::run(&self.inner.git, Path::new(&w.path), action).await?;
         Ok(match out {
             crate::git_actions::ActionOutcome::Done => None,
@@ -429,6 +545,7 @@ impl SessionManager {
         path: Option<&str>,
     ) -> Result<WorktreeInfo, SessionError> {
         let r = self.find_repo(repo).await?;
+        r.require_git("worktrees")?;
         let git = &self.inner.git;
         let main = PathBuf::from(&r.path);
         git.check_branch_name(&main, branch).await?;
@@ -581,6 +698,29 @@ impl SessionManager {
         Ok(PathBuf::from(w.path))
     }
 
+    /// A worktree's directory, and the git to ask about ignored files (None
+    /// in a folder project, where nothing is ignored).
+    async fn listing_root(
+        &self,
+        worktree: &WorktreeId,
+    ) -> Result<(PathBuf, Option<&Git>), SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        let git = (!r.is_folder()).then_some(&self.inner.git);
+        Ok((PathBuf::from(w.path), git))
+    }
+
+    /// The folder project whose root is `worktree`, if any (no git runs).
+    async fn folder_of(&self, worktree: &WorktreeId) -> Option<StoredRepo> {
+        let wanted = path_string(&canonical_lenient(Path::new(&worktree.0)));
+        self.inner
+            .repos
+            .lock()
+            .await
+            .iter()
+            .find(|r| r.is_folder() && r.folder_root().path == wanted)
+            .cloned()
+    }
+
     /// One directory level of a worktree (`dir` relative to its root),
     /// gitignored entries left out unless `include_ignored`. Paths that
     /// leave the worktree are InvalidArgument (see [`crate::files`]).
@@ -590,8 +730,8 @@ impl SessionManager {
         dir: &str,
         include_ignored: bool,
     ) -> Result<civet_proto::DirListing, SessionError> {
-        let root = self.worktree_root(worktree).await?;
-        crate::files::list_dir(&self.inner.git, &root, dir, include_ignored).await
+        let (root, git) = self.listing_root(worktree).await?;
+        crate::files::list_dir(git, &root, dir, include_ignored).await
     }
 
     /// The subdirectories of any directory on the host (`~` expanded;
@@ -645,13 +785,14 @@ impl SessionManager {
         crate::fileops::apply(&root, trash, op).await
     }
 
-    /// Every tracked and untracked, not ignored file of a worktree.
+    /// Every tracked and untracked, not ignored file of a worktree (every
+    /// file of a folder project).
     pub async fn list_all_files(
         &self,
         worktree: &WorktreeId,
     ) -> Result<civet_proto::FileList, SessionError> {
-        let root = self.worktree_root(worktree).await?;
-        crate::files::list_all(&self.inner.git, &root).await
+        let (root, git) = self.listing_root(worktree).await?;
+        crate::files::list_all(git, &root).await
     }
 
     /// `git worktree remove [--force]`. Refuses the main worktree. With
@@ -775,6 +916,14 @@ impl SessionManager {
                 "invalid size {}x{}",
                 req.size.cols, req.size.rows
             )));
+        }
+        if let Some(w) = &req.worktree {
+            if let Some(r) = self.folder_of(w).await {
+                return Err(SessionError::Unsupported(format!(
+                    "{} is a folder project: it has no sessions",
+                    r.name
+                )));
+            }
         }
         let cwd = match (&req.cwd, &req.worktree) {
             (Some(c), _) => expand_home(c),
@@ -911,6 +1060,7 @@ impl SessionManager {
         req: LaunchAgentRequest,
     ) -> Result<(WorktreeInfo, PaneInfo), SessionError> {
         let r = self.find_repo(&req.repo).await?;
+        r.require_git("worktrees or sessions")?;
         let main = PathBuf::from(&r.path);
         let git = &self.inner.git;
         git.check_branch_name(&main, &req.branch).await?;
@@ -1082,6 +1232,7 @@ fn worktree_watcher(weak: Weak<Inner>) {
             .repos
             .blocking_lock()
             .iter()
+            .filter(|r| !r.is_folder())
             .map(|r| (r.id.clone(), PathBuf::from(&r.path)))
             .collect();
         for repo in watch.changed(&repos) {

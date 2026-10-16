@@ -2622,3 +2622,186 @@ async fn git_stash_is_per_branch() {
     assert_eq!(std::fs::read(side.join("README")).unwrap(), b"side again\n");
     assert_eq!(git_out(&repo_dir, &["stash", "list"]), "");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn folder_projects() {
+    use civet_proto::{FileOp, ProjectKind};
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    let notes = f.root.join("notes");
+    std::fs::create_dir_all(notes.join("docs")).unwrap();
+    std::fs::write(notes.join(".gitignore"), "*.log\n").unwrap();
+    std::fs::write(notes.join("a.log"), "log\n").unwrap();
+    std::fs::write(notes.join("docs/readme.md"), "# Notes\n").unwrap();
+    let mut events = f.mgr.subscribe_events();
+
+    // AddRepo keeps refusing a folder.
+    assert!(matches!(
+        f.mgr.add_repo(&notes.to_string_lossy()).await,
+        Err(SessionError::InvalidArgument(m)) if m.contains("not a git repository")
+    ));
+    let folder = f.mgr.add_project(&notes.to_string_lossy()).await.unwrap();
+    assert_eq!(folder.kind, ProjectKind::Folder);
+    assert_eq!(folder.repo.name, "notes");
+    assert_eq!(folder.repo.path, notes.to_string_lossy());
+    assert_eq!(folder.repo.default_branch, None);
+    assert_eq!(folder.repo.id.0.len(), 16);
+    next_event(&mut events, |e| matches!(e, Event::ReposChanged)).await;
+    assert!(matches!(
+        f.mgr.add_project(&notes.to_string_lossy()).await,
+        Err(SessionError::AlreadyExists(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .add_project(&notes.join("missing").to_string_lossy())
+            .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    // Any other git failure is an error, not a folder: it may hide a real
+    // repository (a broken `.git` here; "dubious ownership" in practice).
+    let broken = f.root.join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join(".git"), "not a gitfile\n").unwrap();
+    assert!(matches!(
+        f.mgr.add_project(&broken.to_string_lossy()).await,
+        Err(SessionError::Git(_))
+    ));
+    // Inside a repository, AddProject adds the repository.
+    std::fs::create_dir_all(repo_dir.join("sub")).unwrap();
+    let repo = f
+        .mgr
+        .add_project(&repo_dir.join("sub").to_string_lossy())
+        .await
+        .unwrap();
+    assert_eq!(repo.kind, ProjectKind::Git);
+    assert_eq!(repo.repo.path, repo_dir.to_string_lossy());
+    assert_eq!(repo.repo.default_branch.as_deref(), Some("main"));
+
+    // Old clients (ListRepos) never see the folder.
+    assert_eq!(f.mgr.list_repos().await.unwrap(), vec![repo.repo.clone()]);
+    assert_eq!(
+        f.mgr.list_projects().await.unwrap(),
+        vec![folder.clone(), repo.clone()]
+    );
+
+    // One "worktree": the folder's root.
+    let wts = f.mgr.list_worktrees(&folder.repo.id).await.unwrap();
+    assert_eq!(wts.len(), 1);
+    let wt = &wts[0];
+    assert_eq!(wt.path, notes.to_string_lossy());
+    assert_eq!(wt.id, WorktreeId(wt.path.clone()));
+    assert!(wt.is_main);
+    assert_eq!((wt.branch.as_deref(), wt.head.as_deref()), (None, None));
+    let wt = wt.id.clone();
+
+    // Files work without git: nothing is ignored.
+    let root = f.mgr.list_files(&wt, "", false).await.unwrap();
+    let names: Vec<_> = root.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["docs", ".gitignore", "a.log"]);
+    assert!(root.entries.iter().all(|e| !e.ignored));
+    assert_eq!(
+        f.mgr.list_all_files(&wt).await.unwrap().paths,
+        [".gitignore", "a.log", "docs/readme.md"]
+    );
+    let preview = f.mgr.read_file(&wt, "docs/readme.md", 1024).await.unwrap();
+    assert_eq!(preview.text, "# Notes\n");
+    f.mgr
+        .file_op(
+            &wt,
+            FileOp::CreateFile {
+                path: "docs/new.md".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(notes.join("docs/new.md").is_file());
+    assert!(matches!(
+        f.mgr.read_file(&wt, "../proj/README", 1024).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+
+    // No git, worktrees or sessions.
+    assert!(matches!(
+        f.mgr.git_status(&wt).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr.git_branch(&wt).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr.git_diff(&wt, "a.log", None, false, 3).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr.list_pull_requests(&folder.repo.id).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .create_worktree(&folder.repo.id, "feat", None, None)
+            .await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .launch_agent(LaunchAgentRequest {
+                repo: folder.repo.id.clone(),
+                branch: "agent/x".into(),
+                base: None,
+                worktree_path: None,
+                command: CommandSpec::new("sh", ["-c", "true"]),
+                env: vec![],
+                size: TermSize::new(80, 24),
+                title: None,
+                agent: None,
+            })
+            .await,
+        Err(SessionError::Unsupported(_))
+    ));
+    let mut spawn = sh("sleep 5");
+    spawn.worktree = Some(wt.clone());
+    assert!(matches!(
+        f.mgr.spawn_pane(spawn).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr.remove_worktree(&wt, true).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(f.mgr.list_panes().is_empty());
+    assert!(notes.join("docs/readme.md").exists());
+
+    // The kind survives a restart.
+    drop(f.mgr);
+    let mut cfg = SessionConfig::new(f.root.join("state"));
+    cfg.shell = Some("/bin/sh".into());
+    let mgr = SessionManager::new(cfg).unwrap();
+    assert_eq!(mgr.list_projects().await.unwrap(), vec![folder, repo]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repos_saved_before_folder_projects_are_repositories() {
+    use civet_proto::ProjectKind;
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let repo_dir = make_repo(&root);
+    let state = root.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let legacy = serde_json::json!([
+        {"id": "00112233aabbccdd", "name": "proj", "path": repo_dir.to_string_lossy()}
+    ]);
+    std::fs::write(state.join("repos.json"), legacy.to_string()).unwrap();
+    let mut cfg = SessionConfig::new(state);
+    cfg.shell = Some("/bin/sh".into());
+    let mgr = SessionManager::new(cfg).unwrap();
+    let projects = mgr.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].kind, ProjectKind::Git);
+    assert_eq!(
+        mgr.list_repos().await.unwrap(),
+        vec![projects[0].repo.clone()]
+    );
+    let wts = mgr.list_worktrees(&projects[0].repo.id).await.unwrap();
+    assert_eq!(wts[0].branch.as_deref(), Some("main"));
+}

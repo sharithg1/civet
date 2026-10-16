@@ -23,6 +23,10 @@ pub enum SessionError {
     /// Filesystem or other I/O failure.
     #[error("i/o: {0}")]
     Io(#[from] std::io::Error),
+    /// Not possible for this target (e.g. git or a pane in a folder
+    /// project).
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     /// Backpressure: the pane's PTY input queue is full (the process is not
     /// reading). The input was NOT applied or recorded; wait with
     /// `SessionManager::wait_input_capacity` and retry the same message.
@@ -40,6 +44,7 @@ impl SessionError {
             SessionError::Git(_) => ErrorCode::Git,
             SessionError::Spawn(_) => ErrorCode::Spawn,
             SessionError::Io(_) => ErrorCode::Io,
+            SessionError::Unsupported(_) => ErrorCode::Unsupported,
             SessionError::Busy(_) => ErrorCode::Internal,
         }
     }

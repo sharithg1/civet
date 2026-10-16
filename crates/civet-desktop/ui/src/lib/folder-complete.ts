@@ -3,7 +3,7 @@
 import type { HostDir } from '@/types'
 
 /** Oldest civetd with `ListDirs` (civet_proto::LIST_DIRS_MIN_DAEMON_VERSION). */
-export const LIST_DIRS_MIN_DAEMON_VERSION = '0.1.17'
+export const LIST_DIRS_MIN_DAEMON_VERSION = '0.1.18'
 
 /** What to list for a typed path: `dir` on the host, filtered by `prefix`. */
 export type FolderQuery = {

@@ -23,7 +23,14 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { ProjectTile, RingGlyph } from './chrome'
 import { StatusDot } from './StatusDot'
 
-type Item = SwitcherEntry & { worktree: string; isMain: boolean; dot: DotKind; tabs: number }
+type Item = SwitcherEntry & {
+  worktree: string
+  isMain: boolean
+  /** A folder project's root (no branch). */
+  folder: boolean
+  dot: DotKind
+  tabs: number
+}
 
 export function WorktreeSwitcher() {
   const open = useStore((s) => s.switcherOpen)
@@ -78,6 +85,7 @@ function SwitcherBody() {
         local: hostId === 'local',
         task: wt.isMain ? null : worktreeTask(wt, wtPanes),
         isMain: wt.isMain,
+        folder: repos[hostId]?.find((r) => r.id === wt.repo)?.kind === 'folder',
         dot: worktreeDot(wtPanes, hosts[hostId]?.state === 'connected', unread[key]),
         tabs: workspaces[key]?.tabs.length || wtPanes.length
       }
@@ -170,7 +178,7 @@ function SwitcherBody() {
                       </span>
                       {it.isMain && (
                         <span className="shrink-0 rounded-sm bg-muted px-[5px] text-2xs leading-4 font-medium text-body">
-                          default
+                          {it.folder ? 'folder' : 'default'}
                         </span>
                       )}
                     </div>

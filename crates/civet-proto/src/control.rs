@@ -22,6 +22,31 @@ pub struct RepoInfo {
     pub default_branch: Option<String>,
 }
 
+/// What a registered project is ([`ProjectInfo`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectKind {
+    /// A git repository: worktrees, sessions, changes.
+    #[default]
+    Git,
+    /// A plain directory (not in a git repository). It has exactly one
+    /// [`WorktreeInfo`], its root (`is_main`, no branch or head), whose
+    /// files can be browsed and changed; git requests, new worktrees and
+    /// panes in it are `Unsupported`.
+    Folder,
+}
+
+/// A registered project: a repository or a plain folder
+/// ([`Request::ListProjects`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    /// Id, name and path (`default_branch` is None for a folder).
+    pub repo: RepoInfo,
+    /// Repository or folder.
+    pub kind: ProjectKind,
+}
+
 /// A git worktree of a repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -624,7 +649,8 @@ pub enum Request {
     },
     /// -> [`Response::DaemonInfo`]
     GetDaemonInfo,
-    /// -> [`Response::Repos`]
+    /// Git repositories only (folder projects are left out, so clients that
+    /// predate them never see one). -> [`Response::Repos`]
     ListRepos,
     /// Register a repository by path on the host. -> [`Response::Repo`]
     AddRepo {
@@ -830,6 +856,20 @@ pub enum Request {
         /// Most bytes wanted.
         len: u64,
     },
+    /// Every registered project, repositories and folders.
+    /// -> [`Response::Projects`]. Clients send it only to daemons of at
+    /// least [`crate::PROJECTS_MIN_DAEMON_VERSION`] (also
+    /// [`Request::AddProject`]); older ones only have
+    /// [`Request::ListRepos`].
+    ListProjects,
+    /// Register the git repository containing `path`, like
+    /// [`Request::AddRepo`], or, if `path` is in no git repository, the
+    /// directory itself as a [`ProjectKind::Folder`].
+    /// -> [`Response::Project`]
+    AddProject {
+        /// Any directory.
+        path: String,
+    },
     /// The subdirectories of any directory on the host, for completing a
     /// path (the desktop's "Add project" folder field). -> [`Response::Dirs`].
     /// Clients send it only to daemons of at least
@@ -905,6 +945,10 @@ pub enum Response {
     FileOpDone(FileOpResult),
     /// Reply to [`Request::ReadFileChunk`].
     FileChunk(FileChunk),
+    /// Reply to [`Request::ListProjects`].
+    Projects(Vec<ProjectInfo>),
+    /// Reply to [`Request::AddProject`].
+    Project(ProjectInfo),
     /// Reply to [`Request::ListDirs`].
     Dirs(HostDirListing),
 }

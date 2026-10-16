@@ -475,17 +475,22 @@ function ProjectsPage() {
                   {r.name} <span className="font-normal text-faint">· {hosts[h]?.label ?? h}</span>
                 </div>
                 <div className="truncate font-mono text-xs text-faint">
-                  {r.path} · default {r.defaultBranch ?? 'HEAD'}
+                  {r.path} ·{' '}
+                  {r.kind === 'folder' ? 'folder' : `default ${r.defaultBranch ?? 'HEAD'}`}
                 </div>
               </div>
-              <div
-                className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
-                title="Saved on-create steps"
-              >
-                {saved
-                  ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
-                  : 'default steps'}
-              </div>
+              {r.kind === 'folder' ? (
+                <div className="text-xs text-muted-foreground">files only</div>
+              ) : (
+                <div
+                  className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                  title="Saved on-create steps"
+                >
+                  {saved
+                    ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
+                    : 'default steps'}
+                </div>
+              )}
             </div>
           )
         })

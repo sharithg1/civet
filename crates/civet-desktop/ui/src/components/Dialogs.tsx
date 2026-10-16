@@ -47,7 +47,7 @@ function useLast<T>(value: T | null): T | null {
 const NEW_HOST = '\u0000new-ssh-host'
 
 /**
- * "Add project": a git repository on any host, This Mac included even when
+ * "Add project": a git repository or a plain folder on any host, This Mac included even when
  * its daemon is not running yet (it starts on submit). Opened from the
  * sidebar's "+" (⌘O), a host's menu (preselected) or the status bar.
  */
@@ -60,7 +60,9 @@ export function AddProjectDialog() {
       <DialogContent onCloseAutoFocus={restoreTerminalFocus}>
         <DialogHeader className="gap-1.5">
           <DialogTitle>Add project</DialogTitle>
-          <DialogDescription>A git repository on this Mac or a connected host.</DialogDescription>
+          <DialogDescription>
+            A git repository or any folder on this Mac or a connected host.
+          </DialogDescription>
         </DialogHeader>
         {shown && (
           <AddProjectForm key={shown.hostId ?? ''} initialHost={shown.hostId} onDone={close} />
@@ -100,7 +102,7 @@ function AddProjectForm({
       const picked = await open({
         directory: true,
         multiple: false,
-        title: 'Choose a git repository'
+        title: 'Choose a repository or folder'
       })
       if (typeof picked === 'string') setPath(picked)
     } catch (err) {
@@ -194,7 +196,9 @@ function AddProjectForm({
             </Button>
           )}
         </div>
-        <p className="text-2xs text-muted-foreground">Must be a git repository.</p>
+        <p className="text-2xs text-muted-foreground">
+          A folder that is not a git repository opens with file tabs only (no sessions).
+        </p>
       </div>
       {busy && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">

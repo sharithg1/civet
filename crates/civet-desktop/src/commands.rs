@@ -4,8 +4,8 @@
 //! Keep the list in sync with `build.rs` (ACL) and the capability file.
 
 use civet_proto::{
-    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, RepoInfo,
-    ScrollbackQuery, SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
+    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, ScrollbackQuery,
+    SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -15,7 +15,7 @@ use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
     DaemonInfoView, ForwardView, HostSummary, HostTarget, LaunchedAgent, PingResult, PortsEvent,
-    ScrollbackPageView, TransportChoice,
+    RepoView, ScrollbackPageView, TransportChoice,
 };
 use crate::hosts::HostManager;
 
@@ -97,12 +97,12 @@ pub async fn ping(state: State<'_, AppState>, host_id: String) -> Res<PingResult
 }
 
 #[tauri::command]
-pub async fn list_repos(state: State<'_, AppState>, host_id: String) -> Res<Vec<RepoInfo>> {
+pub async fn list_repos(state: State<'_, AppState>, host_id: String) -> Res<Vec<RepoView>> {
     state.hosts.list_repos(&host_id).await
 }
 
 #[tauri::command]
-pub async fn add_repo(state: State<'_, AppState>, host_id: String, path: String) -> Res<RepoInfo> {
+pub async fn add_repo(state: State<'_, AppState>, host_id: String, path: String) -> Res<RepoView> {
     state.hosts.add_repo(&host_id, path).await
 }
 
@@ -486,6 +486,20 @@ pub async fn open_pull_request(url: String) -> Res<()> {
     open_in_browser(&url).await
 }
 
+/// Open a link clicked in a Markdown preview in the default browser. Only
+/// `http(s)://` URLs: never `file://`, app schemes or anything `open` would
+/// launch locally.
+#[tauri::command]
+pub async fn open_web_url(url: String) -> Res<()> {
+    if !is_web_url(&url) {
+        return Err(CmdError::new(
+            "invalidArgument",
+            "only http(s) URLs can be opened",
+        ));
+    }
+    open_in_browser(&url).await
+}
+
 async fn open_in_browser(url: &str) -> Res<()> {
     let status = tokio::process::Command::new("/usr/bin/open")
         .arg(url)
@@ -520,6 +534,21 @@ pub fn is_pull_request_url(url: &str) -> bool {
                 && !number.is_empty()
                 && number.chars().all(|c| c.is_ascii_digit())
     )
+}
+
+/// `http(s)://<host>...` with a non-empty host and no whitespace or control
+/// characters.
+pub fn is_web_url(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !authority.is_empty()
+        && !authority.starts_with('-')
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// `http(s)://localhost[:port][/...]` or the same with `127.0.0.1`.
@@ -603,6 +632,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_forwards,
         open_local_url,
         open_pull_request,
+        open_web_url,
         crate::updater::app_info,
         crate::updater::check_for_updates,
         crate::updater::update_status,
@@ -621,6 +651,19 @@ mod tests {
             vec![0, b'a', 0xff, 0x80]
         );
         assert_eq!(binary_string_bytes("\u{100}"), vec![b'?']);
+    }
+
+    #[test]
+    fn only_web_urls_open() {
+        assert!(is_web_url("https://example.com"));
+        assert!(is_web_url("http://example.com/a?b#c"));
+        assert!(!is_web_url("https://"));
+        assert!(!is_web_url("https:///etc/passwd"));
+        assert!(!is_web_url("file:///etc/passwd"));
+        assert!(!is_web_url("vscode://file/x"));
+        assert!(!is_web_url("https://example.com/a b"));
+        assert!(!is_web_url("https://example.com/\n"));
+        assert!(!is_web_url("HTTPS://example.com"));
     }
 
     #[test]

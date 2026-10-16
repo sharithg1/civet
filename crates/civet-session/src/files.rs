@@ -69,9 +69,10 @@ pub(crate) async fn blocking<T: Send + 'static>(
 /// One directory level: directories first, then by name (case-insensitive),
 /// at most [`MAX_DIR_ENTRIES`]. Gitignored entries (one `git check-ignore
 /// --stdin` call; tracked files are never reported as ignored) are left
-/// out unless `include_ignored`. `.git` is never listed.
+/// out unless `include_ignored`. `.git` is never listed. Without `git` (a
+/// folder project) nothing is ignored.
 pub(crate) async fn list_dir(
-    git: &Git,
+    git: Option<&Git>,
     root: &Path,
     dir: &str,
     include_ignored: bool,
@@ -93,7 +94,10 @@ pub(crate) async fn list_dir(
         stdin.extend_from_slice(e.name.as_bytes());
         stdin.push(0);
     }
-    let ignored = ignored_paths(git, &target, stdin).await?;
+    let ignored = match git {
+        Some(git) => ignored_paths(git, &target, stdin).await?,
+        None => HashSet::new(),
+    };
     for e in &mut entries {
         e.ignored = ignored.contains(&e.name);
     }
@@ -320,9 +324,13 @@ fn decode_text(buf: &[u8], truncated: bool) -> String {
 }
 
 /// Tracked and untracked, not ignored files (`git ls-files -z -co
-/// --exclude-standard`), sorted, at most [`MAX_ALL_FILES`].
-pub(crate) async fn list_all(git: &Git, root: &Path) -> Result<FileList, SessionError> {
+/// --exclude-standard`), sorted, at most [`MAX_ALL_FILES`]. Without `git` (a
+/// folder project): every file under `root` ([`walk`]).
+pub(crate) async fn list_all(git: Option<&Git>, root: &Path) -> Result<FileList, SessionError> {
     let root = canonical_root(root)?;
+    let Some(git) = git else {
+        return blocking(move || walk(&root, MAX_ALL_FILES + 1)).await;
+    };
     let out = git
         .run(&root, &["ls-files", "-z", "-co", "--exclude-standard"])
         .await?;
@@ -334,6 +342,46 @@ pub(crate) async fn list_all(git: &Git, root: &Path) -> Result<FileList, Session
     // Unmerged files are listed once per stage.
     paths.sort_unstable();
     paths.dedup();
+    let truncated = paths.len() > MAX_ALL_FILES;
+    paths.truncate(MAX_ALL_FILES);
+    Ok(FileList { paths, truncated })
+}
+
+/// Files and symlinks under `root` (directories walked breadth first,
+/// symlinks not followed, `.git` left out, unreadable directories skipped),
+/// relative and `/`-separated, sorted. Stops after `limit` paths;
+/// `truncated` once there are more than [`MAX_ALL_FILES`].
+fn walk(root: &Path, limit: usize) -> Result<FileList, SessionError> {
+    let mut paths = Vec::new();
+    let mut dirs = std::collections::VecDeque::from([String::new()]);
+    'outer: while let Some(rel) = dirs.pop_front() {
+        let Ok(rd) = std::fs::read_dir(root.join(&rel)) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == ".git" {
+                continue;
+            }
+            let path = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            // file_type does not follow symlinks.
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => dirs.push_back(path),
+                Ok(_) => {
+                    paths.push(path);
+                    if paths.len() >= limit {
+                        break 'outer;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    paths.sort_unstable();
     let truncated = paths.len() > MAX_ALL_FILES;
     paths.truncate(MAX_ALL_FILES);
     Ok(FileList { paths, truncated })
@@ -395,6 +443,27 @@ mod tests {
         std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
         let f = std::fs::File::open(base.join("link/f")).unwrap();
         assert_eq!(crate::sys::fd_path(&f).unwrap(), base.join("real/f"));
+    }
+
+    #[test]
+    fn walk_lists_every_file_but_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::write(root.join("a/b/c.txt"), "c").unwrap();
+        std::fs::write(root.join("a/x.md"), "x").unwrap();
+        std::fs::write(root.join(".env"), "e").unwrap();
+        std::fs::write(root.join(".git/HEAD"), "h").unwrap();
+        std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
+
+        let list = walk(&root, MAX_ALL_FILES + 1).unwrap();
+        assert_eq!(list.paths, [".env", "a/b/c.txt", "a/x.md", "loop"]);
+        assert!(!list.truncated);
+
+        // Stops early; truncation is reported past MAX_ALL_FILES only.
+        assert_eq!(walk(&root, 2).unwrap().paths.len(), 2);
     }
 
     #[test]

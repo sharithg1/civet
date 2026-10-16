@@ -442,3 +442,156 @@
 .pane-focused > .terminal-host {
   opacity: 1;
 }
+
+/* Markdown preview of file tabs (MarkdownView.tsx): GitHub-like spacing on
+   the app's type scale and colour tokens. */
+.markdown-body {
+  color: var(--body);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body :is(p, ul, ol, blockquote, pre, table, hr, details) {
+  margin: 0 0 16px;
+}
+.markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 24px 0 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  scroll-margin-top: 16px;
+}
+.markdown-body h1 {
+  font-size: 1.85em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h3 {
+  font-size: 1.2em;
+}
+.markdown-body h4 {
+  font-size: 1em;
+}
+.markdown-body :is(h5, h6) {
+  font-size: 0.9em;
+  color: var(--soft);
+}
+.markdown-body a {
+  color: var(--link);
+  text-decoration: none;
+  cursor: pointer;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body :is(ul, ol) {
+  padding-left: 2em;
+}
+.markdown-body ul {
+  list-style: disc;
+}
+.markdown-body ol {
+  list-style: decimal;
+}
+.markdown-body ul ul {
+  list-style: circle;
+}
+.markdown-body li + li,
+.markdown-body li > :is(ul, ol) {
+  margin-top: 0.25em;
+}
+.markdown-body li > :is(ul, ol) {
+  margin-bottom: 0;
+}
+.markdown-body li > p {
+  margin-bottom: 0.25em;
+}
+.markdown-body li.task-list-item {
+  list-style: none;
+}
+.markdown-body li.task-list-item input {
+  margin: 0 0.4em 0.2em -1.5em;
+  vertical-align: middle;
+}
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: var(--soft);
+  border-left: 3px solid var(--border-strong);
+}
+.markdown-body hr {
+  height: 1px;
+  border: 0;
+  background: var(--border);
+}
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  background: var(--muted);
+}
+.markdown-body pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 20px;
+  padding: 12px 16px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--muted);
+}
+.markdown-body pre code {
+  font-size: inherit;
+  padding: 0;
+  background: none;
+}
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.markdown-body :is(th, td) {
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+}
+.markdown-body th {
+  font-weight: 600;
+}
+.markdown-body tr:nth-child(2n) {
+  background: var(--muted);
+}
+.markdown-body img {
+  max-width: 100%;
+}
+.markdown-body .md-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--soft);
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
+}
+.markdown-body .md-image-placeholder svg {
+  width: 14px;
+  height: 14px;
+}
+.markdown-body .md-image-placeholder button {
+  color: var(--link);
+  cursor: pointer;
+}

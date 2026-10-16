@@ -517,6 +517,73 @@ describe('store', () => {
     expect(useStore.getState().workspaces[key]!.activeTab).toBe('a')
   })
 
+  it('a folder project has file tabs only: no sessions, worktrees or PRs', async () => {
+    const spawnPane = vi.fn(async () => pane(9, { worktree: '/notes' }))
+    const launchAgent = vi.fn()
+    const createWorktree = vi.fn()
+    const listPullRequests = vi.fn(async () => [])
+    const folder: RepoInfo = {
+      id: 'n',
+      name: 'notes',
+      path: '/notes',
+      defaultBranch: null,
+      kind: 'folder'
+    }
+    // Saved / reported before folder projects existed: no `kind`, a repository.
+    const legacy: RepoInfo = { id: 'r', name: 'repo', path: '/r', defaultBranch: 'main' }
+    const root: WorktreeInfo = {
+      id: '/notes',
+      repo: 'n',
+      path: '/notes',
+      branch: null,
+      head: null,
+      isMain: true,
+      locked: false
+    }
+    const main: WorktreeInfo = { ...root, id: '/r', repo: 'r', path: '/r', branch: 'main' }
+    useStore.setState({
+      backend: fakeBackend({ spawnPane, launchAgent, createWorktree, listPullRequests }),
+      hosts: {
+        h: { ...summary('h'), rttMs: null, message: null, bootstrap: null, errorCode: null }
+      },
+      repos: { h: [folder, legacy] },
+      worktrees: { [store.wtKey('h', 'n')]: [root], [store.wtKey('h', 'r')]: [main] },
+      workspaces: {},
+      active: null
+    })
+    expect(store.isFolderWorktree('h', '/notes')).toBe(true)
+    expect(store.isFolderWorktree('h', '/r')).toBe(false)
+    expect(store.isFolderRepo(legacy)).toBe(false)
+
+    store.selectWorktree('h', '/notes')
+    await store.newTerminalTab('h', '/notes')
+    await store.newAgentTab('h', '/notes')
+    await store.splitFocused('row')
+    expect(spawnPane).not.toHaveBeenCalled()
+    await expect(
+      store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'n',
+        branch: 'x',
+        base: null,
+        steps: [],
+        prompt: ''
+      })
+    ).rejects.toMatchObject({ code: 'unsupported' })
+    expect(createWorktree).not.toHaveBeenCalled()
+    expect(launchAgent).not.toHaveBeenCalled()
+    store.refreshPullRequests('h', 'n')
+    expect(listPullRequests).not.toHaveBeenCalled()
+
+    store.openFileTab('h', '/notes', 'todo.md')
+    const ws = useStore.getState().workspaces[store.wsKey('h', '/notes')]!
+    expect(ws.tabs.map((t) => (t.kind === 'file' ? t.path : t.id))).toEqual(['todo.md'])
+
+    // The repository next to it still gets sessions.
+    await store.newTerminalTab('h', '/r')
+    expect(spawnPane).toHaveBeenCalledOnce()
+  })
+
   it('files open in tabs of their own, once each, next to pane tabs', async () => {
     const key = store.wsKey('h', '/w')
     const killPane = vi.fn(async () => {})

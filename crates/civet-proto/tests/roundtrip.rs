@@ -269,6 +269,10 @@ fn all_requests() -> Vec<Request> {
         Request::GitBranch {
             worktree: WorktreeId::from("/w"),
         },
+        Request::ListProjects,
+        Request::AddProject {
+            path: "~/notes".into(),
+        },
         Request::ListDirs {
             path: "~/src".into(),
         },
@@ -451,6 +455,23 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
         Ok(Response::FileChunk(FileChunk {
             size: 10,
             data: vec![0, 1, 2],
+        })),
+        Ok(Response::Projects(vec![
+            ProjectInfo {
+                repo: repo(),
+                kind: ProjectKind::Git,
+            },
+            ProjectInfo {
+                repo: RepoInfo {
+                    default_branch: None,
+                    ..repo()
+                },
+                kind: ProjectKind::Folder,
+            },
+        ])),
+        Ok(Response::Project(ProjectInfo {
+            repo: repo(),
+            kind: ProjectKind::Folder,
         })),
         Ok(Response::GitBranch(GitBranchInfo {
             branch: Some("feat/x".into()),
@@ -828,17 +849,36 @@ fn clipboard_event_is_appended() {
 }
 
 #[test]
+fn project_requests_are_appended() {
+    // Appended within protocol 1 after ReadFileChunk (27) / FileChunk (22).
+    assert_eq!(encode(&Request::ListProjects).unwrap(), vec![28]);
+    assert_eq!(
+        encode(&Request::AddProject { path: "a".into() }).unwrap(),
+        vec![29, 1, b'a']
+    );
+    assert_eq!(encode(&Response::Projects(vec![])).unwrap(), vec![23, 0]);
+    assert_eq!(encode(&ProjectKind::Folder).unwrap(), vec![1]);
+    let v = serde_json::to_value(Response::Project(ProjectInfo {
+        repo: repo(),
+        kind: ProjectKind::Folder,
+    }))
+    .unwrap();
+    assert_eq!(v["project"]["kind"], "folder");
+    assert_eq!(v["project"]["repo"]["defaultBranch"], "main");
+}
+
+#[test]
 fn list_dirs_is_appended() {
-    // Appended within protocol 1 after ReadFileChunk / FileChunk.
+    // Appended within protocol 1 after AddProject (29) / Project (24).
     let req = encode(&Request::ListDirs { path: "~".into() }).unwrap();
-    assert_eq!(req, vec![28, 1, b'~']);
+    assert_eq!(req, vec![30, 1, b'~']);
     let resp = encode(&Response::Dirs(HostDirListing {
         path: "/".into(),
         dirs: vec![],
         truncated: false,
     }))
     .unwrap();
-    assert_eq!(resp, vec![23, 1, b'/', 0, 0]);
+    assert_eq!(resp, vec![25, 1, b'/', 0, 0]);
     let v = serde_json::to_value(Response::Dirs(HostDirListing {
         path: "/h".into(),
         dirs: vec![HostDir {

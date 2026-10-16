@@ -2,8 +2,9 @@
 // worktree's branch, the active host + latency (click for the host popover)
 // and, on the right, the focused session.
 import { useState } from 'react'
-import { ArrowDownToLine, ChevronDown, GitBranch, Server } from 'lucide-react'
+import { ArrowDownToLine, ChevronDown, Folder, GitBranch, Server } from 'lucide-react'
 import {
+  isFolderRepo,
   isPaneTab,
   reconnectHost,
   reportError,
@@ -80,9 +81,10 @@ function UpdatePill() {
 function BranchChip({ hostId, worktree }: { hostId: string; worktree: string }) {
   const wt = useWorktreeInfo(hostId, worktree)
   if (!wt) return null
+  const Icon = isFolderRepo(wt.repo) ? Folder : GitBranch
   return (
     <span className="flex h-6 min-w-0 items-center gap-1.5 px-1.5" title={wt.info.path}>
-      <GitBranch className="size-3.5 shrink-0" />
+      <Icon className="size-3.5 shrink-0" />
       <span className="truncate font-mono text-xs text-soft">{worktreeBranch(wt.info)}</span>
     </span>
   )

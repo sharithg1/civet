@@ -56,6 +56,7 @@
     "allow-list-forwards",
     "allow-open-local-url",
     "allow-open-pull-request",
+    "allow-open-web-url",
     "allow-app-info",
     "allow-check-for-updates",
     "allow-update-status",

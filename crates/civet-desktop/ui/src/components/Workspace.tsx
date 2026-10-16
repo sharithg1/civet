@@ -4,7 +4,7 @@
 // a Full (cheap in the mosh model, and it keeps WebGL contexts bounded).
 // While the worktree is being removed its panes are inert under a
 // "Removing…" veil; the rest of the app stays usable.
-import { useStore, wsKey as makeWsKey } from '@/state/store'
+import { isFolderWorktree, useStore, wsKey as makeWsKey } from '@/state/store'
 import { leaves } from '@/layout/pane-tree'
 import { Spinner } from '@/components/ui/spinner'
 import { Kbd } from './chrome'
@@ -18,6 +18,7 @@ export function Workspace() {
   const key = active ? makeWsKey(active.hostId, active.worktree) : ''
   const ws = useStore((s) => (key ? s.workspaces[key] : undefined))
   const removing = useStore((s) => !!key && !!s.removing[key])
+  const folder = useStore((s) => !!s.active && isFolderWorktree(s.active.hostId, s.active.worktree))
 
   if (!active) {
     return (
@@ -67,6 +68,19 @@ export function Workspace() {
             focused={tab.focused}
             multiPane={leaves(tab.root).length > 1}
           />
+        ) : folder ? (
+          <div className="grid h-full place-items-center text-sm text-quiet">
+            <div className="flex flex-col items-center gap-2">
+              No files open
+              <button
+                type="button"
+                onClick={() => useStore.setState({ rightPanelOpen: true, rightTab: 'files' })}
+                className="cursor-pointer text-dim hover:text-soft"
+              >
+                Open one from the Files panel
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="grid h-full place-items-center text-sm text-quiet">
             <div className="flex flex-col items-center gap-2">

@@ -28,8 +28,8 @@ use crate::error::CmdError;
 use crate::events::{
     AgentAttentionEvent, BootstrapProgressEvent, ClipboardWrite, DaemonEventPayload,
     DaemonInfoView, DaemonUpgrade, ForwardView, HostState, HostStateEvent, HostSummary, HostTarget,
-    LaunchedAgent, PingResult, PortsEvent, ProgressStep, ScrollbackPageView, TransportChoice,
-    UiEvents,
+    LaunchedAgent, PingResult, PortsEvent, ProgressStep, RepoView, ScrollbackPageView,
+    TransportChoice, UiEvents,
 };
 use crate::forwards::{Forwards, PortsState};
 use crate::linkstate::{HostStateUpdate, LinkAction, LinkMapper, RECONNECTING_AFTER};
@@ -909,18 +909,47 @@ impl HostManager {
         })
     }
 
-    /// `list_repos`
-    pub async fn list_repos(&self, host_id: &str) -> Result<Vec<civet_proto::RepoInfo>, CmdError> {
-        expect_response!(self.request(host_id, Request::ListRepos).await?, Response::Repos(r) => r)
+    /// `list_repos`: every project (`ListProjects`), or only repositories
+    /// on a daemon older than [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`].
+    pub async fn list_repos(&self, host_id: &str) -> Result<Vec<RepoView>, CmdError> {
+        if self.daemon_at_least(host_id, civet_proto::PROJECTS_MIN_DAEMON_VERSION)? {
+            return expect_response!(
+                self.request(host_id, Request::ListProjects).await?,
+                Response::Projects(p) => p.into_iter().map(RepoView::from).collect()
+            );
+        }
+        expect_response!(
+            self.request(host_id, Request::ListRepos).await?,
+            Response::Repos(r) => r.into_iter().map(RepoView::git).collect()
+        )
     }
 
-    /// `add_repo`
-    pub async fn add_repo(
-        &self,
-        host_id: &str,
-        path: String,
-    ) -> Result<civet_proto::RepoInfo, CmdError> {
-        expect_response!(self.request(host_id, Request::AddRepo { path }).await?, Response::Repo(r) => r)
+    /// `add_repo`: the git repository containing `path`, else (daemons of
+    /// at least [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`]) the folder
+    /// itself. An older daemon refuses a folder; its error then says why.
+    pub async fn add_repo(&self, host_id: &str, path: String) -> Result<RepoView, CmdError> {
+        if self.daemon_at_least(host_id, civet_proto::PROJECTS_MIN_DAEMON_VERSION)? {
+            return expect_response!(
+                self.request(host_id, Request::AddProject { path }).await?,
+                Response::Project(p) => p.into()
+            );
+        }
+        match self.request(host_id, Request::AddRepo { path }).await {
+            Ok(resp) => expect_response!(resp, Response::Repo(r) => RepoView::git(r)),
+            Err(mut e)
+                if e.code == "invalidArgument" && e.message.contains("not a git repository") =>
+            {
+                let running = lock(&self.host(host_id)?.status).daemon_version.clone();
+                e.message = format!(
+                    "{}. civetd {} on {host_id} only adds git repositories; v{} or newer also adds plain folders (restart the daemon to upgrade)",
+                    e.message.trim_end_matches('.'),
+                    running.as_deref().unwrap_or("?"),
+                    civet_proto::PROJECTS_MIN_DAEMON_VERSION
+                );
+                Err(e)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// `remove_repo`
@@ -1024,6 +1053,12 @@ impl HostManager {
 
     /// Requests appended after `min` would make an older daemon drop the
     /// connection.
+    /// True if the host's daemon is `min` or newer (false if unknown).
+    fn daemon_at_least(&self, host_id: &str, min: &str) -> Result<bool, CmdError> {
+        let running = lock(&self.host(host_id)?.status).daemon_version.clone();
+        Ok(running.as_deref().is_some_and(|v| !version_older(v, min)))
+    }
+
     fn check_daemon_version(&self, host_id: &str, min: &str) -> Result<(), CmdError> {
         let running = lock(&self.host(host_id)?.status).daemon_version.clone();
         if running.as_deref().is_none_or(|v| version_older(v, min)) {

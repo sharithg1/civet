@@ -861,6 +861,102 @@ async fn file_ops_round_trip() {
     daemon.shutdown("test done").await;
 }
 
+/// Folder projects over the wire: AddRepo still refuses a plain folder,
+/// AddProject registers it, ListRepos (old clients) leaves it out, its one
+/// worktree browses files, and git / panes in it are Unsupported.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn folder_projects_over_the_control_stream() {
+    use civet_proto::{ErrorCode, ProjectKind, SpawnPaneRequest, TermSize};
+    let (daemon, dir) = start_daemon().await;
+    let info = daemon.info().clone();
+    let folder = dir.path().join("notes");
+    std::fs::create_dir_all(folder.join("docs")).unwrap();
+    std::fs::write(folder.join("docs/todo.md"), "- ship\n").unwrap();
+    let sock = tokio::net::UnixStream::connect(daemon.socket_path())
+        .await
+        .unwrap();
+    let mut c = Raw::new(
+        civet_transport::connect_stream(sock, hello(&info, ClientId::generate().unwrap()), vec![])
+            .await
+            .unwrap(),
+    );
+    let path = folder.display().to_string();
+    let err = c
+        .request(Request::AddRepo { path: path.clone() })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    assert!(err.message.contains("not a git repository"), "{err:?}");
+    let Response::Project(p) = c.request(Request::AddProject { path }).await.unwrap() else {
+        panic!("AddProject")
+    };
+    assert_eq!(p.kind, ProjectKind::Folder);
+    assert_eq!(p.repo.name, "notes");
+    let Response::Repos(repos) = c.request(Request::ListRepos).await.unwrap() else {
+        panic!("ListRepos")
+    };
+    assert!(repos.is_empty());
+    let Response::Projects(projects) = c.request(Request::ListProjects).await.unwrap() else {
+        panic!("ListProjects")
+    };
+    assert_eq!(projects, vec![p.clone()]);
+    let Response::Worktrees(w) = c
+        .request(Request::ListWorktrees {
+            repo: p.repo.id.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ListWorktrees")
+    };
+    assert_eq!(w.len(), 1);
+    let worktree = w[0].id.clone();
+    let Response::AllFiles(files) = c
+        .request(Request::ListAllFiles {
+            worktree: worktree.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ListAllFiles")
+    };
+    assert_eq!(files.paths, ["docs/todo.md"]);
+    let Response::FilePreview(preview) = c
+        .request(Request::ReadFile {
+            worktree: worktree.clone(),
+            path: "docs/todo.md".into(),
+            max_bytes: 1024,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ReadFile")
+    };
+    assert_eq!(preview.text, "- ship\n");
+    let err = c
+        .request(Request::GitStatus {
+            worktree: worktree.clone(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Unsupported);
+    let err = c
+        .request(Request::SpawnPane(SpawnPaneRequest {
+            worktree: Some(worktree),
+            cwd: None,
+            command: None,
+            env: vec![],
+            size: TermSize::new(80, 24),
+            title: None,
+            agent: None,
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Unsupported);
+    c.conn.close().await;
+    daemon.shutdown("test done").await;
+}
+
 /// Graceful shutdown: every client (QUIC session and stream link) gets
 /// `Goodbye` before the connection closes; daemon.json and the socket are
 /// removed and the lock is released.
