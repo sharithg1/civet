@@ -39,21 +39,24 @@ export function RightPanel() {
         data-tauri-drag-region="deep"
         className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none"
       >
-        <div className="flex items-center gap-0.5" role="tablist">
+        {/* Labels shrink (ellipsis) before the panel toggle is pushed out,
+            e.g. once Changes / Ports show a count. */}
+        <div className="flex min-w-0 items-center gap-0.5" role="tablist">
           {TABS.map(([id, label, Icon]) => (
             <button
               key={id}
               type="button"
               role="tab"
               aria-selected={tab === id}
+              title={label}
               onClick={() => useStore.setState({ rightTab: id })}
               className={cn(
-                'flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-base',
+                'flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-base',
                 tab === id ? 'bg-card text-foreground' : 'text-quiet hover:bg-hover hover:text-soft'
               )}
             >
               <Icon className="size-3.5 shrink-0" />
-              {label}
+              <span className="min-w-0 truncate">{label}</span>
               {id === 'changes' && active && (
                 <ChangesCount
                   hostId={active.hostId}
@@ -62,7 +65,7 @@ export function RightPanel() {
                 />
               )}
               {id === 'ports' && forwardCount > 0 && (
-                <span className="font-mono text-xs text-quiet">{forwardCount}</span>
+                <span className="shrink-0 font-mono text-xs text-quiet">{forwardCount}</span>
               )}
             </button>
           ))}

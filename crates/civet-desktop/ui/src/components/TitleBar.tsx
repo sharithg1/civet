@@ -97,6 +97,7 @@ export function RightPanelToggle() {
       label={open ? 'Hide panel (⌥E)' : 'Show panel (⌥E)'}
       side="bottom"
       aria-pressed={open}
+      className="shrink-0"
       onClick={() => useStore.setState((s) => ({ rightPanelOpen: !s.rightPanelOpen }))}
     >
       <PanelRight className="size-4" />
