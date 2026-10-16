@@ -59,6 +59,7 @@ export const CivetEvents = {
   daemonEvent: 'civet://daemon-event',
   agentAttention: 'civet://agent-attention',
   clipboard: 'civet://clipboard',
+  pasteAsFile: 'civet://paste-as-file',
   ports: 'civet://ports',
   forwards: 'civet://forwards'
 } as const
@@ -186,6 +187,8 @@ export interface CivetBackend {
   setPrediction(enabled: boolean): Promise<void>
   /** Write text to the system clipboard (Cmd+C on a terminal selection). */
   writeClipboard(text: string): Promise<void>
+  /** The system clipboard's plain text ("" if none), for Paste as File. */
+  readClipboard(): Promise<string>
 
   /** The host's listening ports as last reported (also pushed as `onPorts`). */
   listPorts(hostId: string): Promise<PortsEvent>
@@ -206,6 +209,8 @@ export interface CivetBackend {
   onDaemonEvent(cb: (e: DaemonEventEnvelope) => void): Promise<Unlisten>
   onAgentAttention(cb: (e: AgentAttentionEvent) => void): Promise<Unlisten>
   onClipboard(cb: (e: ClipboardEvent) => void): Promise<Unlisten>
+  /** Edit → Paste as File (⇧⌘V) was chosen, by key or by click. */
+  onPasteAsFile(cb: () => void): Promise<Unlisten>
   onPorts(cb: (e: PortsEvent) => void): Promise<Unlisten>
   onForwards(cb: (e: ForwardsEvent) => void): Promise<Unlisten>
 
@@ -470,6 +475,9 @@ export class TauriBackend implements CivetBackend {
   writeClipboard(text: string) {
     return this.callVoid('write_clipboard', { text })
   }
+  readClipboard() {
+    return this.call<string>('read_clipboard')
+  }
   listPorts(hostId: string) {
     return this.call<PortsEvent>('list_ports', { hostId })
   }
@@ -506,6 +514,9 @@ export class TauriBackend implements CivetBackend {
   }
   onClipboard(cb: (e: ClipboardEvent) => void) {
     return this.on(CivetEvents.clipboard, cb)
+  }
+  onPasteAsFile(cb: () => void) {
+    return this.on(CivetEvents.pasteAsFile, () => cb())
   }
   onPorts(cb: (e: PortsEvent) => void) {
     return this.on(CivetEvents.ports, cb)

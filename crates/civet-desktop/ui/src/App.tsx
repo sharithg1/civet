@@ -14,6 +14,7 @@ import { Workspace } from './components/Workspace'
 import { WorktreeSwitcher } from './components/WorktreeSwitcher'
 import { leaves } from './layout/pane-tree'
 import { useFileDrop } from './lib/file-drop'
+import { usePasteAsFile } from './lib/paste-as-file'
 import {
   activateTabIndex,
   closePanes,
@@ -69,6 +70,7 @@ export function App() {
 
   useShortcuts()
   useFileDrop()
+  usePasteAsFile()
 
   if (!ready) return null
   if (showConnect && !hasHosts) {

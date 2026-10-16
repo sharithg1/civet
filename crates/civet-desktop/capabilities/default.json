@@ -49,6 +49,7 @@
     "allow-set-agent-status",
     "allow-set-prediction",
     "allow-write-clipboard",
+    "allow-read-clipboard",
     "allow-list-ports",
     "allow-forward-port",
     "allow-stop-forward",

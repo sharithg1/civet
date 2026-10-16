@@ -44,6 +44,7 @@ const COMMANDS: &[&str] = &[
     "set_agent_status",
     "set_prediction",
     "write_clipboard",
+    "read_clipboard",
     "list_ports",
     "forward_port",
     "stop_forward",
