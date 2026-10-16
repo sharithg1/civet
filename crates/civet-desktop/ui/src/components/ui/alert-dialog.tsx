@@ -1,7 +1,7 @@
 // shadcn alert-dialog (new-york-v4, added with the shadcn CLI). Civet change:
 // overlay and surface share Orca's dialog styling (see dialog.tsx) so confirms
 // match the other dialogs.
-import * as React from 'react'
+import type * as React from 'react'
 import { cn } from '@/lib/utils'
 import { AlertDialog as AlertDialogPrimitive } from 'radix-ui'
 

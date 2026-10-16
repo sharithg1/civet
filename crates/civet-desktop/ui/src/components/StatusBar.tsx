@@ -15,9 +15,13 @@ export function StatusBar() {
   const hosts = useStore((s) => s.hosts)
   const hostId = active?.hostId ?? hostOrder[0]
   const host = hostId ? hosts[hostId] : undefined
-  const ws = useStore((s) => (active ? s.workspaces[wsKey(active.hostId, active.worktree)] : undefined))
+  const ws = useStore((s) =>
+    active ? s.workspaces[wsKey(active.hostId, active.worktree)] : undefined
+  )
   const focusedId = ws?.tabs.find((t) => t.id === ws.activeTab)?.focused
-  const pane = useStore((s) => (active && focusedId !== undefined ? s.panes[active.hostId]?.[focusedId] : undefined))
+  const pane = useStore((s) =>
+    active && focusedId !== undefined ? s.panes[active.hostId]?.[focusedId] : undefined
+  )
   const connectedCount = hostOrder.filter((h) => hosts[h]?.state === 'connected').length
   let right = `${connectedCount} host${connectedCount === 1 ? '' : 's'} connected`
   if (pane?.agent) {
@@ -56,8 +60,12 @@ function HostPopover({ hostId }: { hostId: string }) {
   const paneCount = panes ? Object.keys(panes).length : (host.upgrade?.livePanes ?? 0)
   const agents = live.filter((p) => p.agent).length
   const shells = live.length - agents
-  const transport = host.transport === 'quic' ? 'QUIC' : host.transport === 'stream' ? 'SSH tunnel' : 'no transport'
-  const mock = backend && 'simulateNetworkDrop' in backend ? (backend as unknown as { simulateNetworkDrop(h: string): void }) : null
+  const transport =
+    host.transport === 'quic' ? 'QUIC' : host.transport === 'stream' ? 'SSH tunnel' : 'no transport'
+  const mock =
+    backend && 'simulateNetworkDrop' in backend
+      ? (backend as unknown as { simulateNetworkDrop(h: string): void })
+      : null
   const btn =
     'h-7 cursor-pointer rounded-md border border-input bg-card text-sm text-soft hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-50'
   return (
@@ -89,14 +97,15 @@ function HostPopover({ hostId }: { hostId: string }) {
           {host.rttMs != null ? ` · ${host.rttMs} ms` : ''}
           {host.daemonVersion ? ` · civetd ${host.daemonVersion}` : ''}
           <br />
-          {agents} agent{agents === 1 ? '' : 's'} and {shells} shell{shells === 1 ? '' : 's'} running under civetd.
-          Closing Civet detaches; nothing stops.
+          {agents} agent{agents === 1 ? '' : 's'} and {shells} shell{shells === 1 ? '' : 's'}{' '}
+          running under civetd. Closing Civet detaches; nothing stops.
         </div>
         {host.upgrade && (
           <div className="rounded-[5px] border border-border px-2.5 py-2 leading-normal">
             <div className="font-mono text-xs text-status-wait">{upgradeSummary(hostId)}</div>
             <div className="mt-1 text-muted-foreground">
-              The older daemon keeps running so your sessions survive. Restarting upgrades it and closes them.
+              The older daemon keeps running so your sessions survive. Restarting upgrades it and
+              closes them.
             </div>
             <button
               type="button"
@@ -113,10 +122,18 @@ function HostPopover({ hostId }: { hostId: string }) {
           </button>
         )}
         <div className="grid grid-cols-2 gap-1.5">
-          <button type="button" className={btn} onClick={() => useStore.setState({ addProject: { hostId } })}>
+          <button
+            type="button"
+            className={btn}
+            onClick={() => useStore.setState({ addProject: { hostId } })}
+          >
             Add project…
           </button>
-          <button type="button" className={btn} onClick={() => useStore.setState({ showConnect: true })}>
+          <button
+            type="button"
+            className={btn}
+            onClick={() => useStore.setState({ showConnect: true })}
+          >
             Connect host…
           </button>
         </div>

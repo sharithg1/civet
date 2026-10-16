@@ -62,7 +62,9 @@ export function AddProjectDialog() {
           <DialogTitle>Add project</DialogTitle>
           <DialogDescription>A git repository on this Mac or a connected host.</DialogDescription>
         </DialogHeader>
-        {shown && <AddProjectForm key={shown.hostId ?? ''} initialHost={shown.hostId} onDone={close} />}
+        {shown && (
+          <AddProjectForm key={shown.hostId ?? ''} initialHost={shown.hostId} onDone={close} />
+        )}
       </DialogContent>
     </Dialog>
   )
@@ -73,7 +75,13 @@ function defaultLocation(): string {
   return s.active?.hostId ?? s.hostOrder[0] ?? 'local'
 }
 
-function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; onDone: () => void }) {
+function AddProjectForm({
+  initialHost,
+  onDone
+}: {
+  initialHost: string | null
+  onDone: () => void
+}) {
   const hostOrder = useStore((s) => s.hostOrder)
   const hosts = useStore((s) => s.hosts)
   const canPick = useStore((s) => s.backend?.kind !== 'mock') && isTauri()
@@ -89,7 +97,11 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
   async function choose() {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const picked = await open({ directory: true, multiple: false, title: 'Choose a git repository' })
+      const picked = await open({
+        directory: true,
+        multiple: false,
+        title: 'Choose a git repository'
+      })
       if (typeof picked === 'string') setPath(picked)
     } catch (err) {
       setError((err as Error).message ?? String(err))
@@ -126,7 +138,11 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
           disabled={busy}
           onValueChange={(v) => {
             if (v === NEW_HOST) {
-              useStore.setState({ addProject: null, addProjectAfterConnect: true, showConnect: true })
+              useStore.setState({
+                addProject: null,
+                addProjectAfterConnect: true,
+                showConnect: true
+              })
               return
             }
             setHostId(v)
@@ -156,7 +172,9 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
           <Input
             id="project-path"
             className="h-8 min-w-0 flex-1 rounded-[5px] border-border bg-field font-mono text-sm shadow-none dark:bg-field"
-            placeholder={isLocal ? '~/src/project' : `~/src/project on ${hosts[hostId]?.label ?? hostId}`}
+            placeholder={
+              isLocal ? '~/src/project' : `~/src/project on ${hosts[hostId]?.label ?? hostId}`
+            }
             value={path}
             spellCheck={false}
             autoFocus
@@ -164,7 +182,13 @@ function AddProjectForm({ initialHost, onDone }: { initialHost: string | null; o
             onChange={(e) => setPath(e.target.value)}
           />
           {isLocal && canPick && (
-            <Button type="button" variant="outline" size="md" disabled={busy} onClick={() => void choose()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="md"
+              disabled={busy}
+              onClick={() => void choose()}
+            >
               Choose…
             </Button>
           )}

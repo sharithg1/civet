@@ -1,22 +1,18 @@
 // shadcn-style context-menu (right click), styled like ./dropdown-menu for
 // Civet v3 (26px rows, 12.5px text, design menu shadow). Only the parts the
 // app uses.
-import * as React from "react"
-import { cn } from "@/lib/utils"
-import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
+import type * as React from 'react'
+import { cn } from '@/lib/utils'
+import { ContextMenu as ContextMenuPrimitive } from 'radix-ui'
 
-function ContextMenu({
-  ...props
-}: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
+function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />
 }
 
 function ContextMenuTrigger({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Trigger>) {
-  return (
-    <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} />
-  )
+  return <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} />
 }
 
 function ContextMenuContent({
@@ -28,7 +24,7 @@ function ContextMenuContent({
       <ContextMenuPrimitive.Content
         data-slot="context-menu-content"
         className={cn(
-          "z-50 max-h-(--radix-context-menu-content-available-height) min-w-[8rem] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-menu data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          'z-50 max-h-(--radix-context-menu-content-available-height) min-w-[8rem] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-menu data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
           className
         )}
         {...props}
@@ -39,10 +35,10 @@ function ContextMenuContent({
 
 function ContextMenuItem({
   className,
-  variant = "default",
+  variant = 'default',
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
-  variant?: "default" | "destructive"
+  variant?: 'default' | 'destructive'
 }) {
   return (
     <ContextMenuPrimitive.Item
@@ -64,7 +60,7 @@ function ContextMenuSeparator({
   return (
     <ContextMenuPrimitive.Separator
       data-slot="context-menu-separator"
-      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      className={cn('-mx-1 my-1 h-px bg-border', className)}
       {...props}
     />
   )
@@ -75,5 +71,5 @@ export {
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuSeparator,
+  ContextMenuSeparator
 }

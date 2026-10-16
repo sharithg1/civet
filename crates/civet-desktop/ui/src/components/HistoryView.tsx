@@ -83,6 +83,7 @@ export function HistoryView({ controller, gaps, onClose }: Props) {
 
   // Re-render content when pages arrive, keeping the previously visible line in place.
   const renderedCount = useRef(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` bumps when the pager mutates in place.
   useEffect(() => {
     const term = termRef.current
     if (!term) return

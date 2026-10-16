@@ -21,7 +21,7 @@ export const DOT_LABEL: Record<DotKind, string> = {
 /** Status of one pane's agent (terminals are always idle). */
 export function paneDot(p: PaneInfo | undefined, connected: boolean): DotKind {
   if (!connected) return 'disc'
-  if (!p || !p.agent) return 'idle'
+  if (!p?.agent) return 'idle'
   if (p.exited && p.exitCode !== null && p.exitCode !== 0) return 'err'
   if (p.exited) return 'idle'
   if (p.status === 'needsInput') return 'wait'
@@ -51,7 +51,9 @@ export function worktreeDot(
 /** Split `NO-TICKET/short-task` into a dimmed prefix and the name. */
 export function splitBranch(branch: string): { prefix: string; name: string } {
   const i = branch.lastIndexOf('/')
-  return i < 0 ? { prefix: '', name: branch } : { prefix: branch.slice(0, i + 1), name: branch.slice(i + 1) }
+  return i < 0
+    ? { prefix: '', name: branch }
+    : { prefix: branch.slice(0, i + 1), name: branch.slice(i + 1) }
 }
 
 export function worktreeBranch(wt: WorktreeInfo): string {
@@ -93,7 +95,8 @@ export function agentTitle(p: PaneInfo): string | null {
   const t = cleanTitle(p.title)
   const low = t.toLowerCase()
   if (!t || GENERIC_AGENT_TITLES.has(low)) return null
-  if (low === (p.agent ?? '').toLowerCase() || low === p.command.join(' ').toLowerCase()) return null
+  if (low === (p.agent ?? '').toLowerCase() || low === p.command.join(' ').toLowerCase())
+    return null
   return t
 }
 
@@ -250,7 +253,10 @@ export function matchFields(
 }
 
 /** Split text into runs of matched / unmatched characters. */
-export function highlightRuns(text: string, idxs: readonly number[]): { s: string; hit: boolean }[] {
+export function highlightRuns(
+  text: string,
+  idxs: readonly number[]
+): { s: string; hit: boolean }[] {
   const set = new Set(idxs)
   const out: { s: string; hit: boolean }[] = []
   text.split('').forEach((ch, i) => {

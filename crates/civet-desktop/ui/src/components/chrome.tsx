@@ -8,7 +8,15 @@ import { useStore, wsKey, wtKey, type Tab } from '@/state/store'
 import type { PaneId, PaneInfo, RepoInfo, WorktreeInfo } from '@/types'
 
 /** Coloured square with the project's initial (sidebar 16px, title bar 14px, switcher 10px). */
-export function ProjectTile({ name, size = 16, className }: { name: string; size?: 10 | 12 | 14 | 16; className?: string }) {
+export function ProjectTile({
+  name,
+  size = 16,
+  className
+}: {
+  name: string
+  size?: 10 | 12 | 14 | 16
+  className?: string
+}) {
   return (
     <span
       aria-hidden
@@ -62,7 +70,10 @@ export function RingGlyph({ size = 10 }: { size?: 10 | 11 }) {
   return (
     <span
       aria-hidden
-      className={cn('shrink-0 rounded-full border-[1.5px] border-faint', size === 10 ? 'size-2.5' : 'size-[11px]')}
+      className={cn(
+        'shrink-0 rounded-full border-[1.5px] border-faint',
+        size === 10 ? 'size-2.5' : 'size-[11px]'
+      )}
     />
   )
 }

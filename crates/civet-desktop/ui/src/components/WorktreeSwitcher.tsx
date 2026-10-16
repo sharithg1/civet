@@ -10,7 +10,15 @@ import { usePrefs } from '@/state/prefs'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { switcherGroups, type SwitcherEntry } from '@/lib/switcher'
-import { ago, highlightRuns, shortPath, worktreeBranch, worktreeDot, worktreeTask, type DotKind } from '@/lib/worktree-view'
+import {
+  ago,
+  highlightRuns,
+  shortPath,
+  worktreeBranch,
+  worktreeDot,
+  worktreeTask,
+  type DotKind
+} from '@/lib/worktree-view'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { ProjectTile, RingGlyph } from './chrome'
 import { StatusDot } from './StatusDot'
@@ -28,7 +36,9 @@ export function WorktreeSwitcher() {
         onCloseAutoFocus={restoreTerminalFocus}
       >
         <DialogTitle className="sr-only">Switch worktree</DialogTitle>
-        <DialogDescription className="sr-only">Type to filter by task, branch or project.</DialogDescription>
+        <DialogDescription className="sr-only">
+          Type to filter by task, branch or project.
+        </DialogDescription>
         {open && <SwitcherBody />}
       </DialogContent>
     </Dialog>
@@ -143,13 +153,20 @@ function SwitcherBody() {
                   aria-current={it.current || undefined}
                   onClick={() => open(it)}
                   onMouseMove={() => i !== sel && setIdx(i)}
-                  className={cn('flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5', i === sel && 'bg-accent')}
+                  className={cn(
+                    'flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5',
+                    i === sel && 'bg-accent'
+                  )}
                 >
                   <StatusDot kind={it.dot} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-[7px]">
                       <span className="min-w-0 truncate font-mono text-sm">
-                        <Hl text={it.name} idxs={it.hits.name} base={it.current ? 'text-foreground' : 'text-body'} />
+                        <Hl
+                          text={it.name}
+                          idxs={it.hits.name}
+                          base={it.current ? 'text-foreground' : 'text-body'}
+                        />
                       </span>
                       {it.isMain && (
                         <span className="shrink-0 rounded-sm bg-muted px-[5px] text-2xs leading-4 font-medium text-body">
@@ -160,7 +177,12 @@ function SwitcherBody() {
                     <div className="flex min-w-0 items-center gap-1 truncate text-xs leading-4 text-faint">
                       {!g.project && (
                         <>
-                          <Hl text={it.project} idxs={it.hits.project} base="text-faint" hit="text-body" />
+                          <Hl
+                            text={it.project}
+                            idxs={it.hits.project}
+                            base="text-faint"
+                            hit="text-body"
+                          />
                           <span className="text-dim">·</span>
                           {it.local ? (
                             <Laptop className="size-3 shrink-0" aria-label="Local" />
@@ -170,18 +192,30 @@ function SwitcherBody() {
                           <span className="shrink-0">{it.host}</span>
                         </>
                       )}
-                      {g.project && !it.task && <span className="truncate font-mono">{shortPath(it.path)}</span>}
+                      {g.project && !it.task && (
+                        <span className="truncate font-mono">{shortPath(it.path)}</span>
+                      )}
                       {it.task && (
                         <>
                           {!g.project && <span className="text-dim">·</span>}
                           <span className="min-w-0 truncate">
-                            <Hl text={it.task} idxs={it.hits.task} base="text-faint" hit="text-body" />
+                            <Hl
+                              text={it.task}
+                              idxs={it.hits.task}
+                              base="text-faint"
+                              hit="text-body"
+                            />
                           </span>
                         </>
                       )}
                     </div>
                   </div>
-                  <span className={cn('shrink-0 font-mono text-2xs whitespace-nowrap', it.current ? 'text-muted-foreground' : 'text-faint')}>
+                  <span
+                    className={cn(
+                      'shrink-0 font-mono text-2xs whitespace-nowrap',
+                      it.current ? 'text-muted-foreground' : 'text-faint'
+                    )}
+                  >
                     {meta}
                   </span>
                   <span className="w-3.5 shrink-0 text-right font-mono text-2xs text-muted-foreground">
@@ -192,7 +226,9 @@ function SwitcherBody() {
             })}
           </div>
         ))}
-        {flat.length === 0 && <div className="p-[22px] text-center text-sm text-faint">No worktrees match.</div>}
+        {flat.length === 0 && (
+          <div className="p-[22px] text-center text-sm text-faint">No worktrees match.</div>
+        )}
       </div>
       <div className="flex gap-4 border-t border-border px-3.5 py-2 font-mono text-2xs text-faint">
         <span>↑↓ move</span>
@@ -205,7 +241,17 @@ function SwitcherBody() {
   )
 }
 
-function Hl({ text, idxs, base, hit = 'text-foreground font-semibold' }: { text: string; idxs: number[]; base: string; hit?: string }) {
+function Hl({
+  text,
+  idxs,
+  base,
+  hit = 'text-foreground font-semibold'
+}: {
+  text: string
+  idxs: number[]
+  base: string
+  hit?: string
+}) {
   if (!idxs.length) return <span className={base}>{text}</span>
   return (
     <>

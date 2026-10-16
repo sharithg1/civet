@@ -88,7 +88,8 @@ export function clipboardImage(data: ClipboardData | null): File | null {
 
 /** File name for a pasted image: `clipboard-<time>.<ext>`. */
 export function clipboardImageName(type: string, now = new Date()): string {
-  const ext = (type.split('/')[1] ?? 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '') || 'png'
+  const ext =
+    (type.split('/')[1] ?? 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '') || 'png'
   const t = now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-')
   return `clipboard-${t}.${ext}`
 }

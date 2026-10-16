@@ -11,12 +11,28 @@
 // lib/window-chrome.ts.
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { ChevronDown, Copy, GitBranch, MoreHorizontal, PanelRight, Plus, Terminal, Trash2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  Copy,
+  GitBranch,
+  MoreHorizontal,
+  PanelRight,
+  Plus,
+  Terminal,
+  Trash2,
+  X
+} from 'lucide-react'
 import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
-import { compactWorktreeName, paneDot, worktreeBranch, worktreeTask, type DotKind } from '@/lib/worktree-view'
+import {
+  compactWorktreeName,
+  paneDot,
+  worktreeBranch,
+  worktreeTask,
+  type DotKind
+} from '@/lib/worktree-view'
 import {
   activateTab,
   closeTab,
@@ -98,7 +114,9 @@ function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string 
   const { repo, info } = wt
   const branch = worktreeBranch(info)
   const task = info.isMain ? null : worktreeTask(info, panesOfWorktree(panes, worktree))
-  const tooltip = [branch, `${repo.name} · ${hostLabel}`, task, 'Switch worktree (⌘K)'].filter(Boolean).join('\n')
+  const tooltip = [branch, `${repo.name} · ${hostLabel}`, task, 'Switch worktree (⌘K)']
+    .filter(Boolean)
+    .join('\n')
   return (
     <button
       type="button"
@@ -130,7 +148,12 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
       >
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={4} className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={4}
+        className="w-56"
+        onCloseAutoFocus={restoreTerminalFocus}
+      >
         <DropdownMenuItem
           onSelect={() => {
             void navigator.clipboard?.writeText(info.path).catch(() => {})
@@ -140,7 +163,9 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
           <Copy />
           Copy remote path
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => useStore.setState({ rightPanelOpen: true, rightTab: 'branch' })}>
+        <DropdownMenuItem
+          onSelect={() => useStore.setState({ rightPanelOpen: true, rightTab: 'branch' })}
+        >
           <GitBranch />
           Branch details
         </DropdownMenuItem>
@@ -217,7 +242,10 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           (no activate / close / reorder); the rest of the bar still works. */}
       <div
         ref={stripRef}
-        className={cn('no-scrollbar ml-2 flex min-w-0 items-center gap-0.5 overflow-x-auto', removing && 'opacity-50')}
+        className={cn(
+          'no-scrollbar ml-2 flex min-w-0 items-center gap-0.5 overflow-x-auto',
+          removing && 'opacity-50'
+        )}
         role="tablist"
         inert={removing}
         aria-disabled={removing || undefined}
@@ -261,7 +289,11 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
               )}
             >
               {t.agent && hasAgentLogo(t.agent.agent) ? (
-                <AgentTabIcon agent={t.agent.agent} dot={paneDot(panes?.[t.agent.id], connected)} active={isActive} />
+                <AgentTabIcon
+                  agent={t.agent.agent}
+                  dot={paneDot(panes?.[t.agent.id], connected)}
+                  active={isActive}
+                />
               ) : t.agent ? (
                 <span className="grid size-3.5 shrink-0 place-items-center">
                   <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} size={6} />
@@ -302,7 +334,12 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
         >
           <Plus className="size-4" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" sideOffset={4} className="w-[200px]" onCloseAutoFocus={restoreTerminalFocus}>
+        <DropdownMenuContent
+          align="start"
+          sideOffset={4}
+          className="w-[200px]"
+          onCloseAutoFocus={restoreTerminalFocus}
+        >
           <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>
             Claude Code<DropdownMenuShortcut>⌥C</DropdownMenuShortcut>
           </DropdownMenuItem>
@@ -326,7 +363,15 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
 }
 
 /** The agent's logo with its status as a corner badge (none when idle). */
-function AgentTabIcon({ agent, dot, active }: { agent: string | null; dot: DotKind; active: boolean }) {
+function AgentTabIcon({
+  agent,
+  dot,
+  active
+}: {
+  agent: string | null
+  dot: DotKind
+  active: boolean
+}) {
   return (
     <span className="relative grid size-3.5 shrink-0 place-items-center">
       <AgentLogo agent={agent} className="size-3.5" />

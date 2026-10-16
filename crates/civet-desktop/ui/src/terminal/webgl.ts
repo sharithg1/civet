@@ -22,10 +22,7 @@ export type WebglHandle = {
 /** Process-wide kill switch once WebGL proved unusable (e.g. WebKitGTK without GPU). */
 let webglBroken = false
 
-export function attachWebgl(
-  term: Terminal,
-  onFallback?: (reason: string) => void
-): WebglHandle {
+export function attachWebgl(term: Terminal, onFallback?: (reason: string) => void): WebglHandle {
   let addon: WebglAddon | null = null
   const handle = {
     get active() {

@@ -103,7 +103,11 @@ export function Sidebar() {
       <SidebarResizeHandle width={width} onDrag={setDragWidth} />
       <SidebarTop />
       <SidebarNav />
-      <div ref={reorder.listRef} className="min-h-0 flex-1 overflow-y-auto pt-3 pb-3" data-sidebar-scroll>
+      <div
+        ref={reorder.listRef}
+        className="min-h-0 flex-1 overflow-y-auto pt-3 pb-3"
+        data-sidebar-scroll
+      >
         {ids.map((id, i) => (
           <HostSection key={id} host={hosts[id]!} reorder={reorder} index={i} />
         ))}
@@ -118,7 +122,13 @@ export function Sidebar() {
  * Drag the sidebar's right edge to resize it (saved in prefs on release);
  * double-click restores the default width.
  */
-function SidebarResizeHandle({ width, onDrag }: { width: number; onDrag: (w: number | null) => void }) {
+function SidebarResizeHandle({
+  width,
+  onDrag
+}: {
+  width: number
+  onDrag: (w: number | null) => void
+}) {
   const [start, setStart] = useState<{ x: number; width: number } | null>(null)
   const at = (e: React.PointerEvent) => clampSidebarWidth(start!.width + e.clientX - start!.x)
   return (
@@ -177,10 +187,20 @@ function SidebarTop() {
         </span>
       )}
       <span className="flex-1" />
-      <IconButton label="Previous worktree (⌥↑)" side="bottom" disabled={!hasActive} onClick={() => cycleWorktree(-1)}>
+      <IconButton
+        label="Previous worktree (⌥↑)"
+        side="bottom"
+        disabled={!hasActive}
+        onClick={() => cycleWorktree(-1)}
+      >
         <ArrowLeft className="size-4" />
       </IconButton>
-      <IconButton label="Next worktree (⌥↓)" side="bottom" disabled={!hasActive} onClick={() => cycleWorktree(1)}>
+      <IconButton
+        label="Next worktree (⌥↓)"
+        side="bottom"
+        disabled={!hasActive}
+        onClick={() => cycleWorktree(1)}
+      >
         <ArrowRight className="size-4" />
       </IconButton>
     </div>
@@ -226,7 +246,12 @@ function SidebarNav() {
           if (target) useStore.setState({ newWorktree: target })
         }}
       />
-      <NavItem icon={<Search />} label="Search" hint="⌘K" onClick={() => useStore.setState({ switcherOpen: true })} />
+      <NavItem
+        icon={<Search />}
+        label="Search"
+        hint="⌘K"
+        onClick={() => useStore.setState({ switcherOpen: true })}
+      />
       <NavItem
         icon={<FolderPlus />}
         label="Add project"
@@ -295,7 +320,11 @@ function SidebarFooter() {
 export function hostMeta(host: HostView): string {
   switch (host.state) {
     case 'connected':
-      return host.rttMs != null ? `${host.rttMs} ms` : host.transport === 'stream' ? 'ssh' : 'connected'
+      return host.rttMs != null
+        ? `${host.rttMs} ms`
+        : host.transport === 'stream'
+          ? 'ssh'
+          : 'connected'
     case 'connecting':
       return 'connecting'
     case 'reconnecting':
@@ -329,7 +358,15 @@ export function HostStateDot({ host }: { host: HostView }) {
 const ROW_ACTION =
   'grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-quiet opacity-0 group-hover:opacity-100 hover:bg-hover-strong hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100 disabled:cursor-default disabled:opacity-0 [&_svg]:size-3.5'
 
-function HostSection({ host, reorder, index }: { host: HostView; reorder: Reorder; index: number }) {
+function HostSection({
+  host,
+  reorder,
+  index
+}: {
+  host: HostView
+  reorder: Reorder
+  index: number
+}) {
   const hostId = host.hostId
   const repos = useStore((s) => s.repos[hostId])
   const collapsed = usePrefs((s) => !!s.collapsedHosts[hostId])
@@ -403,14 +440,20 @@ function HostSection({ host, reorder, index }: { host: HostView; reorder: Reorde
               Connect another host…
             </DropdownMenuItem>
             {(host.state === 'failed' || host.state === 'disconnected') && (
-              <DropdownMenuItem onSelect={() => void reconnectHost(hostId)}>Reconnect</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void reconnectHost(hostId)}>
+                Reconnect
+              </DropdownMenuItem>
             )}
             {(host.state === 'connected' || host.upgrade || host.errorCode === 'daemonBusy') && (
               <DropdownMenuItem onSelect={() => requestRestartDaemon(hostId)}>
-                {host.upgrade ? `Restart daemon (v${host.upgrade.availableVersion})…` : 'Restart daemon…'}
+                {host.upgrade
+                  ? `Restart daemon (v${host.upgrade.availableVersion})…`
+                  : 'Restart daemon…'}
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onSelect={() => void disconnectHost(hostId)}>Disconnect</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void disconnectHost(hostId)}>
+              Disconnect
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -529,7 +572,12 @@ function ProjectGroup({
                 </span>
                 <span className="flex-1 text-left">Archived</span>
                 <span className="text-sm text-dim">{archived.length}</span>
-                <ChevronRight className={cn('size-3.5 text-dim transition-transform', showArchived && 'rotate-90')} />
+                <ChevronRight
+                  className={cn(
+                    'size-3.5 text-dim transition-transform',
+                    showArchived && 'rotate-90'
+                  )}
+                />
               </button>
               {showArchived &&
                 archived.map((wt) => <WorktreeRow key={wt.id} host={host} wt={wt} archived />)}
@@ -563,7 +611,10 @@ function WorktreeMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48" onCloseAutoFocus={restoreTerminalFocus}>
-        <ContextMenuItem disabled={wt.isMain} onSelect={() => setWorktreeArchived(hostId, wt.id, !archived)}>
+        <ContextMenuItem
+          disabled={wt.isMain}
+          onSelect={() => setWorktreeArchived(hostId, wt.id, !archived)}
+        >
           {archived ? <ArchiveRestore /> : <Archive />}
           {archived ? 'Unarchive' : 'Archive'}
         </ContextMenuItem>
@@ -607,7 +658,15 @@ function PullRequestIcon({ pr }: { pr: PullRequestInfo }) {
   )
 }
 
-function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: WorktreeInfo; archived?: boolean }) {
+function WorktreeRow({
+  host,
+  wt,
+  archived = false
+}: {
+  host: HostView
+  wt: WorktreeInfo
+  archived?: boolean
+}) {
   const hostId = host.hostId
   const key = wsKey(hostId, wt.id)
   const selected = useStore((s) => s.active?.hostId === hostId && s.active.worktree === wt.id)
@@ -631,7 +690,10 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
   const task = wt.isMain ? null : worktreeTask(wt, panes)
   const useTask = labelPref === 'task' && !!task
   const title = wt.isMain ? branch : useTask ? task! : branch
-  const newest = panes.reduce<number | null>((m, p) => (m == null || p.createdAtMs > m ? p.createdAtMs : m), null)
+  const newest = panes.reduce<number | null>(
+    (m, p) => (m == null || p.createdAtMs > m ? p.createdAtMs : m),
+    null
+  )
   const showTabs = tabs.length > 0 && (tabsPref === 'all' || (tabsPref === 'selected' && selected))
   return (
     <WorktreeMenu hostId={hostId} wt={wt} archived={archived} removing={removing}>
@@ -663,7 +725,12 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
             {removing ? (
               <Spinner aria-label="Removing" className="size-3.5 text-faint" />
             ) : (
-              <StatusDot kind={dot} size={6} showIdle className={cn(dot === 'idle' && 'border-0 bg-ghost')} />
+              <StatusDot
+                kind={dot}
+                size={6}
+                showIdle
+                className={cn(dot === 'idle' && 'border-0 bg-ghost')}
+              />
             )}
           </span>
           <span
@@ -714,7 +781,12 @@ function WorktreeRow({ host, wt, archived = false }: { host: HostView; wt: Workt
                   >
                     {t.label}
                   </span>
-                  <span className={cn('min-w-0 flex-1 truncate text-dim', t.what.mono && 'font-mono text-xs')}>
+                  <span
+                    className={cn(
+                      'min-w-0 flex-1 truncate text-dim',
+                      t.what.mono && 'font-mono text-xs'
+                    )}
+                  >
                     {t.what.text}
                   </span>
                 </div>

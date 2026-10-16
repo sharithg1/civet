@@ -44,7 +44,10 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
           type="button"
           onClick={() =>
             useStore.setState((s) => ({
-              dismissedUpgrades: { ...s.dismissedUpgrades, [hostId]: `${u.runningVersion}>${u.availableVersion}` }
+              dismissedUpgrades: {
+                ...s.dismissedUpgrades,
+                [hostId]: `${u.runningVersion}>${u.availableVersion}`
+              }
             }))
           }
           className="h-[22px] shrink-0 cursor-pointer px-1.5 font-sans text-xs text-faint hover:text-foreground"
@@ -70,7 +73,9 @@ export function ConnectionBanner({ hostId }: { hostId: string }) {
       className="flex shrink-0 items-center gap-2 border-b border-border px-[18px] py-1 font-mono text-xs text-status-err-text"
     >
       <span className="min-w-0 truncate" title={host.message ?? undefined}>
-        {host.state === 'failed' ? `connection to ${host.label} failed` : `disconnected from ${host.label}`}
+        {host.state === 'failed'
+          ? `connection to ${host.label} failed`
+          : `disconnected from ${host.label}`}
         {host.message && <span className="text-faint"> · {host.message}</span>}
       </span>
       <span className="flex-1" />

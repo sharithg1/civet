@@ -126,7 +126,9 @@ describe('MockBackend', () => {
     expect((await b.forwardPort('devbox', 3001)).localPort).toBe(51842)
     // Idempotent; a different explicit local port is refused.
     expect((await b.forwardPort('devbox', 3001)).localPort).toBe(51842)
-    await expect(b.forwardPort('devbox', 3001, 9000)).rejects.toMatchObject({ code: 'alreadyExists' })
+    await expect(b.forwardPort('devbox', 3001, 9000)).rejects.toMatchObject({
+      code: 'alreadyExists'
+    })
     await b.stopForward('devbox', 5173)
     await expect(b.stopForward('devbox', 5173)).rejects.toMatchObject({ code: 'notFound' })
     expect(events.at(-1)).toEqual([3001])

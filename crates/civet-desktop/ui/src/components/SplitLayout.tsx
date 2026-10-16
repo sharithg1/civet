@@ -60,7 +60,10 @@ export function SplitLayout({ hostId, wsKey, tabId, node, focused, multiPane, pa
   }
   const common = { hostId, wsKey, tabId, focused, multiPane }
   return (
-    <div ref={ref} className={`flex h-full w-full min-h-0 min-w-0 ${vertical ? 'flex-row' : 'flex-col'}`}>
+    <div
+      ref={ref}
+      className={`flex h-full w-full min-h-0 min-w-0 ${vertical ? 'flex-row' : 'flex-col'}`}
+    >
       <div className="min-h-0 min-w-0" style={{ flex: `${node.ratio} 1 0` }}>
         <SplitLayout {...common} node={node.a} path={[...path, 'a']} />
       </div>

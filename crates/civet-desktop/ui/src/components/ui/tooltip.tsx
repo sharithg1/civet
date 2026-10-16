@@ -1,6 +1,6 @@
 // Copied from Orca: src/renderer/src/components/ui/tooltip.tsx (shadcn tooltip with
 // non-hoverable content and a tab-preview variant), unchanged.
-import * as React from 'react'
+import type * as React from 'react'
 import * as TooltipPrimitive from 'radix-ui/tooltip'
 
 import { cva, type VariantProps } from 'class-variance-authority'

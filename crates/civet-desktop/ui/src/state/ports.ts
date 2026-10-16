@@ -114,7 +114,11 @@ function setPins(hostId: string, f: (pins: PinnedForward[]) => PinnedForward[]):
   setPrefs({ pinnedForwards: next.length ? { ...rest, [hostId]: next } : rest })
 }
 
-export function isPinned(pins: Record<string, PinnedForward[]>, hostId: string, remote: number): boolean {
+export function isPinned(
+  pins: Record<string, PinnedForward[]>,
+  hostId: string,
+  remote: number
+): boolean {
   return (pins[hostId] ?? []).some((p) => p.remote === remote)
 }
 
@@ -137,7 +141,11 @@ export async function forwardPort(
         5000
       )
     }
-    if (opts.pin) setPins(hostId, (p) => [...p.filter((x) => x.remote !== remote), { remote, local: f.localPort }])
+    if (opts.pin)
+      setPins(hostId, (p) => [
+        ...p.filter((x) => x.remote !== remote),
+        { remote, local: f.localPort }
+      ])
     return f
   } catch (err) {
     reportError(`Could not forward port ${remote}`, err)
@@ -151,7 +159,8 @@ export async function stopForward(hostId: string, remote: number): Promise<void>
   try {
     await b().stopForward(hostId, remote)
   } catch (err) {
-    if (CivetError.from(err).code !== 'notFound') reportError(`Could not stop forwarding port ${remote}`, err)
+    if (CivetError.from(err).code !== 'notFound')
+      reportError(`Could not stop forwarding port ${remote}`, err)
   }
 }
 

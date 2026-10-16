@@ -16,8 +16,12 @@ describe('Shift+Enter', () => {
   it('sends ESC CR once and swallows the key', () => {
     const sent: string[] = []
     expect(handleShiftEnter(key({ shiftKey: true }), (d) => sent.push(d))).toBe(false)
-    expect(handleShiftEnter(key({ shiftKey: true, type: 'keypress' }), (d) => sent.push(d))).toBe(false)
-    expect(handleShiftEnter(key({ shiftKey: true, type: 'keyup' }), (d) => sent.push(d))).toBe(false)
+    expect(handleShiftEnter(key({ shiftKey: true, type: 'keypress' }), (d) => sent.push(d))).toBe(
+      false
+    )
+    expect(handleShiftEnter(key({ shiftKey: true, type: 'keyup' }), (d) => sent.push(d))).toBe(
+      false
+    )
     expect(sent).toEqual([SHIFT_ENTER_SEQUENCE])
   })
 

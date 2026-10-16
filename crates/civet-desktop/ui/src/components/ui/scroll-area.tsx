@@ -1,6 +1,6 @@
 // Copied from Orca: src/renderer/src/components/ui/scroll-area.tsx (visible thumb,
 // viewport props), unchanged.
-import * as React from 'react'
+import type * as React from 'react'
 import * as ScrollAreaPrimitive from 'radix-ui/scroll-area'
 
 import { cn } from '@/lib/utils'

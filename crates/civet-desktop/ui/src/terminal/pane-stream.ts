@@ -72,7 +72,8 @@ export class PaneStream {
     if (isFull(r)) {
       // Full starts with RIS: xterm's scrollback is cleared, then
       // historyStart..historyLines is replayed.
-      this.segments = r.historyLines > r.historyStart ? [{ start: r.historyStart, end: r.historyLines }] : []
+      this.segments =
+        r.historyLines > r.historyStart ? [{ start: r.historyStart, end: r.historyLines }] : []
       this.gaps = []
     } else {
       if (hasHistoryGap(r) || r.historyStart > this.historyLines) {

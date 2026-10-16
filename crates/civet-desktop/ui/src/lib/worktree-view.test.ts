@@ -53,7 +53,10 @@ describe('status dots', () => {
     expect(paneDot(pane({ agent: 'claude', status: 'running' }), false)).toBe('disc')
   })
   it('aggregates with attention priority and unread done', () => {
-    const panes = [pane({ agent: 'c', status: 'running' }), pane({ id: 2, agent: 'c', status: 'needsInput' })]
+    const panes = [
+      pane({ agent: 'c', status: 'running' }),
+      pane({ id: 2, agent: 'c', status: 'needsInput' })
+    ]
     expect(worktreeDot(panes, true)).toBe('wait')
     expect(worktreeDot([pane({ agent: 'c', status: 'done' })], true, 'done')).toBe('ok')
     expect(worktreeDot([], true)).toBe('idle')
@@ -70,7 +73,10 @@ describe('labels', () => {
   it('derives the task from the oldest agent pane title', () => {
     expect(worktreeTask(wt, [pane({ agent: 'claude', title: 'fix-pdf' })])).toBeNull()
     expect(
-      worktreeTask(wt, [pane({ id: 3, agent: 'claude', title: '⠂ Fix blank pages' }), pane({ title: 'zsh' })])
+      worktreeTask(wt, [
+        pane({ id: 3, agent: 'claude', title: '⠂ Fix blank pages' }),
+        pane({ title: 'zsh' })
+      ])
     ).toBe('Fix blank pages')
   })
   it('numbers tabs by kind', () => {
@@ -95,7 +101,9 @@ describe('compact worktree name', () => {
     expect(compactWorktreeName('desktop/codex-tabs-resizable-sidebar')).toBe('codex-tabs')
     expect(compactWorktreeName('main')).toBe('main')
     expect(compactWorktreeName('NO-TICKET/fix-pdf')).toBe('fix-pdf')
-    expect(compactWorktreeName('a/supercalifragilisticexpialidocious-x')).toBe('supercalifragilisticexpialidocious')
+    expect(compactWorktreeName('a/supercalifragilisticexpialidocious-x')).toBe(
+      'supercalifragilisticexpialidocious'
+    )
     expect(compactWorktreeName('feat/short_name.with.dots-and-more')).toBe('short_name.with')
   })
 })
@@ -136,8 +144,12 @@ describe('session label from the first prompt', () => {
   it('placeholder title falls back to the prompt, a real title wins', () => {
     expect(paneWhat(claude({ title: '✳ Claude Code' })).text).toBe('new session')
     expect(paneWhat(claude({ title: '✳ Claude Code', prompt: 'hi' })).text).toBe('hi')
-    expect(paneWhat(claude({ title: '✳ Worktree cleanup', prompt: 'hi' })).text).toBe('Worktree cleanup')
-    expect(worktreeTask(wt, [claude({ title: '✳ Claude Code', prompt: 'Fix copay' })])).toBe('Fix copay')
+    expect(paneWhat(claude({ title: '✳ Worktree cleanup', prompt: 'hi' })).text).toBe(
+      'Worktree cleanup'
+    )
+    expect(worktreeTask(wt, [claude({ title: '✳ Claude Code', prompt: 'Fix copay' })])).toBe(
+      'Fix copay'
+    )
     expect(worktreeTask(wt, [claude({ title: '✳ Claude Code' })])).toBeNull()
   })
 })

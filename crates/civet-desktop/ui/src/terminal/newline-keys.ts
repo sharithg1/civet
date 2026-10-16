@@ -4,7 +4,10 @@
 // in VS Code) and zsh's line editor inserts as a literal newline. Installed
 // in the pane's custom key handler, before the clipboard keys.
 
-export type NewlineKeyEvent = Pick<KeyboardEvent, 'type' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'> & {
+export type NewlineKeyEvent = Pick<
+  KeyboardEvent,
+  'type' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'
+> & {
   preventDefault(): void
 }
 

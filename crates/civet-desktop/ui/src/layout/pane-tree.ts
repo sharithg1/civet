@@ -36,7 +36,11 @@ export function splitLeaf(
       ? { type: 'split', dir, ratio: 0.5, a: node, b: leaf(newPane) }
       : node
   }
-  return { ...node, a: splitLeaf(node.a, target, newPane, dir), b: splitLeaf(node.b, target, newPane, dir) }
+  return {
+    ...node,
+    a: splitLeaf(node.a, target, newPane, dir),
+    b: splitLeaf(node.b, target, newPane, dir)
+  }
 }
 
 /** Remove a leaf; its sibling takes the parent's place. Returns null if the tree is now empty. */

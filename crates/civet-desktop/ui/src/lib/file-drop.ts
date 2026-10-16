@@ -12,7 +12,9 @@ import type { PaneId } from '@/types'
 type Target = { hostId: string; pane: PaneId }
 
 function paneElementAt(x: number, y: number): HTMLElement | null {
-  return document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-pane-id][data-host-id]') ?? null
+  return (
+    document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-pane-id][data-host-id]') ?? null
+  )
 }
 
 function focusedTarget(): Target | null {

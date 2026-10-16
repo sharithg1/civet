@@ -23,12 +23,17 @@ import { useWorktreeInfo } from './chrome'
 export function RemoveWorktreeDialog() {
   const req = useStore((s) => s.removeWorktree)
   return (
-    <AlertDialog open={req !== null} onOpenChange={(o) => !o && useStore.setState({ removeWorktree: null })}>
+    <AlertDialog
+      open={req !== null}
+      onOpenChange={(o) => !o && useStore.setState({ removeWorktree: null })}
+    >
       <AlertDialogContent
         className="w-[420px] max-w-[calc(100vw-32px)] gap-2.5 sm:max-w-[420px]"
         onCloseAutoFocus={restoreTerminalFocus}
       >
-        {req && <Body key={`${req.hostId}:${req.worktree}`} hostId={req.hostId} worktree={req.worktree} />}
+        {req && (
+          <Body key={`${req.hostId}:${req.worktree}`} hostId={req.hostId} worktree={req.worktree} />
+        )}
       </AlertDialogContent>
     </AlertDialog>
   )
@@ -42,10 +47,15 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
   const close = () => useStore.setState({ removeWorktree: null })
   if (!wt) return null
   const live = panesOfWorktree(allPanes, worktree).filter((p) => !p.exited)
-  const busyAgents = live.filter((p) => p.agent && (p.status === 'running' || p.status === 'needsInput')).length
+  const busyAgents = live.filter(
+    (p) => p.agent && (p.status === 'running' || p.status === 'needsInput')
+  ).length
   const checks: { bad: boolean; text: string }[] = [
     busyAgents
-      ? { bad: true, text: `${busyAgents} agent session${busyAgents === 1 ? '' : 's'} still active` }
+      ? {
+          bad: true,
+          text: `${busyAgents} agent session${busyAgents === 1 ? '' : 's'} still active`
+        }
       : { bad: false, text: 'No agent is working here' },
     live.length
       ? { bad: false, text: `${live.length} session${live.length === 1 ? '' : 's'} will be closed` }
@@ -65,13 +75,13 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
   }
   return (
     <>
-      <AlertDialogTitle>
-        Remove {splitBranch(worktreeBranch(wt.info)).name}?
-      </AlertDialogTitle>
+      <AlertDialogTitle>Remove {splitBranch(worktreeBranch(wt.info)).name}?</AlertDialogTitle>
       <AlertDialogDescription className="sr-only">{wt.info.path}</AlertDialogDescription>
       {checks.map((c) => (
         <div key={c.text} className="flex gap-[9px] text-sm text-soft">
-          <span className={c.bad ? 'w-3 font-mono text-status-err' : 'w-3 font-mono text-status-ok'}>
+          <span
+            className={c.bad ? 'w-3 font-mono text-status-err' : 'w-3 font-mono text-status-ok'}
+          >
             {c.bad ? '!' : '✓'}
           </span>
           <span className="min-w-0">{c.text}</span>
@@ -81,7 +91,13 @@ function Body({ hostId, worktree }: { hostId: string; worktree: string }) {
         <Button type="button" variant="outline" size="md" onClick={close}>
           Cancel
         </Button>
-        <Button type="button" size="md" variant={force ? 'destructive' : 'default'} disabled={removing} onClick={run}>
+        <Button
+          type="button"
+          size="md"
+          variant={force ? 'destructive' : 'default'}
+          disabled={removing}
+          onClick={run}
+        >
           {force ? 'Remove anyway' : 'Remove'}
         </Button>
       </div>

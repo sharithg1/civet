@@ -31,7 +31,10 @@ export function RightPanel() {
   const forwardCount = usePorts((s) => (active ? (s.forwards[active.hostId]?.length ?? 0) : 0))
   return (
     <aside className="flex min-h-0 w-[360px] shrink-0 flex-col border-l border-border bg-background">
-      <div data-tauri-drag-region="deep" className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none">
+      <div
+        data-tauri-drag-region="deep"
+        className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none"
+      >
         <div className="flex items-center gap-0.5" role="tablist">
           {TABS.map(([id, label, Icon]) => (
             <button
@@ -47,7 +50,9 @@ export function RightPanel() {
             >
               <Icon className="size-3.5 shrink-0" />
               {label}
-              {id === 'ports' && forwardCount > 0 && <span className="font-mono text-xs text-quiet">{forwardCount}</span>}
+              {id === 'ports' && forwardCount > 0 && (
+                <span className="font-mono text-xs text-quiet">{forwardCount}</span>
+              )}
             </button>
           ))}
         </div>
@@ -73,7 +78,11 @@ function Empty({ icon: Icon, children }: { icon: typeof FileText; children: Reac
 }
 
 function Code({ children }: { children: React.ReactNode }) {
-  return <span className="rounded-[4px] bg-secondary px-1 py-px font-mono text-xs text-soft">{children}</span>
+  return (
+    <span className="rounded-[4px] bg-secondary px-1 py-px font-mono text-xs text-soft">
+      {children}
+    </span>
+  )
 }
 
 function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string; tab: RightTab }) {
@@ -85,15 +94,16 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   if (tab === 'files') {
     return (
       <Empty icon={FileText}>
-        File browsing isn&apos;t available yet: civetd doesn&apos;t list a worktree&apos;s files. Use a Terminal tab{' '}
-        <Code>⌥T</Code> meanwhile.
+        File browsing isn&apos;t available yet: civetd doesn&apos;t list a worktree&apos;s files.
+        Use a Terminal tab <Code>⌥T</Code> meanwhile.
       </Empty>
     )
   }
   if (tab === 'changes') {
     return (
       <Empty icon={Diff}>
-        Git status and diffs aren&apos;t reported by civetd yet. Run <Code>git status</Code> in a Terminal tab.
+        Git status and diffs aren&apos;t reported by civetd yet. Run <Code>git status</Code> in a
+        Terminal tab.
       </Empty>
     )
   }
@@ -147,19 +157,29 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
           </IconButton>
         </div>
         <div className="text-sm text-quiet">
-          {info.isMain ? `Tracks ${repo.defaultBranch ?? 'the default branch'}` : `In ${repo.name}`} on{' '}
-          {host?.label ?? hostId}
+          {info.isMain ? `Tracks ${repo.defaultBranch ?? 'the default branch'}` : `In ${repo.name}`}{' '}
+          on {host?.label ?? hostId}
         </div>
       </div>
 
       <Section title="Sessions" count={panes.length}>
-        {panes.length === 0 && <div className="px-3 py-2 text-sm text-quiet">No sessions running</div>}
+        {panes.length === 0 && (
+          <div className="px-3 py-2 text-sm text-quiet">No sessions running</div>
+        )}
         {panes.map((p) => {
           const dot = paneDot(p, connected)
           return (
-            <div key={p.id} className="flex h-8 items-center gap-2.5 px-3 text-sm" title={DOT_LABEL[dot]}>
+            <div
+              key={p.id}
+              className="flex h-8 items-center gap-2.5 px-3 text-sm"
+              title={DOT_LABEL[dot]}
+            >
               <span className="grid size-3.5 shrink-0 place-items-center">
-                {p.agent ? <StatusDot kind={dot} size={6} /> : <Terminal className="size-3.5 text-quiet" />}
+                {p.agent ? (
+                  <StatusDot kind={dot} size={6} />
+                ) : (
+                  <Terminal className="size-3.5 text-quiet" />
+                )}
               </span>
               <span className="min-w-0 truncate text-soft">{p.title || p.command.join(' ')}</span>
               <span className="ml-auto shrink-0 text-xs text-quiet">
@@ -182,7 +202,9 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
       </Section>
 
       <Section title="Pull request">
-        <div className="px-3 py-2 text-sm text-quiet">PR and unpushed-commit status aren&apos;t reported by civetd yet.</div>
+        <div className="px-3 py-2 text-sm text-quiet">
+          PR and unpushed-commit status aren&apos;t reported by civetd yet.
+        </div>
       </Section>
 
       {!info.isMain && (
@@ -202,7 +224,15 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
 }
 
 /** Cursor's "1 File Changed" strip: a hairline-ruled header row above a list. */
-function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
+function Section({
+  title,
+  count,
+  children
+}: {
+  title: string
+  count?: number
+  children: React.ReactNode
+}) {
   return (
     <div className="flex flex-col pb-1">
       <div className="flex h-9 items-center gap-1.5 border-y border-border px-3 text-sm text-quiet">

@@ -105,7 +105,11 @@ export class PaneController {
       const buf = this.term.buffer.active
       if (y === 0 && buf.type === 'normal' && buf.baseY > 0) this.cb.onScrollTop()
     })
-    this.cleanups.push(() => d1.dispose(), () => d2.dispose(), () => d3.dispose())
+    this.cleanups.push(
+      () => d1.dispose(),
+      () => d2.dispose(),
+      () => d3.dispose()
+    )
 
     // Shift+Enter inserts a newline (see newline-keys); Cmd+C copies xterm's
     // selection, Cmd+A selects all (see clipboard-keys).
@@ -119,9 +123,11 @@ export class PaneController {
         handleClipboardKey(ev, this.term, {
           isMac,
           copy: (text) => {
-            this.backend.writeClipboard(text).catch((err: unknown) =>
-              this.cb.onError(`copy: ${String((err as Error).message ?? err)}`)
-            )
+            this.backend
+              .writeClipboard(text)
+              .catch((err: unknown) =>
+                this.cb.onError(`copy: ${String((err as Error).message ?? err)}`)
+              )
           }
         })
     )
@@ -166,7 +172,12 @@ export class PaneController {
       const { cols, rows } = attachment.info.size
       // The first record is a Full carrying the size; only pre-size if it has
       // not been applied yet so the initial paint lands at the right geometry.
-      if (!this.sawRecord && cols > 0 && rows > 0 && (cols !== this.term.cols || rows !== this.term.rows)) {
+      if (
+        !this.sawRecord &&
+        cols > 0 &&
+        rows > 0 &&
+        (cols !== this.term.cols || rows !== this.term.rows)
+      ) {
         this.batcher.flushNow()
         if (!this.sawRecord) this.term.resize(cols, rows)
       }
@@ -215,12 +226,10 @@ export class PaneController {
     }
     if (this.lastRequested?.cols === cols && this.lastRequested.rows === rows) return
     this.lastRequested = { cols, rows }
-    this.backend
-      .resizePane(this.hostId, this.pane, termSize(cols, rows))
-      .catch((err: unknown) => {
-        this.lastRequested = null
-        this.cb.onError(`resize: ${(err as Error).message ?? String(err)}`)
-      })
+    this.backend.resizePane(this.hostId, this.pane, termSize(cols, rows)).catch((err: unknown) => {
+      this.lastRequested = null
+      this.cb.onError(`resize: ${(err as Error).message ?? String(err)}`)
+    })
   }
 
   /** Oldest absolute history line still present in xterm's own scrollback. */

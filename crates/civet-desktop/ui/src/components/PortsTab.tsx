@@ -94,7 +94,9 @@ export function PortsTab({
     <div className="flex flex-col gap-2.5 px-2 py-0.5 text-sm">
       {isLocal && <Note>Ports on This Mac are already reachable at localhost.</Note>}
       {!report || report.status === 'pending' ? (
-        <div className="text-xs text-faint">{connected ? 'Looking for listening ports…' : 'Not connected.'}</div>
+        <div className="text-xs text-faint">
+          {connected ? 'Looking for listening ports…' : 'Not connected.'}
+        </div>
       ) : null}
 
       {!isLocal && (
@@ -114,12 +116,17 @@ export function PortsTab({
                 info={info}
                 live={!!info}
                 pane={paneOf(info?.pane ?? null)}
-                worktreeLabel={info && info.worktree !== worktree ? worktreeName(info.worktree) : null}
+                worktreeLabel={
+                  info && info.worktree !== worktree ? worktreeName(info.worktree) : null
+                }
                 onPane={() => info && reveal(info)}
                 sub={<ForwardSub f={f} listening={!!info || report?.status !== 'watching'} />}
                 error={f.lastError}
               >
-                <IconButton label={`Open ${localUrl(f.localPort)}`} onClick={() => void openLocalPort(f.localPort)}>
+                <IconButton
+                  label={`Open ${localUrl(f.localPort)}`}
+                  onClick={() => void openLocalPort(f.localPort)}
+                >
                   <ExternalLink />
                 </IconButton>
                 <IconButton
@@ -129,7 +136,10 @@ export function PortsTab({
                 >
                   <Pin className={pinned ? 'fill-current' : undefined} />
                 </IconButton>
-                <IconButton label="Stop forwarding" onClick={() => void stopForward(hostId, f.remotePort)}>
+                <IconButton
+                  label="Stop forwarding"
+                  onClick={() => void stopForward(hostId, f.remotePort)}
+                >
                   <X />
                 </IconButton>
               </PortRow>
@@ -141,7 +151,9 @@ export function PortsTab({
       {report?.status === 'watching' && (
         <Group title="This worktree" count={here.length}>
           {here.length === 0 && (
-            <div className="text-xs text-muted-foreground">Nothing in this worktree is listening.</div>
+            <div className="text-xs text-muted-foreground">
+              Nothing in this worktree is listening.
+            </div>
           )}
           {here.map((p) => detectedRow(p, false))}
         </Group>
@@ -154,7 +166,9 @@ export function PortsTab({
             onClick={() => setShowElsewhere((v) => !v)}
             className="flex cursor-pointer items-center gap-1 text-left text-xs text-faint hover:text-foreground"
           >
-            <ChevronRight className={cn('size-3 transition-transform', showElsewhere && 'rotate-90')} />
+            <ChevronRight
+              className={cn('size-3 transition-transform', showElsewhere && 'rotate-90')}
+            />
             Elsewhere on host <span className="text-dim">· {elsewhere.length}</span>
           </button>
           {showElsewhere && elsewhere.map((p) => detectedRow(p, true))}
@@ -180,7 +194,15 @@ function Note({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Group({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+function Group({
+  title,
+  count,
+  children
+}: {
+  title: string
+  count: number
+  children: React.ReactNode
+}) {
   return (
     <div className="flex flex-col gap-2 border-t border-border pt-2.5">
       <div className="text-xs text-faint">
@@ -360,15 +382,27 @@ function AddForward({
       }}
     >
       <div className="flex items-end gap-2">
-        <PortField label="Remote" value={remote} onChange={setRemote} placeholder="8080" autoFocus />
+        <PortField
+          label="Remote"
+          value={remote}
+          onChange={setRemote}
+          placeholder="8080"
+          autoFocus
+        />
         <span className="pb-1 text-faint">→</span>
         <PortField label="Local" value={local} onChange={setLocal} placeholder="auto" />
       </div>
       <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-        <Checkbox checked={pinned} onCheckedChange={(v) => setPinned(v === true)} className="size-3.5" />
+        <Checkbox
+          checked={pinned}
+          onCheckedChange={(v) => setPinned(v === true)}
+          className="size-3.5"
+        />
         Restore on connect
       </label>
-      {r != null && existing.includes(r) && <div className="text-xs text-faint">{r} is already forwarded.</div>}
+      {r != null && existing.includes(r) && (
+        <div className="text-xs text-faint">{r} is already forwarded.</div>
+      )}
       <div className="flex gap-1.5">
         <button
           type="submit"

@@ -118,7 +118,8 @@
 :root {
   /* UI text uses the platform font (SF Pro on macOS), as Cursor does; code,
      branches and the terminal stay on Geist Mono. */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'Geist Variable', system-ui, sans-serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'Geist Variable', system-ui, sans-serif;
   --font-mono:
     'Geist Mono Variable', 'Geist Mono', 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Consolas,
     monospace;

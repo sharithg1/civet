@@ -13,7 +13,7 @@ export function loadSavedHosts(): SavedHost[] {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null
     const list = raw ? (JSON.parse(raw) as unknown) : []
-    return Array.isArray(list) ? (list as SavedHost[]).filter((h) => h && h.hostId && h.target) : []
+    return Array.isArray(list) ? (list as SavedHost[]).filter((h) => h?.hostId && h.target) : []
   } catch {
     return []
   }

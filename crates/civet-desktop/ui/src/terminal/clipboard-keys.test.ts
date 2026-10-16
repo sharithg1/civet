@@ -41,7 +41,9 @@ describe('handleClipboardKey', () => {
 
   it('only copies on keydown', () => {
     const copy = vi.fn()
-    expect(handleClipboardKey(key('c', { metaKey: true }, 'keyup'), term('x'), { isMac: true, copy })).toBe(false)
+    expect(
+      handleClipboardKey(key('c', { metaKey: true }, 'keyup'), term('x'), { isMac: true, copy })
+    ).toBe(false)
     expect(copy).not.toHaveBeenCalled()
   })
 
@@ -69,9 +71,21 @@ describe('handleClipboardKey', () => {
 
   it('does nothing off macOS or with extra modifiers', () => {
     const copy = vi.fn()
-    expect(handleClipboardKey(key('c', { metaKey: true }), term('x'), { isMac: false, copy })).toBe(true)
-    expect(handleClipboardKey(key('C', { metaKey: true, shiftKey: true }), term('x'), { isMac: true, copy })).toBe(true)
-    expect(handleClipboardKey(key('c', { metaKey: true, altKey: true }), term('x'), { isMac: true, copy })).toBe(true)
+    expect(handleClipboardKey(key('c', { metaKey: true }), term('x'), { isMac: false, copy })).toBe(
+      true
+    )
+    expect(
+      handleClipboardKey(key('C', { metaKey: true, shiftKey: true }), term('x'), {
+        isMac: true,
+        copy
+      })
+    ).toBe(true)
+    expect(
+      handleClipboardKey(key('c', { metaKey: true, altKey: true }), term('x'), {
+        isMac: true,
+        copy
+      })
+    ).toBe(true)
     expect(copy).not.toHaveBeenCalled()
   })
 })
@@ -79,7 +93,9 @@ describe('handleClipboardKey', () => {
 describe('isMacPlatform', () => {
   it('detects macOS', () => {
     expect(isMacPlatform({ platform: 'MacIntel' })).toBe(true)
-    expect(isMacPlatform({ platform: '', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' })).toBe(true)
+    expect(
+      isMacPlatform({ platform: '', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' })
+    ).toBe(true)
     expect(isMacPlatform({ platform: 'Linux x86_64', userAgent: 'X11' })).toBe(false)
     expect(isMacPlatform({})).toBe(false)
   })

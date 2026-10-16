@@ -40,7 +40,8 @@ export function useReorder(ids: readonly string[], onReorder: (ids: string[]) =>
     let active = false
     let to = -1
     const targetIndex = (y: number): number => {
-      const items = listRef.current?.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]') ?? []
+      const items =
+        listRef.current?.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]') ?? []
       for (let i = 0; i < items.length; i++) {
         const r = items[i]!.getBoundingClientRect()
         if (y < r.top + r.height / 2) return i

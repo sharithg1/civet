@@ -63,7 +63,9 @@ function ToastCard({ toast: t }: { toast: Toast }) {
       )}
       <div className="min-w-0 flex-1">
         <div className={cn(t.kind !== 'info' && 'font-medium text-foreground')}>{t.title}</div>
-        {t.body && <div className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{t.body}</div>}
+        {t.body && (
+          <div className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{t.body}</div>
+        )}
       </div>
       {t.kind !== 'info' && (
         <button

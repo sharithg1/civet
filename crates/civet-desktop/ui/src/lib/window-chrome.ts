@@ -20,7 +20,8 @@ function isMac(): boolean {
 
 /** True when the window draws its content under a transparent macOS title bar. */
 export function hasOverlayTitleBar(): boolean {
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('overlay')) return true
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('overlay'))
+    return true
   return isMac() && isTauri()
 }
 
@@ -35,7 +36,11 @@ export function useTitleBarInset(): number {
     void import('@tauri-apps/api/window')
       .then(async ({ getCurrentWindow }) => {
         const w = getCurrentWindow()
-        const check = () => void w.isFullscreen().then((f) => !cancelled && setFullscreen(f)).catch(() => {})
+        const check = () =>
+          void w
+            .isFullscreen()
+            .then((f) => !cancelled && setFullscreen(f))
+            .catch(() => {})
         check()
         const un = await w.onResized(check)
         if (cancelled) un()

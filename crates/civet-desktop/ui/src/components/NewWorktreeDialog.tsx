@@ -8,7 +8,14 @@
 
 import { useState } from 'react'
 import { createWorktreeWithSteps, useStore, wtKey } from '@/state/store'
-import { agentCommandFor, setPrefs, stepAgent, usePrefs, type CreateStep, type StepKind } from '@/state/prefs'
+import {
+  agentCommandFor,
+  setPrefs,
+  stepAgent,
+  usePrefs,
+  type CreateStep,
+  type StepKind
+} from '@/state/prefs'
 import { splitShellWords } from '@/lib/shell-words'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
@@ -49,7 +56,9 @@ function switchedCmd(from: CreateStep, to: StepKind): string {
 
 function defaultSteps(hostId: string, repo: string): CreateStep[] {
   const saved = usePrefs.getState().createSteps[wtKey(hostId, repo)]
-  return saved ? saved.map((s) => ({ ...s })) : [{ kind: 'agent', cmd: usePrefs.getState().agentCommand }]
+  return saved
+    ? saved.map((s) => ({ ...s }))
+    : [{ kind: 'agent', cmd: usePrefs.getState().agentCommand }]
 }
 
 export function NewWorktreeDialog() {
@@ -60,7 +69,9 @@ export function NewWorktreeDialog() {
   const repo = repos?.find((r) => r.id === repoId)
   const [name, setName] = useState('')
   const [base, setBase] = useState<string | null>(null)
-  const [steps, setSteps] = useState<CreateStep[]>(() => (req ? defaultSteps(req.hostId, repoId) : []))
+  const [steps, setSteps] = useState<CreateStep[]>(() =>
+    req ? defaultSteps(req.hostId, repoId) : []
+  )
   const [save, setSave] = useState(true)
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState(false)
@@ -100,7 +111,10 @@ export function NewWorktreeDialog() {
     try {
       if (save) {
         setPrefs({
-          createSteps: { ...usePrefs.getState().createSteps, [wtKey(req.hostId, repo.id)]: steps.map((s) => ({ ...s })) }
+          createSteps: {
+            ...usePrefs.getState().createSteps,
+            [wtKey(req.hostId, repo.id)]: steps.map((s) => ({ ...s }))
+          }
         })
       }
       await createWorktreeWithSteps({
@@ -151,7 +165,9 @@ export function NewWorktreeDialog() {
                 }}
                 className={cn(
                   'flex h-7 cursor-pointer items-center gap-[7px] rounded-[5px] border px-2.5 text-sm',
-                  r.id === repoId ? 'border-border-strong bg-white/[0.08]' : 'border-white/[0.08] bg-transparent'
+                  r.id === repoId
+                    ? 'border-border-strong bg-white/[0.08]'
+                    : 'border-white/[0.08] bg-transparent'
                 )}
               >
                 <ProjectTile name={r.name} size={12} />
@@ -205,9 +221,16 @@ export function NewWorktreeDialog() {
             </div>
             <div className="overflow-hidden rounded-lg border border-border">
               {steps.map((st, i) => (
-                <div key={i} className="flex items-center gap-2 border-b border-white/[0.08] px-2 py-1.5">
+                <div
+                  key={i}
+                  className="flex items-center gap-2 border-b border-white/[0.08] px-2 py-1.5"
+                >
                   <span className="w-3 text-right font-mono text-2xs text-dim">{i + 1}</span>
-                  <div className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5" role="radiogroup" aria-label={`Step ${i + 1} kind`}>
+                  <div
+                    className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5"
+                    role="radiogroup"
+                    aria-label={`Step ${i + 1} kind`}
+                  >
                     {STEP_KINDS.map(([k, label]) => (
                       <button
                         key={k}
@@ -217,7 +240,9 @@ export function NewWorktreeDialog() {
                         onClick={() => update(i, { kind: k, cmd: switchedCmd(st, k) })}
                         className={cn(
                           'h-5 cursor-pointer rounded-sm px-2 text-xs',
-                          st.kind === k ? 'bg-field text-foreground' : 'bg-transparent text-muted-foreground'
+                          st.kind === k
+                            ? 'bg-field text-foreground'
+                            : 'bg-transparent text-muted-foreground'
                         )}
                       >
                         {label}
@@ -227,10 +252,19 @@ export function NewWorktreeDialog() {
                   <Input
                     aria-label={`Step ${i + 1} command`}
                     value={st.cmd}
-                    placeholder={st.kind === 'agent' ? 'claude' : st.kind === 'codex' ? 'codex' : 'pnpm install'}
+                    placeholder={
+                      st.kind === 'agent'
+                        ? 'claude'
+                        : st.kind === 'codex'
+                          ? 'codex'
+                          : 'pnpm install'
+                    }
                     spellCheck={false}
                     onChange={(e) => update(i, { cmd: e.target.value })}
-                    className={cn('h-[26px] min-w-0 flex-1 rounded-[5px] border-white/[0.08] px-2 text-xs', FIELD)}
+                    className={cn(
+                      'h-[26px] min-w-0 flex-1 rounded-[5px] border-white/[0.08] px-2 text-xs',
+                      FIELD
+                    )}
                   />
                   <button
                     type="button"
@@ -270,7 +304,9 @@ export function NewWorktreeDialog() {
             rows={3}
             disabled={!hasAgent}
             placeholder={
-              hasAgent ? `First task for ${agentLabel} (optional)` : 'Add a Claude or Codex step to give it a first task'
+              hasAgent
+                ? `First task for ${agentLabel} (optional)`
+                : 'Add a Claude or Codex step to give it a first task'
             }
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {

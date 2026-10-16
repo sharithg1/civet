@@ -18,7 +18,13 @@ import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { HostStateDot, hostMeta } from './Sidebar'
 import { ProjectTile, RingGlyph } from './chrome'
 
@@ -145,7 +151,11 @@ export function SettingsView() {
       if ((e.metaKey || e.ctrlKey) && e.code === 'KeyF') {
         e.preventDefault()
         searchRef.current?.focus()
-      } else if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('[role=listbox]')) {
+      } else if (
+        e.key === 'Escape' &&
+        !e.defaultPrevented &&
+        !document.querySelector('[role=listbox]')
+      ) {
         const t = e.target as HTMLElement
         if (t.tagName === 'INPUT' && (t as HTMLInputElement).value) return
         useStore.setState({ settings: null })
@@ -165,11 +175,17 @@ export function SettingsView() {
   const query = q.trim().toLowerCase()
   const sections = SECTIONS.map((sec) => ({
     ...sec,
-    rows: sec.rows.filter((r) => !query || `${r.label} ${r.desc ?? ''} ${sec.title}`.toLowerCase().includes(query))
+    rows: sec.rows.filter(
+      (r) => !query || `${r.label} ${r.desc ?? ''} ${sec.title}`.toLowerCase().includes(query)
+    )
   })).filter((s) => s.rows.length)
   const showGeneral = page === 'general' || !!query
   return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-chrome" role="region" aria-label="Settings">
+    <div
+      className="absolute inset-0 z-40 flex flex-col bg-chrome"
+      role="region"
+      aria-label="Settings"
+    >
       <div
         data-tauri-drag-region="deep"
         className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-3.5 select-none"
@@ -188,7 +204,8 @@ export function SettingsView() {
             onClick={close}
             className="mb-1 flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            ← Back to workspace<span className="flex-1" />
+            ← Back to workspace
+            <span className="flex-1" />
             <span className="font-mono text-2xs text-dim">esc</span>
           </button>
           <div className="mb-2 flex h-8 items-center gap-2 rounded-lg border border-border bg-field px-2.5">
@@ -242,12 +259,19 @@ export function SettingsView() {
                   <h2 className="mb-2.5 text-sm font-semibold text-foreground">{sec.title}</h2>
                   <Card>
                     {sec.rows.map((r) => (
-                      <SettingRow key={r.id} row={r} value={prefs[r.id]} onChange={(v) => set({ [r.id]: v } as Partial<Prefs>)} />
+                      <SettingRow
+                        key={r.id}
+                        row={r}
+                        value={prefs[r.id]}
+                        onChange={(v) => set({ [r.id]: v } as Partial<Prefs>)}
+                      />
                     ))}
                   </Card>
                 </section>
               ))}
-            {showGeneral && !sections.length && <p className="mt-7 text-sm text-faint">No settings match.</p>}
+            {showGeneral && !sections.length && (
+              <p className="mt-7 text-sm text-faint">No settings match.</p>
+            )}
             {showGeneral && !query && (
               <button
                 type="button"
@@ -282,21 +306,40 @@ export function SettingsView() {
 
 function Card({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('divide-y divide-white/[0.08] rounded-xl border border-border bg-chrome', className)}>
+    <div
+      className={cn(
+        'divide-y divide-white/[0.08] rounded-xl border border-border bg-chrome',
+        className
+      )}
+    >
       {children}
     </div>
   )
 }
 
-function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChange: (v: unknown) => void }) {
+function SettingRow({
+  row,
+  value,
+  onChange
+}: {
+  row: Row
+  value: unknown
+  onChange: (v: unknown) => void
+}) {
   return (
     <div className="flex items-center gap-6 px-4 py-3.5">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-foreground">{row.label}</div>
-        {row.desc && <div className="mt-1 text-xs leading-normal text-muted-foreground">{row.desc}</div>}
+        {row.desc && (
+          <div className="mt-1 text-xs leading-normal text-muted-foreground">{row.desc}</div>
+        )}
       </div>
       {row.kind === 'seg' && (
-        <div className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5" role="radiogroup" aria-label={row.label}>
+        <div
+          className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5"
+          role="radiogroup"
+          aria-label={row.label}
+        >
           {row.options!.map(([k, l]) => (
             <button
               key={k}
@@ -306,7 +349,9 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
               onClick={() => onChange(k)}
               className={cn(
                 'h-6 cursor-pointer rounded-sm px-2.5 text-sm',
-                value === k ? 'bg-field text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.4)]' : 'text-muted-foreground'
+                value === k
+                  ? 'bg-field text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.4)]'
+                  : 'text-muted-foreground'
               )}
             >
               {l}
@@ -315,7 +360,11 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
         </div>
       )}
       {row.kind === 'switch' && (
-        <Switch checked={value === true} onCheckedChange={(v) => onChange(v)} aria-label={row.label} />
+        <Switch
+          checked={value === true}
+          onCheckedChange={(v) => onChange(v)}
+          aria-label={row.label}
+        />
       )}
       {row.kind === 'select' && (
         <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>
@@ -348,7 +397,8 @@ function SettingRow({ row, value, onChange }: { row: Row; value: unknown; onChan
 function HostsPage() {
   const hostOrder = useStore((s) => s.hostOrder)
   const hosts = useStore((s) => s.hosts)
-  const btn = 'h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover'
+  const btn =
+    'h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover'
   return (
     <>
       <Card className="mt-7">
@@ -366,7 +416,9 @@ function HostsPage() {
                   {h.daemonVersion ? ` · civetd ${h.daemonVersion}` : ''}
                 </div>
                 {h.upgrade && (
-                  <div className="mt-0.5 font-mono text-xs text-status-wait">{upgradeSummary(id)}</div>
+                  <div className="mt-0.5 font-mono text-xs text-status-wait">
+                    {upgradeSummary(id)}
+                  </div>
                 )}
               </div>
               {(h.state === 'failed' || h.state === 'disconnected') && (
@@ -379,7 +431,11 @@ function HostsPage() {
                   Restart daemon…
                 </button>
               )}
-              <button type="button" className={btn} onClick={() => useStore.setState({ addProject: { hostId: id } })}>
+              <button
+                type="button"
+                className={btn}
+                onClick={() => useStore.setState({ addProject: { hostId: id } })}
+              >
                 Add project…
               </button>
               <button type="button" className={btn} onClick={() => void disconnectHost(id)}>
@@ -390,7 +446,11 @@ function HostsPage() {
         })}
         {hostOrder.length === 0 && <div className="px-4 py-3 text-sm text-faint">No hosts.</div>}
       </Card>
-      <button type="button" className={cn(btn, 'mt-4')} onClick={() => useStore.setState({ showConnect: true })}>
+      <button
+        type="button"
+        className={cn(btn, 'mt-4')}
+        onClick={() => useStore.setState({ showConnect: true })}
+      >
         Connect a host…
       </button>
     </>
@@ -418,8 +478,13 @@ function ProjectsPage() {
                   {r.path} · default {r.defaultBranch ?? 'HEAD'}
                 </div>
               </div>
-              <div className="max-w-[220px] truncate font-mono text-xs text-muted-foreground" title="Saved on-create steps">
-                {saved ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps' : 'default steps'}
+              <div
+                className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                title="Saved on-create steps"
+              >
+                {saved
+                  ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
+                  : 'default steps'}
               </div>
             </div>
           )

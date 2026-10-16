@@ -8,7 +8,10 @@ import type { Tab } from './store'
 // The store touches window/document only in initApp (listeners); give node a stub.
 beforeAll(() => {
   const target = { addEventListener: () => {}, removeEventListener: () => {} }
-  Object.assign(globalThis, { window: { ...target, innerWidth: 1400 }, document: { ...target, hasFocus: () => true } })
+  Object.assign(globalThis, {
+    window: { ...target, innerWidth: 1400 },
+    document: { ...target, hasFocus: () => true }
+  })
 })
 
 const store = await import('./store')
@@ -74,7 +77,14 @@ describe('store', () => {
   it('a reply snapshot never overwrites a newer status from events (L11)', () => {
     store.onDaemonEvent('h', { paneCreated: pane(5) })
     store.onDaemonEvent('h', {
-      agentStatus: { pane: 5, status: 'needsInput', previous: 'running', source: 'hook', message: null, atMs: 1 }
+      agentStatus: {
+        pane: 5,
+        status: 'needsInput',
+        previous: 'running',
+        source: 'hook',
+        message: null,
+        atMs: 1
+      }
     })
     // The launch_agent reply (taken when the pane was created) arrives late.
     store.addPaneSnapshot('h', pane(5, { status: 'running' }))
@@ -88,12 +98,21 @@ describe('store', () => {
     useStore.setState({ backend: fakeBackend({ restartDaemon }) })
     const upgrade = { runningVersion: '0.1.1', availableVersion: '0.1.2', livePanes: 3 }
     for (let i = 0; i < 2; i++) {
-      store.onHostState({ hostId: 'dev-arm', state: 'connected', transport: 'quic', rttMs: 40, message: null, upgrade })
+      store.onHostState({
+        hostId: 'dev-arm',
+        state: 'connected',
+        transport: 'quic',
+        rttMs: 40,
+        message: null,
+        upgrade
+      })
     }
     const h = useStore.getState().hosts['dev-arm']!
     expect(h.upgrade).toEqual(upgrade)
     expect(h.daemonVersion).toBe('0.1.1')
-    expect(store.upgradeSummary('dev-arm')).toBe('civetd v0.1.1 running · v0.1.2 available · 3 live panes')
+    expect(store.upgradeSummary('dev-arm')).toBe(
+      'civetd v0.1.1 running · v0.1.2 available · 3 live panes'
+    )
     const toasts = useStore.getState().toasts.filter((t) => t.title.includes('0.1.2 is available'))
     expect(toasts).toHaveLength(1)
 
@@ -111,7 +130,14 @@ describe('store', () => {
     const reconnectHost = vi.fn(async (hostId: string) => summary(hostId))
     const connectHost = vi.fn()
     useStore.setState({ backend: fakeBackend({ reconnectHost, connectHost }) })
-    store.onHostState({ hostId: 'box', state: 'failed', transport: null, rttMs: null, message: 'x', upgrade: null })
+    store.onHostState({
+      hostId: 'box',
+      state: 'failed',
+      transport: null,
+      rttMs: null,
+      message: 'x',
+      upgrade: null
+    })
     await store.reconnectHost('box')
     expect(reconnectHost).toHaveBeenCalledWith('box')
     expect(connectHost).not.toHaveBeenCalled()
@@ -123,7 +149,14 @@ describe('store', () => {
       throw { code: 'daemonBusy', message: 'incompatible and has live panes' }
     })
     useStore.setState({ backend: fakeBackend({ reconnectHost }) })
-    store.onHostState({ hostId: 'box', state: 'failed', transport: null, rttMs: null, message: null, upgrade: null })
+    store.onHostState({
+      hostId: 'box',
+      state: 'failed',
+      transport: null,
+      rttMs: null,
+      message: null,
+      upgrade: null
+    })
     await store.reconnectHost('box')
     const h = useStore.getState().hosts.box!
     expect(h.state).toBe('failed')
@@ -147,14 +180,30 @@ describe('store', () => {
   })
 
   describe('Codex tabs and steps', () => {
-    const main: WorktreeInfo = { id: '/m', repo: 'r', path: '/m', branch: 'main', head: null, isMain: true, locked: false }
+    const main: WorktreeInfo = {
+      id: '/m',
+      repo: 'r',
+      path: '/m',
+      branch: 'main',
+      head: null,
+      isMain: true,
+      locked: false
+    }
     function setup() {
       let next = 10
-      const spawnPane = vi.fn(async (_h: string, req: { command: { program: string } | null; agent: string | null }) =>
-        pane(next++, { worktree: '/m', command: req.command ? [req.command.program] : ['zsh'], agent: req.agent })
+      const spawnPane = vi.fn(
+        async (_h: string, req: { command: { program: string } | null; agent: string | null }) =>
+          pane(next++, {
+            worktree: '/m',
+            command: req.command ? [req.command.program] : ['zsh'],
+            agent: req.agent
+          })
       )
       useStore.setState({
-        backend: fakeBackend({ spawnPane, writeInput: vi.fn(async () => {}) } as Partial<CivetBackend>),
+        backend: fakeBackend({
+          spawnPane,
+          writeInput: vi.fn(async () => {})
+        } as Partial<CivetBackend>),
         repos: { h: [{ id: 'r', name: 'r', path: '/m', defaultBranch: 'main' }] },
         worktrees: { [store.wtKey('h', 'r')]: [main] },
         workspaces: {},
@@ -191,7 +240,10 @@ describe('store', () => {
         prompt: 'fix the bug'
       })
       expect(spawnPane.mock.calls.map(([, req]) => req)).toEqual([
-        expect.objectContaining({ command: { program: 'codex', args: ['fix the bug'] }, agent: 'codex' }),
+        expect.objectContaining({
+          command: { program: 'codex', args: ['fix the bug'] },
+          agent: 'codex'
+        }),
         expect.objectContaining({ command: { program: 'claude', args: [] }, agent: 'claude' })
       ])
     })
@@ -231,7 +283,9 @@ describe('store', () => {
       useStore.setState({
         backend: fakeBackend({ removeWorktree, killPane, listWorktrees: async () => onDisk }),
         repos: { h: [repo] },
-        worktrees: { [store.wtKey('h', 'r')]: [wt('/main', { isMain: true }), wt('/feat'), wt('/other')] },
+        worktrees: {
+          [store.wtKey('h', 'r')]: [wt('/main', { isMain: true }), wt('/feat'), wt('/other')]
+        },
         workspaces: {},
         removing: {},
         removeRefused: {},
@@ -266,7 +320,9 @@ describe('store', () => {
       expect(s.removeRefused[key]).toBe('contains modified files')
       expect(worktreeIds()).toEqual(['/main', '/feat', '/other'])
       expect(s.active).toEqual({ hostId: 'h', worktree: '/feat' })
-      expect(s.toasts.some((t) => t.kind === 'error' && t.title === 'Could not remove feat')).toBe(true)
+      expect(s.toasts.some((t) => t.kind === 'error' && t.title === 'Could not remove feat')).toBe(
+        true
+      )
     })
 
     it('ignores a second removal of the same worktree while one is in flight', async () => {
@@ -319,7 +375,9 @@ describe('store', () => {
 
     it('a forced removal closes the sessions before git runs', async () => {
       const b = pendingRemove()
-      useStore.setState({ panes: { h: { 7: pane(7, { worktree: '/feat' }), 8: pane(8, { worktree: '/other' }) } } })
+      useStore.setState({
+        panes: { h: { 7: pane(7, { worktree: '/feat' }), 8: pane(8, { worktree: '/other' }) } }
+      })
       const done = store.removeWorktree('h', '/feat', true)
       expect(b.killPane).toHaveBeenCalledWith('h', 7, 'hangup')
       expect(b.killPane).toHaveBeenCalledTimes(1)
@@ -345,7 +403,9 @@ describe('store', () => {
     /** list_worktrees calls the test answers one by one. */
     function pendingLists(initial: WorktreeInfo[]) {
       const calls: ((list: WorktreeInfo[]) => void)[] = []
-      const listWorktrees = vi.fn(() => new Promise<WorktreeInfo[]>((resolve) => calls.push(resolve)))
+      const listWorktrees = vi.fn(
+        () => new Promise<WorktreeInfo[]>((resolve) => calls.push(resolve))
+      )
       useStore.setState({
         backend: fakeBackend({ listWorktrees }),
         repos: { h: [repo] },
@@ -422,8 +482,14 @@ describe('store', () => {
 
   it('moveTab reorders tabs within a worktree and clamps the target', () => {
     const key = store.wsKey('h', '/w')
-    const tab = (id: string, pane: number): Tab => ({ id, root: { type: 'leaf', pane }, focused: pane })
-    useStore.setState({ workspaces: { [key]: { tabs: [tab('a', 1), tab('b', 2), tab('c', 3)], activeTab: 'a' } } })
+    const tab = (id: string, pane: number): Tab => ({
+      id,
+      root: { type: 'leaf', pane },
+      focused: pane
+    })
+    useStore.setState({
+      workspaces: { [key]: { tabs: [tab('a', 1), tab('b', 2), tab('c', 3)], activeTab: 'a' } }
+    })
     const order = () => useStore.getState().workspaces[key]!.tabs.map((t) => t.id)
     store.moveTab(key, 'a', 2)
     expect(order()).toEqual(['b', 'c', 'a'])

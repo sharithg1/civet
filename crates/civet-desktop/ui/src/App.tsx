@@ -92,7 +92,11 @@ export function App() {
       {rightPanelOpen && <RightPanel />}
       <SettingsView />
       <WorktreeSwitcher />
-      {showConnect && <ConnectScreen onCancel={() => useStore.setState({ showConnect: false, addProjectAfterConnect: false })} />}
+      {showConnect && (
+        <ConnectScreen
+          onCancel={() => useStore.setState({ showConnect: false, addProjectAfterConnect: false })}
+        />
+      )}
       {newWorktree && <NewWorktreeDialog key={`${newWorktree.hostId}:${newWorktree.repo ?? ''}`} />}
       <RemoveWorktreeDialog />
       <AddProjectDialog />
@@ -170,15 +174,20 @@ function useShortcuts() {
       const connected = !!active && state.hosts[active.hostId]?.state === 'connected'
       let action: (() => void) | null = null
       if (c === 'Backquote') action = selectPreviousWorktree
-      else if (c === 'ArrowDown' || c === 'ArrowUp') action = () => cycleWorktree(c === 'ArrowDown' ? 1 : -1)
+      else if (c === 'ArrowDown' || c === 'ArrowUp')
+        action = () => cycleWorktree(c === 'ArrowDown' ? 1 : -1)
       else if (c === 'KeyB') action = () => useStore.setState({ sidebarOpen: !state.sidebarOpen })
-      else if (c === 'KeyE') action = () => useStore.setState({ rightPanelOpen: !state.rightPanelOpen })
-      else if (active && /^Digit[1-9]$/.test(c)) action = () => activateTabIndex(Number(c.slice(5)) - 1)
+      else if (c === 'KeyE')
+        action = () => useStore.setState({ rightPanelOpen: !state.rightPanelOpen })
+      else if (active && /^Digit[1-9]$/.test(c))
+        action = () => activateTabIndex(Number(c.slice(5)) - 1)
       else if (active && connected && c === 'KeyN') {
         const repo = worktreesOf(active.hostId).find((w) => w.id === active.worktree)?.repo
         action = () => useStore.setState({ newWorktree: { hostId: active.hostId, repo } })
-      } else if (active && connected && c === 'KeyT') action = () => void newTerminalTab(active.hostId, active.worktree)
-      else if (active && connected && c === 'KeyC') action = () => void newAgentTab(active.hostId, active.worktree)
+      } else if (active && connected && c === 'KeyT')
+        action = () => void newTerminalTab(active.hostId, active.worktree)
+      else if (active && connected && c === 'KeyC')
+        action = () => void newAgentTab(active.hostId, active.worktree)
       else if (active && connected && c === 'KeyX')
         action = () => void newAgentTab(active.hostId, active.worktree, 'codex')
       if (!action) return

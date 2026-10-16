@@ -22,14 +22,29 @@ describe('PaneStream.apply', () => {
   it('resizes to the record size before writing its payload', () => {
     const term = new FakeTerm()
     const s = new PaneStream()
-    s.apply(recs({ cols: 100, rows: 30, state: 1, flags: RecordFlag.Full | RecordFlag.Resized, payload: 'A' }), term)
+    s.apply(
+      recs({
+        cols: 100,
+        rows: 30,
+        state: 1,
+        flags: RecordFlag.Full | RecordFlag.Resized,
+        payload: 'A'
+      }),
+      term
+    )
     expect(term.log).toEqual(['resize 100x30', 'write A'])
   })
 
   it('does not resize when the size already matches and skips empty payloads', () => {
     const term = new FakeTerm()
     const s = new PaneStream()
-    s.apply(recs({ cols: 80, rows: 24, state: 2, payload: '' }, { cols: 80, rows: 24, state: 3, payload: 'x' }), term)
+    s.apply(
+      recs(
+        { cols: 80, rows: 24, state: 2, payload: '' },
+        { cols: 80, rows: 24, state: 3, payload: 'x' }
+      ),
+      term
+    )
     expect(term.log).toEqual(['write x'])
     expect(s.state).toBe(3)
   })
@@ -61,14 +76,31 @@ describe('PaneStream.apply', () => {
     const onGap = vi.fn()
     const s = new PaneStream({ onGap })
     // Full replays 1000..2000.
-    s.apply(recs({ cols: 80, rows: 24, flags: RecordFlag.Full, state: 1, historyStart: 1000, historyLines: 2000 }), term)
+    s.apply(
+      recs({
+        cols: 80,
+        rows: 24,
+        flags: RecordFlag.Full,
+        state: 1,
+        historyStart: 1000,
+        historyLines: 2000
+      }),
+      term
+    )
     expect(s.segments).toEqual([{ start: 1000, end: 2000 }])
     // Contiguous diff extends the segment.
     s.apply(recs({ cols: 80, rows: 24, state: 2, historyStart: 2000, historyLines: 2050 }), term)
     expect(s.segments).toEqual([{ start: 1000, end: 2050 }])
     // Coalesced burst: 2050..5000 skipped, 5000..7000 replayed.
     s.apply(
-      recs({ cols: 80, rows: 24, state: 3, flags: RecordFlag.HistoryGap, historyStart: 5000, historyLines: 7000 }),
+      recs({
+        cols: 80,
+        rows: 24,
+        state: 3,
+        flags: RecordFlag.HistoryGap,
+        historyStart: 5000,
+        historyLines: 7000
+      }),
       term
     )
     expect(s.gaps).toEqual([{ start: 2050, end: 5000 }])
@@ -79,7 +111,17 @@ describe('PaneStream.apply', () => {
     ])
     expect(s.historyLines).toBe(7000)
     // A new Full resets everything (RIS cleared xterm's scrollback).
-    s.apply(recs({ cols: 80, rows: 24, flags: RecordFlag.Full, state: 9, historyStart: 6500, historyLines: 7500 }), term)
+    s.apply(
+      recs({
+        cols: 80,
+        rows: 24,
+        flags: RecordFlag.Full,
+        state: 9,
+        historyStart: 6500,
+        historyLines: 7500
+      }),
+      term
+    )
     expect(s.segments).toEqual([{ start: 6500, end: 7500 }])
     expect(s.gaps).toEqual([])
   })
@@ -88,13 +130,30 @@ describe('PaneStream.apply', () => {
     const s = new PaneStream()
     const term = new FakeTerm()
     expect(s.oldestLocalLine(0)).toBe(0)
-    s.apply(recs({ cols: 80, rows: 24, flags: RecordFlag.Full, state: 1, historyStart: 1000, historyLines: 2000 }), term)
+    s.apply(
+      recs({
+        cols: 80,
+        rows: 24,
+        flags: RecordFlag.Full,
+        state: 1,
+        historyStart: 1000,
+        historyLines: 2000
+      }),
+      term
+    )
     expect(s.oldestLocalLine(1000)).toBe(1000)
     expect(s.oldestLocalLine(5000)).toBe(1000) // more rows than replayed (screen rows pushed): clamp
     expect(s.oldestLocalLine(400)).toBe(1600) // xterm trimmed its oldest rows
     expect(s.oldestLocalLine(0)).toBe(2000)
     s.apply(
-      recs({ cols: 80, rows: 24, state: 2, flags: RecordFlag.HistoryGap, historyStart: 3000, historyLines: 3100 }),
+      recs({
+        cols: 80,
+        rows: 24,
+        state: 2,
+        flags: RecordFlag.HistoryGap,
+        historyStart: 3000,
+        historyLines: 3100
+      }),
       term
     )
     // segments: 1000..2000 (1000 lines) + 3000..3100 (100 lines)

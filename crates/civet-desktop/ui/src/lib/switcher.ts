@@ -76,12 +76,20 @@ export function switcherGroups<T extends SwitcherEntry>(
       .slice(0, opts.recentCount + (currentKey ? 1 : 0))
     const rest = entries.filter((e) => !recent.includes(e))
     if (entries.length <= FEW_WORKTREES) {
-      return [{ label: null, host: null, project: false, rows: [...recent, ...rest].map((e) => row(e)) }]
+      return [
+        { label: null, host: null, project: false, rows: [...recent, ...rest].map((e) => row(e)) }
+      ]
     }
     const groups: SwitcherGroup<T>[] = []
-    if (recent.length) groups.push({ label: 'Recent', host: null, project: false, rows: recent.map((e) => row(e)) })
+    if (recent.length)
+      groups.push({ label: 'Recent', host: null, project: false, rows: recent.map((e) => row(e)) })
     for (const list of byProject(rest)) {
-      groups.push({ label: list[0]!.project, host: list[0]!.host, project: true, rows: list.map((e) => row(e)) })
+      groups.push({
+        label: list[0]!.project,
+        host: list[0]!.host,
+        project: true,
+        rows: list.map((e) => row(e))
+      })
     }
     return groups
   }

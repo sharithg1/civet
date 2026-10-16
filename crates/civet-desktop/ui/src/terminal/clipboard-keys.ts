@@ -24,7 +24,9 @@ export type ClipboardKeyOptions = {
 }
 
 /** True on macOS (Cmd shortcuts). */
-export function isMacPlatform(nav: { platform?: string; userAgent?: string } | undefined = globalThis.navigator): boolean {
+export function isMacPlatform(
+  nav: { platform?: string; userAgent?: string } | undefined = globalThis.navigator
+): boolean {
   if (!nav) return false
   return /Mac|iPhone|iPad/.test(nav.platform || '') || /Macintosh/.test(nav.userAgent || '')
 }

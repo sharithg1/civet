@@ -35,7 +35,11 @@ export function Workspace() {
       <ConnectionBanner hostId={active.hostId} />
       {/* Why: `inert` also blurs a focused terminal, so keystrokes can't
           reach a pane that is about to be killed. */}
-      <div className="relative min-h-0 flex-1" inert={removing} data-removing={removing ? 'true' : undefined}>
+      <div
+        className="relative min-h-0 flex-1"
+        inert={removing}
+        data-removing={removing ? 'true' : undefined}
+      >
         {tab ? (
           <SplitLayout
             key={tab.id}

@@ -13,7 +13,9 @@ class FakeChannel<T> {
 }
 
 function setup(impl?: (cmd: string, args?: Record<string, unknown>) => unknown) {
-  const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => impl?.(cmd, args) ?? null)
+  const invoke = vi.fn(
+    async (cmd: string, args?: Record<string, unknown>) => impl?.(cmd, args) ?? null
+  )
   const listeners = new Map<string, (e: { payload: unknown }) => void>()
   const unlisten = vi.fn()
   const listen = vi.fn(async (event: string, cb: (e: { payload: unknown }) => void) => {
@@ -85,7 +87,10 @@ describe('TauriBackend commands', () => {
   it('defaults connect_host transport to auto', async () => {
     const { backend, invoke } = setup()
     await backend.connectHost({ kind: 'local' })
-    expect(invoke).toHaveBeenCalledWith('connect_host', { target: { kind: 'local' }, transport: 'auto' })
+    expect(invoke).toHaveBeenCalledWith('connect_host', {
+      target: { kind: 'local' },
+      transport: 'auto'
+    })
   })
 
   it('normalizes rejections into CivetError { code, message }', async () => {
@@ -100,7 +105,10 @@ describe('TauriBackend commands', () => {
       message: 'no such host: h'
     })
     await expect(backend.listPanes('h')).rejects.toBeInstanceOf(CivetError)
-    await expect(backend.listPanes('h')).rejects.toMatchObject({ code: 'unknown', message: 'plain string' })
+    await expect(backend.listPanes('h')).rejects.toMatchObject({
+      code: 'unknown',
+      message: 'plain string'
+    })
   })
 })
 
@@ -135,7 +143,9 @@ describe('TauriBackend.attachPane', () => {
   it('drops malformed channel messages instead of throwing', async () => {
     const received: Uint8Array[] = []
     const { backend } = setup((cmd) =>
-      cmd === 'attach_pane' ? { pane: 1, state: 0, size: termSize(80, 24), historyLines: 0, lastInputSeq: 0 } : null
+      cmd === 'attach_pane'
+        ? { pane: 1, state: 0, size: termSize(80, 24), historyLines: 0, lastInputSeq: 0 }
+        : null
     )
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await backend.attachPane('h', 1, (m) => received.push(m))

@@ -2,7 +2,7 @@
 // new-york-v4 dialog with a min-width-safe grid); scrim and surface follow
 // the Civet v3 design (flat #171717 card, 10px radius, deep shadow). Dropped: i18n (plain English labels), the IME-aware
 // Escape guard, the "minimize" close variant and the feature-tip surface.
-import * as React from 'react'
+import type * as React from 'react'
 import { XIcon } from 'lucide-react'
 import * as DialogPrimitive from 'radix-ui/dialog'
 

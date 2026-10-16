@@ -149,7 +149,8 @@ export const useStore = create<State>(() => ({
   // Panels start as last left (prefs), else open (right: on wide windows).
   sidebarOpen: usePrefs.getState().sidebarOpen ?? true,
   rightPanelOpen:
-    usePrefs.getState().rightPanelOpen ?? (typeof window === 'undefined' || window.innerWidth >= 1100),
+    usePrefs.getState().rightPanelOpen ??
+    (typeof window === 'undefined' || window.innerWidth >= 1100),
   rightTab: usePrefs.getState().rightTab,
   switcherOpen: false,
   settings: null,
@@ -179,7 +180,8 @@ export const wtKey = (hostId: string, repo: string) => `${hostId}\u0000${repo}`
 export const wsKey = (hostId: string, worktree: string) => `${hostId}\u0000${worktree}`
 
 /** True while `removeWorktree` runs for this worktree: no new tabs or panes there. */
-export const isRemoving = (hostId: string, worktree: string) => !!get().removing[wsKey(hostId, worktree)]
+export const isRemoving = (hostId: string, worktree: string) =>
+  !!get().removing[wsKey(hostId, worktree)]
 
 /** Size used for spawns before the pane is measured; the pane resizes on mount. */
 export const DEFAULT_SPAWN_SIZE: TermSize = termSize(120, 32)
@@ -229,9 +231,9 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
 
   // Local echo prediction preference (Settings → General); Rust defaults to on.
   const pushPrediction = () =>
-    void b.setPrediction(usePrefs.getState().prediction !== 'off').catch((err: unknown) =>
-      reportError('Could not change local echo prediction', err)
-    )
+    void b
+      .setPrediction(usePrefs.getState().prediction !== 'off')
+      .catch((err: unknown) => reportError('Could not change local echo prediction', err))
   pushPrediction()
   const unPrefs = onPrefsChange((next, prev) => {
     if (next.prediction !== prev.prediction) pushPrediction()
@@ -240,7 +242,9 @@ export async function initApp(b: CivetBackend): Promise<() => void> {
   try {
     const hosts = await b.listHosts()
     for (const h of hosts) upsertHost(h)
-    await Promise.all(hosts.filter((h) => h.state === 'connected').map((h) => refreshHost(h.hostId)))
+    await Promise.all(
+      hosts.filter((h) => h.state === 'connected').map((h) => refreshHost(h.hostId))
+    )
     // Fresh launch: reconnect the hosts saved last time instead of asking again.
     // runConnect registers each host right away, so the workspace (not the
     // connect screen) shows while they connect.
@@ -315,7 +319,10 @@ export function onHostState(e: HostStateEvent): void {
   if (e.state === 'connected' && prevState && prevState !== 'connected') {
     void refreshHost(e.hostId)
     if (prevState === 'reconnecting') {
-      pushToast({ kind: 'info', title: `Reconnected to ${prev?.label ?? e.hostId} · sessions resumed` }, 3200)
+      pushToast(
+        { kind: 'info', title: `Reconnected to ${prev?.label ?? e.hostId} · sessions resumed` },
+        3200
+      )
     }
   }
 }
@@ -404,7 +411,10 @@ export function onAgentAttention(e: AgentAttentionEvent): void {
  */
 export function onClipboard(e: ClipboardEvent): void {
   if (!e.ok) {
-    pushToast({ kind: 'error', title: 'Copy failed', body: `Pane ${e.pane} could not set the clipboard` }, 6000)
+    pushToast(
+      { kind: 'error', title: 'Copy failed', body: `Pane ${e.pane} could not set the clipboard` },
+      6000
+    )
   }
 }
 
@@ -472,7 +482,12 @@ export function refreshWorktrees(hostId: string, repo: string): Promise<void> {
 }
 
 const sameWorktree = (a: WorktreeInfo, b: WorktreeInfo) =>
-  a.id === b.id && a.path === b.path && a.branch === b.branch && a.head === b.head && a.isMain === b.isMain && a.locked === b.locked
+  a.id === b.id &&
+  a.path === b.path &&
+  a.branch === b.branch &&
+  a.head === b.head &&
+  a.isMain === b.isMain &&
+  a.locked === b.locked
 
 /**
  * Replace a repo's worktrees with git's list. Worktrees that are gone
@@ -717,7 +732,9 @@ export function requestRestartDaemon(hostId: string): void {
   if (!h) return
   const n = livePaneCount(hostId)
   const u = h.upgrade
-  const what = u ? `civetd v${u.runningVersion} on ${h.label} with v${u.availableVersion}` : `civetd on ${h.label}`
+  const what = u
+    ? `civetd v${u.runningVersion} on ${h.label} with v${u.availableVersion}`
+    : `civetd on ${h.label}`
   set({
     confirm: {
       title: `Restart daemon on ${h.label}?`,
@@ -736,7 +753,10 @@ export async function restartDaemon(hostId: string): Promise<void> {
   try {
     const summary = await runConnect(hostId, label, () => backend().restartDaemon(hostId))
     pushToast(
-      { kind: 'info', title: `Restarted civetd on ${label}${summary.daemonVersion ? ` · v${summary.daemonVersion}` : ''}` },
+      {
+        kind: 'info',
+        title: `Restarted civetd on ${label}${summary.daemonVersion ? ` · v${summary.daemonVersion}` : ''}`
+      },
       4000
     )
   } catch (err) {
@@ -818,10 +838,7 @@ export function selectWorktree(hostId: string, worktree: string): void {
   }
 }
 
-export function findTabOfPane(
-  hostId: string,
-  pane: PaneId
-): { key: string; tab: Tab } | null {
+export function findTabOfPane(hostId: string, pane: PaneId): { key: string; tab: Tab } | null {
   for (const [key, ws] of Object.entries(get().workspaces)) {
     if (!key.startsWith(`${hostId}\u0000`)) continue
     const tab = ws.tabs.find((t) => leaves(t.root).includes(pane))
@@ -1074,7 +1091,11 @@ const agentOf = (cmd: CommandSpec, kind?: AgentKind) => {
 }
 
 /** New tab running an agent (⌥C / ⌥X / "+" → Claude Code, Codex) in an existing worktree. */
-export async function newAgentTab(hostId: string, worktree: string, kind: AgentKind = 'claude'): Promise<void> {
+export async function newAgentTab(
+  hostId: string,
+  worktree: string,
+  kind: AgentKind = 'claude'
+): Promise<void> {
   if (isRemoving(hostId, worktree)) return
   try {
     const command = parseCommand(agentCommandFor(kind))
@@ -1181,7 +1202,8 @@ export async function createWorktreeWithSteps(p: {
   }
 
   selectWorktree(p.hostId, worktree.id)
-  for (const pane of opened) if (pane !== undefined) openPaneInTab(p.hostId, worktree.id, pane, { activate: false })
+  for (const pane of opened)
+    if (pane !== undefined) openPaneInTab(p.hostId, worktree.id, pane, { activate: false })
   const focus = opened[firstAgent >= 0 ? firstAgent : 0] ?? opened.find((x) => x !== undefined)
   if (focus !== undefined) openPaneInTab(p.hostId, worktree.id, focus)
   const label = steps.length
@@ -1201,7 +1223,11 @@ export async function createWorktreeWithSteps(p: {
  * (removed from a terminal meanwhile) counts as removed. Either way the
  * repo is re-listed so the sidebar matches git.
  */
-export async function removeWorktree(hostId: string, worktree: string, force: boolean): Promise<void> {
+export async function removeWorktree(
+  hostId: string,
+  worktree: string,
+  force: boolean
+): Promise<void> {
   const key = wsKey(hostId, worktree)
   if (get().removing[key]) return
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
@@ -1265,14 +1291,19 @@ export async function removeWorktree(hostId: string, worktree: string, force: bo
     else set({ active: null })
   }
   if (wt) void refreshWorktrees(hostId, wt.repo)
-  pushToast({ kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` }, 3200)
+  pushToast(
+    { kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` },
+    3200
+  )
 }
 
 /**
  * All worktrees in sidebar order (hosts, then repos), optionally skipping
  * collapsed repos and archived worktrees.
  */
-export function allWorktrees(opts: { visibleOnly?: boolean } = {}): { hostId: string; wt: WorktreeInfo }[] {
+export function allWorktrees(
+  opts: { visibleOnly?: boolean } = {}
+): { hostId: string; wt: WorktreeInfo }[] {
   const s = get()
   const { archivedWorktrees: archived, collapsedHosts, collapsedRepos } = usePrefs.getState()
   return sortedHostIds(s.hostOrder)
