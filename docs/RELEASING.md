@@ -80,8 +80,9 @@ the committed `Cargo.lock` (`--locked`, or `cargo fetch --locked` before
 
 Pull requests that change `release.yml`, `scripts/build-remote.sh`,
 `scripts/check-version.sh` or `tauri.conf.json`, and manual runs on a branch
-(Actions → Release → Run workflow), do steps 1–3 without publishing (a
-manual run on a tag publishes, which is how Cut release starts it); the app and daemon
+(Actions → Release → Run workflow), do steps 1, 3 and 4 without publishing
+(no step 2: pull requests get CI from `ci.yml` itself). A manual run on a tag
+runs CI and publishes, which is how Cut release starts it. The app and daemon
 builds are kept as workflow artifacts.
 
 If the tag check or CI fails (tagged the wrong commit, forgot the bump, a

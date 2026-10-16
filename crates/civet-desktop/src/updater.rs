@@ -162,10 +162,12 @@ async fn install_and_restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), CmdEr
         .try_state::<Arc<Updates>>()
         .map(|s| s.inner().clone())
         .ok_or_else(|| CmdError::new("update", "updater not initialised"))?;
-    let mut inner = state.inner.lock().await;
+    // Held through the install so no check runs meanwhile. The download
+    // stays in `ready` until the restart, so a failed install can be retried.
+    let inner = state.inner.lock().await;
     let (update, bytes) = inner
         .ready
-        .take()
+        .clone()
         .ok_or_else(|| CmdError::new("update", "no update has been downloaded"))?;
     tracing::info!(version = %update.version, "installing update");
     // Replaces the .app bundle on disk (blocking file work).
