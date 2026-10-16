@@ -822,6 +822,82 @@ async fn recreate_after_remove_reuses_untouched_branch() {
     ));
 }
 
+/// `list_dirs`: any host directory's subdirectories, git repositories
+/// (worktrees, bare repos) flagged, files left out.
+#[tokio::test(flavor = "multi_thread")]
+async fn list_host_dirs_for_path_completion() {
+    let f = fixture();
+    let base = f.root.join("src");
+    std::fs::create_dir_all(&base).unwrap();
+    let repo_dir = make_repo(&base);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt_dir = base.join("wt");
+    f.mgr
+        .create_worktree(
+            &repo.id,
+            "feat",
+            Some("main"),
+            Some(&wt_dir.to_string_lossy()),
+        )
+        .await
+        .unwrap();
+    git(&base, &["init", "-q", "--bare", "bare.git"]);
+    std::fs::create_dir(base.join("Plain")).unwrap();
+    std::fs::create_dir(base.join(".hidden")).unwrap();
+    std::fs::write(base.join("file.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(base.join("Plain"), base.join("link")).unwrap();
+
+    let l = f.mgr.list_dirs(&base.to_string_lossy()).await.unwrap();
+    assert_eq!(l.path, base.to_string_lossy());
+    assert!(!l.truncated);
+    let got: Vec<_> = l
+        .dirs
+        .iter()
+        .map(|d| (d.name.as_str(), d.git_repo))
+        .collect();
+    let repo_name = repo_dir.file_name().unwrap().to_str().unwrap();
+    let mut want = vec![
+        (".hidden", false),
+        ("bare.git", true),
+        ("link", false),
+        ("Plain", false),
+        (repo_name, true),
+        ("wt", true),
+    ];
+    want.sort_by_key(|(n, _)| n.to_lowercase());
+    assert_eq!(got, want);
+
+    // A trailing slash and surrounding blanks are fine.
+    let again = f
+        .mgr
+        .list_dirs(&format!(" {}/ ", base.display()))
+        .await
+        .unwrap();
+    assert_eq!(again.dirs, l.dirs);
+    assert!(matches!(
+        f.mgr
+            .list_dirs(&base.join("missing").to_string_lossy())
+            .await,
+        Err(SessionError::NotFound(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .list_dirs(&base.join("file.txt").to_string_lossy())
+            .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    // `~` is the home directory, as is a relative path's base.
+    let home = dirs_home();
+    let tilde = f.mgr.list_dirs("~").await.unwrap();
+    assert_eq!(Path::new(&tilde.path), home);
+    let rel = f.mgr.list_dirs("").await.unwrap();
+    assert_eq!(rel.dirs, tilde.dirs);
+}
+
+fn dirs_home() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn browse_worktree_files() {
     let f = fixture();

@@ -554,6 +554,7 @@ impl Server {
                 .read_file_chunk(&worktree, &path, offset, len)
                 .await
                 .map(Response::FileChunk),
+            Request::ListDirs { path } => s.list_dirs(&path).await.map(Response::Dirs),
             Request::CreateWorktree {
                 repo,
                 branch,

@@ -65,9 +65,9 @@ pub use control::{
     AgentStatusEvent, CommandSpec, ConflictSide, ControlRequest, ControlResponse, DaemonInfo,
     DirListing, ErrorCode, Event, FileChunk, FileEntry, FileKind, FileList, FileOp, FileOpResult,
     FilePreview, GitAction, GitBlobRef, GitBranchInfo, GitChangeKind, GitDiffInfo, GitDiscardEntry,
-    GitDiscardSnapshot, GitFileChange, GitStatusInfo, KillSignal, LaunchAgentRequest, PaneInfo,
-    ProjectInfo, ProjectKind, PullRequestInfo, PullRequestState, RepoInfo, Request, Response,
-    RpcError, SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
+    GitDiscardSnapshot, GitFileChange, GitStatusInfo, HostDir, HostDirListing, KillSignal,
+    LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind, PullRequestInfo, PullRequestState,
+    RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -152,6 +152,10 @@ pub const FILE_OPS_MIN_DAEMON_VERSION: &str = "0.1.15";
 /// [`Request::AddProject`], i.e. folder projects (appended within protocol
 /// 1 after the file op requests). Older daemons only add git repositories.
 pub const PROJECTS_MIN_DAEMON_VERSION: &str = "0.1.17";
+
+/// Oldest daemon that understands [`Request::ListDirs`] (appended within
+/// protocol 1 after the project requests).
+pub const LIST_DIRS_MIN_DAEMON_VERSION: &str = "0.1.18";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-dirs"
+description = "Enables the list_dirs command without any pre-configured scope."
+commands.allow = ["list_dirs"]
+
+[[permission]]
+identifier = "deny-list-dirs"
+description = "Denies the list_dirs command without any pre-configured scope."
+commands.deny = ["list_dirs"]

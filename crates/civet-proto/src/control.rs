@@ -240,6 +240,31 @@ pub struct FileChunk {
     pub data: Vec<u8>,
 }
 
+/// One subdirectory in a [`HostDirListing`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDir {
+    /// Directory name (no parent part).
+    pub name: String,
+    /// True if it holds a `.git` (a repository or worktree root) or is a
+    /// bare repository.
+    pub git_repo: bool,
+}
+
+/// Subdirectories of a host directory, for path completion
+/// ([`Response::Dirs`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDirListing {
+    /// The directory listed: absolute, `~` expanded (not canonicalized).
+    pub path: String,
+    /// Sorted by name (case-insensitive); hidden ones included. Symlinks
+    /// to directories count as directories.
+    pub dirs: Vec<HostDir>,
+    /// True if there were more than [`crate::MAX_DIR_ENTRIES`].
+    pub truncated: bool,
+}
+
 /// How a file changed, in a [`GitFileChange`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -845,6 +870,15 @@ pub enum Request {
         /// Any directory.
         path: String,
     },
+    /// The subdirectories of any directory on the host, for completing a
+    /// path (the desktop's "Add project" folder field). -> [`Response::Dirs`].
+    /// Clients send it only to daemons of at least
+    /// [`crate::LIST_DIRS_MIN_DAEMON_VERSION`].
+    ListDirs {
+        /// Absolute, or `~` / `~/...`; anything else is relative to the
+        /// home directory.
+        path: String,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -915,6 +949,8 @@ pub enum Response {
     Projects(Vec<ProjectInfo>),
     /// Reply to [`Request::AddProject`].
     Project(ProjectInfo),
+    /// Reply to [`Request::ListDirs`].
+    Dirs(HostDirListing),
 }
 
 /// Error category for a failed request.

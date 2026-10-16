@@ -17,12 +17,14 @@ import {
   useStore,
   type RightTab
 } from '@/state/store'
-import { usePrefs } from '@/state/prefs'
+import { clampRightPanelWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { DOT_LABEL, paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
 import { useWorktreeInfo } from './chrome'
 import { usePorts } from '@/state/ports'
 import { IconButton } from './IconButton'
+import { PanelResizeHandle } from './PanelResizeHandle'
 import { FilesTab } from './FilesTab'
 import { ChangesCount, ChangesTab } from './ChangesTab'
 import { PortsTab } from './PortsTab'
@@ -48,8 +50,24 @@ export function RightPanel() {
   const tab = folder && !FOLDER_TABS.includes(picked) ? 'files' : picked
   const tabs = folder ? TABS.filter(([id]) => FOLDER_TABS.includes(id)) : TABS
   const forwardCount = usePorts((s) => (active ? (s.forwards[active.hostId]?.length ?? 0) : 0))
+  const savedWidth = usePrefs((s) => s.rightPanelWidth)
+  // While dragging the width lives here; it is saved once, on release.
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const width = dragWidth ?? clampRightPanelWidth(savedWidth)
   return (
-    <aside className="flex min-h-0 w-[360px] shrink-0 flex-col border-l border-border bg-background">
+    <aside
+      className="relative flex min-h-0 shrink-0 flex-col border-l border-border bg-background"
+      style={{ width }}
+    >
+      <PanelResizeHandle
+        edge="left"
+        label="Resize right panel"
+        width={width}
+        clamp={clampRightPanelWidth}
+        onDrag={setDragWidth}
+        onCommit={(w) => setPrefs({ rightPanelWidth: w })}
+        onReset={() => setPrefs({ rightPanelWidth: DEFAULT_PREFS.rightPanelWidth })}
+      />
       <div
         data-tauri-drag-region="deep"
         className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none"

@@ -176,7 +176,7 @@ describe('MockBackend', () => {
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
     await vi.runAllTimersAsync()
     const s = await p
-    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.17', livePanes: 7 })
+    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.18', livePanes: 7 })
     expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
     // Reconnect keeps the stored target and transport.
     b.simulateFailure('old-box', 'lost')
@@ -190,7 +190,7 @@ describe('MockBackend', () => {
     await vi.runAllTimersAsync()
     const after = await restarted
     expect(after.upgrade).toBeNull()
-    expect(after.daemonVersion).toBe('0.1.17')
+    expect(after.daemonVersion).toBe('0.1.18')
     expect(after.instanceId).not.toBe(s.instanceId)
     expect(await b.listPanes('old-box')).toEqual([])
     await expect(b.reconnectHost('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
@@ -245,6 +245,42 @@ describe('MockBackend files', () => {
       code: 'invalidArgument'
     })
     expect((await b.listAllFiles('devbox', '/w')).paths).toContain('crates/civetd/src/main.rs')
+  })
+})
+
+describe('MockBackend folders', () => {
+  it('lists any host directory with git repos flagged, added repos included', async () => {
+    const { b } = await connected()
+    const src = b.listDirs('devbox', '~/src/')
+    await vi.runAllTimersAsync()
+    const l = await src
+    expect(l.path).toBe('/home/dev/src/')
+    expect(l.dirs).toContainEqual({ name: 'civet', gitRepo: true })
+    expect(l.dirs).toContainEqual({ name: 'experiments', gitRepo: false })
+    const home = b.listDirs('devbox', '~')
+    await vi.runAllTimersAsync()
+    expect((await home).dirs.map((d) => d.name)).toContain('.config')
+    const root = b.listDirs('devbox', '/')
+    await vi.runAllTimersAsync()
+    expect((await root).dirs).toEqual([{ name: 'home', gitRepo: false }])
+
+    await b.addRepo('devbox', '/srv/app')
+    const srv = b.listDirs('devbox', '/srv')
+    await vi.runAllTimersAsync()
+    expect((await srv).dirs).toEqual([{ name: 'app', gitRepo: true }])
+
+    const missing = b.listDirs('devbox', '~/nope')
+    const failed = expect(missing).rejects.toMatchObject({ code: 'notFound' })
+    await vi.runAllTimersAsync()
+    await failed
+  })
+
+  it('is unsupported before civetd 0.1.18', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.listDirs('pre-git', '~')).rejects.toMatchObject({ code: 'unsupported' })
   })
 })
 

@@ -273,6 +273,9 @@ fn all_requests() -> Vec<Request> {
         Request::AddProject {
             path: "~/notes".into(),
         },
+        Request::ListDirs {
+            path: "~/src".into(),
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -491,6 +494,20 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             has_remote: false,
         })),
         Ok(Response::GitDiscarded(discard_snapshot())),
+        Ok(Response::Dirs(HostDirListing {
+            path: "/home/u/src".into(),
+            dirs: vec![
+                HostDir {
+                    name: "civet".into(),
+                    git_repo: true,
+                },
+                HostDir {
+                    name: "notes".into(),
+                    git_repo: false,
+                },
+            ],
+            truncated: false,
+        })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -848,6 +865,33 @@ fn project_requests_are_appended() {
     .unwrap();
     assert_eq!(v["project"]["kind"], "folder");
     assert_eq!(v["project"]["repo"]["defaultBranch"], "main");
+}
+
+#[test]
+fn list_dirs_is_appended() {
+    // Appended within protocol 1 after AddProject (29) / Project (24).
+    let req = encode(&Request::ListDirs { path: "~".into() }).unwrap();
+    assert_eq!(req, vec![30, 1, b'~']);
+    let resp = encode(&Response::Dirs(HostDirListing {
+        path: "/".into(),
+        dirs: vec![],
+        truncated: false,
+    }))
+    .unwrap();
+    assert_eq!(resp, vec![25, 1, b'/', 0, 0]);
+    let v = serde_json::to_value(Response::Dirs(HostDirListing {
+        path: "/h".into(),
+        dirs: vec![HostDir {
+            name: "r".into(),
+            git_repo: true,
+        }],
+        truncated: false,
+    }))
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"dirs": {"path": "/h", "dirs": [{"name": "r", "gitRepo": true}], "truncated": false}})
+    );
 }
 
 /// Struct-variant fields must be camelCase in JSON too (`rename_all` on an

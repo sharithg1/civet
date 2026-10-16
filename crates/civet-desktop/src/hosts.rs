@@ -1219,6 +1219,17 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::RemoveWorktree { worktree, force }).await?, Response::Ok => ())
     }
 
+    /// `list_dirs`: subdirectories of any host directory, for completing
+    /// the Add project folder field.
+    pub async fn list_dirs(
+        &self,
+        host_id: &str,
+        path: String,
+    ) -> Result<civet_proto::HostDirListing, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::LIST_DIRS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::ListDirs { path }).await?, Response::Dirs(l) => l)
+    }
+
     /// `list_files`: one directory level of a worktree.
     pub async fn list_files(
         &self,

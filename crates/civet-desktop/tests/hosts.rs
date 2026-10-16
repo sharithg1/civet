@@ -568,6 +568,20 @@ async fn stream_link_repos_worktrees_and_agents() {
     assert_eq!(repo.kind, civet_proto::ProjectKind::Git);
     let repo = repo.repo;
     assert_eq!(m.list_repos(h).await.unwrap().len(), 1);
+    // Folder completion: subdirectories, nested repositories flagged.
+    std::fs::create_dir(repo_dir.path().join("vendor")).unwrap();
+    git(&["init", "-q", "vendor"]);
+    let dirs = m
+        .list_dirs(h, repo_dir.path().display().to_string())
+        .await
+        .unwrap();
+    let got: Vec<_> = dirs
+        .dirs
+        .iter()
+        .map(|d| (d.name.as_str(), d.git_repo))
+        .collect();
+    // `.git` itself looks like a bare repository (HEAD, objects/, refs/).
+    assert_eq!(got, [(".git", true), ("vendor", true)]);
     let err = m
         .add_repo(h, repo_dir.path().display().to_string())
         .await

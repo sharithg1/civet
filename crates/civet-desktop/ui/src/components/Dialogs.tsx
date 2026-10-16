@@ -24,7 +24,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -35,6 +34,7 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
+import { FolderPathInput } from '@/components/FolderPathInput'
 
 /** Keeps the last non-null value so content stays put during the close animation. */
 function useLast<T>(value: T | null): T | null {
@@ -171,8 +171,9 @@ function AddProjectForm({
           Folder
         </Label>
         <div className="flex gap-2">
-          <Input
+          <FolderPathInput
             id="project-path"
+            hostId={hostId}
             className="h-8 min-w-0 flex-1 rounded-[5px] border-border bg-field font-mono text-sm shadow-none dark:bg-field"
             placeholder={
               isLocal ? '~/src/project' : `~/src/project on ${hosts[hostId]?.label ?? hostId}`
@@ -181,7 +182,7 @@ function AddProjectForm({
             spellCheck={false}
             autoFocus
             disabled={busy}
-            onChange={(e) => setPath(e.target.value)}
+            onValueChange={setPath}
           />
           {isLocal && canPick && (
             <Button
