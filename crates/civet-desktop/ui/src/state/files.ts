@@ -1,6 +1,6 @@
 // Files tab (right panel): a worktree's directory tree, loaded one level at
 // a time (`list_files`), the flat file list for quick-open (`list_all_files`)
-// and the open preview (`read_file`).
+// and the contents of files open in tabs (`read_file`, see FileView.tsx).
 //
 // Expanded directories persist per worktree in prefs; listings are a cache
 // that `refreshFiles` reloads (manual refresh, window focus). A refresh keeps
@@ -21,17 +21,16 @@ export type Loadable<T> =
   | { status: 'ok'; value: T }
   | { status: 'error'; code: string; message: string }
 
-export type OpenPreview = { key: string; path: string; file: Loadable<FilePreview> }
-
 type FilesState = {
   /** wsKey → directory ('' = root) → listing */
   dirs: Record<string, Record<string, Loadable<DirListing>>>
   /** wsKey → every file, for quick-open */
   all: Record<string, Loadable<FileList>>
-  preview: OpenPreview | null
+  /** `fileKey(hostId, worktree, path)` → contents of a file open in a tab */
+  previews: Record<string, Loadable<FilePreview>>
 }
 
-export const useFiles = create<FilesState>(() => ({ dirs: {}, all: {}, preview: null }))
+export const useFiles = create<FilesState>(() => ({ dirs: {}, all: {}, previews: {} }))
 
 function b(): CivetBackend {
   const be = useStore.getState().backend
@@ -140,8 +139,8 @@ export function revealPath(hostId: string, worktree: string, path: string): void
 }
 
 /**
- * Reload the root and every expanded directory whose parent is shown, the
- * quick-open list if it was loaded, and the open preview.
+ * Reload the root and every expanded directory whose parent is shown, and
+ * the quick-open list if it was loaded.
  */
 export async function refreshFiles(hostId: string, worktree: string): Promise<void> {
   const key = wsKey(hostId, worktree)
@@ -160,8 +159,6 @@ export async function refreshFiles(hostId: string, worktree: string): Promise<vo
   })
   const jobs = ['', ...visible].map((d) => loadDir(hostId, worktree, d, true))
   if (useFiles.getState().all[key]) jobs.push(loadAllFiles(hostId, worktree, true))
-  const preview = useFiles.getState().preview
-  if (preview?.key === key) jobs.push(openPreview(hostId, worktree, preview.path, true))
   await Promise.all(jobs)
 }
 
@@ -188,30 +185,27 @@ export async function loadAllFiles(hostId: string, worktree: string, force = fal
   }
 }
 
-/** Open `path` in the preview (`force`: reload it in place). */
-export async function openPreview(
+export const fileKey = (hostId: string, worktree: string, path: string) =>
+  `${wsKey(hostId, worktree)}\u0000${path}`
+
+/** Read a file for its tab (`force`: reload, keeping the old contents meanwhile). */
+export async function loadPreview(
   hostId: string,
   worktree: string,
   path: string,
   force = false
 ): Promise<void> {
-  const key = wsKey(hostId, worktree)
-  const cur = useFiles.getState().preview
-  const same = cur?.key === key && cur.path === path
-  if (!(same && force && cur.file.status === 'ok')) {
-    useFiles.setState({ preview: { key, path, file: { status: 'loading' } } })
-  }
-  const current = begin('preview')
-  let file: Loadable<FilePreview>
+  const key = fileKey(hostId, worktree, path)
+  const cur = useFiles.getState().previews[key]
+  if (cur && !force && cur.status !== 'error') return
+  const set = (v: Loadable<FilePreview>) =>
+    useFiles.setState((s) => ({ previews: { ...s.previews, [key]: v } }))
+  if (cur?.status !== 'ok') set({ status: 'loading' })
+  const current = begin(`file\0${key}`)
   try {
-    file = { status: 'ok', value: await b().readFile(hostId, worktree, path, PREVIEW_BYTES) }
+    const file = await b().readFile(hostId, worktree, path, PREVIEW_BYTES)
+    if (current()) set({ status: 'ok', value: file })
   } catch (err) {
-    file = failed(err)
+    if (current()) set(failed(err))
   }
-  if (current()) useFiles.setState({ preview: { key, path, file } })
-}
-
-export function closePreview(): void {
-  latest.delete('preview')
-  useFiles.setState({ preview: null })
 }

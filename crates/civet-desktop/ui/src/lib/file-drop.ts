@@ -5,7 +5,7 @@
 
 import { useEffect } from 'react'
 import type { CivetBackend } from '@/backend'
-import { pushToast, reportError, useStore, wsKey } from '@/state/store'
+import { isPaneTab, pushToast, reportError, useStore, wsKey } from '@/state/store'
 import { paneController } from '@/terminal/pane-registry'
 import type { PaneId } from '@/types'
 
@@ -22,7 +22,7 @@ function focusedTarget(): Target | null {
   if (!active) return null
   const ws = workspaces[wsKey(active.hostId, active.worktree)]
   const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
-  return tab ? { hostId: active.hostId, pane: tab.focused } : null
+  return tab && isPaneTab(tab) ? { hostId: active.hostId, pane: tab.focused } : null
 }
 
 async function deliver(backend: CivetBackend, target: Target, paths: string[]): Promise<void> {

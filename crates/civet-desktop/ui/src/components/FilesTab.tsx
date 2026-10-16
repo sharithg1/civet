@@ -1,13 +1,14 @@
 // Files tab of the right panel: the worktree's tree, read from the daemon a
 // directory level at a time (gitignored files hidden unless the eye toggle
-// is on), a quick-open filter over every file, and a read-only preview.
+// is on) and a quick-open filter over every file. Clicking a file opens it
+// read-only in a tab of its own (FileView.tsx); the active one is
+// highlighted in the tree.
 //
 // Right-click a row (or empty space, for the root) to copy its path or open
 // a Terminal tab there. The tree refreshes when the tab is shown, when the
 // window regains focus and on the refresh button; there is no file watching.
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeft,
   ChevronRight,
   ChevronsDownUp,
   Copy,
@@ -29,27 +30,24 @@ import {
   Search,
   X
 } from 'lucide-react'
-import type { DirListing, FileEntry, FileList, FilePreview } from '@/types'
-import { newTerminalTab, pushToast, wsKey } from '@/state/store'
+import type { DirListing, FileEntry, FileList } from '@/types'
+import { newTerminalTab, openFileTab, pushToast, useStore, wsKey } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
 import {
-  PREVIEW_BYTES,
-  closePreview,
   collapseAll,
   joinPath,
   loadAllFiles,
-  openPreview,
   parentDir,
   refreshFiles,
   revealPath,
   setShowIgnored,
   toggleDir,
   useFiles,
-  type Loadable,
-  type OpenPreview
+  type Loadable
 } from '@/state/files'
 import { fuzzyFilter, type FuzzyMatch } from '@/lib/fuzzy'
 import { cn } from '@/lib/utils'
+import { formatBytes } from './FileView'
 import { IconButton } from './IconButton'
 import {
   ContextMenu,
@@ -81,7 +79,11 @@ export function FilesTab({
   const expanded = usePrefs((s) => s.expandedDirs[key]) ?? NO_DIRS
   const showIgnored = usePrefs((s) => s.showIgnoredFiles)
   const dirs = useFiles((s) => s.dirs[key])
-  const preview = useFiles((s) => (s.preview?.key === key ? s.preview : null))
+  const selected = useStore((s) => {
+    const ws = s.workspaces[key]
+    const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
+    return tab?.kind === 'file' ? tab.path : null
+  })
   const [query, setQuery] = useState('')
   const [sel, setSel] = useState(0)
   const [menu, setMenu] = useState<Target>({ path: '', dir: true })
@@ -107,7 +109,7 @@ export function FilesTab({
     void navigator.clipboard?.writeText(text).catch(() => {})
     pushToast({ kind: 'info', title: `Copied ${text}` }, 3200)
   }
-  const open = (path: string) => void openPreview(hostId, worktree, path)
+  const open = (path: string) => openFileTab(hostId, worktree, path)
   const pick = (path: string) => {
     revealPath(hostId, worktree, path)
     setQuery('')
@@ -158,13 +160,7 @@ export function FilesTab({
         </IconButton>
       </div>
 
-      {preview ? (
-        <PreviewView
-          preview={preview}
-          onBack={closePreview}
-          onCopy={() => copy(abs(preview.path))}
-        />
-      ) : query ? (
+      {query ? (
         <QuickOpen all={all} matches={matches} sel={sel} onSel={setSel} onPick={pick} />
       ) : (
         <ContextMenu>
@@ -183,6 +179,7 @@ export function FilesTab({
                   depth={0}
                   dirs={dirs}
                   expanded={expanded}
+                  selected={selected}
                   onToggle={(d) => toggleDir(hostId, worktree, d)}
                   onOpen={open}
                   onMenu={setMenu}
@@ -195,7 +192,7 @@ export function FilesTab({
               <>
                 <ContextMenuItem onSelect={() => open(menu.path)}>
                   <FileText />
-                  Preview
+                  Open
                 </ContextMenuItem>
                 <ContextMenuSeparator />
               </>
@@ -234,6 +231,7 @@ function DirRows({
   depth,
   dirs,
   expanded,
+  selected,
   onToggle,
   onOpen,
   onMenu
@@ -242,6 +240,7 @@ function DirRows({
   depth: number
   dirs: Record<string, Loadable<DirListing>> | undefined
   expanded: string[]
+  selected: string | null
   onToggle: (dir: string) => void
   onOpen: (path: string) => void
   onMenu: (t: Target) => void
@@ -277,7 +276,11 @@ function DirRows({
               onContextMenu={() => onMenu({ path, dir: isDir })}
               className={cn(
                 'flex h-[22px] w-full cursor-pointer items-center gap-1 rounded-[4px] pr-2 text-left text-sm hover:bg-hover',
-                e.ignored ? 'text-faint' : 'text-soft'
+                selected === path
+                  ? 'bg-card text-foreground'
+                  : e.ignored
+                    ? 'text-faint'
+                    : 'text-soft'
               )}
             >
               <ChevronRight
@@ -296,6 +299,7 @@ function DirRows({
                 depth={depth + 1}
                 dirs={dirs}
                 expanded={expanded}
+                selected={selected}
                 onToggle={onToggle}
                 onOpen={onOpen}
                 onMenu={onMenu}
@@ -421,66 +425,6 @@ function Highlighted({ match }: { match: FuzzyMatch }) {
   )
 }
 
-function PreviewView({
-  preview,
-  onBack,
-  onCopy
-}: {
-  preview: OpenPreview
-  onBack: () => void
-  onCopy: () => void
-}) {
-  const { path, file } = preview
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-1 border-y border-border px-1.5">
-        <IconButton label="Back to files" onClick={onBack}>
-          <ArrowLeft />
-        </IconButton>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-soft" title={path}>
-          {path}
-        </span>
-        {file.status === 'ok' && (
-          <span className="shrink-0 text-xs text-quiet">{formatBytes(file.value.size)}</span>
-        )}
-        <IconButton label="Copy path" onClick={onCopy}>
-          <Copy />
-        </IconButton>
-      </div>
-      {file.status === 'loading' && <Status>Loading…</Status>}
-      {file.status === 'error' && <Status error>{file.message}</Status>}
-      {file.status === 'ok' && <PreviewBody file={file.value} />}
-    </div>
-  )
-}
-
-function PreviewBody({ file }: { file: FilePreview }) {
-  const lines = useMemo(() => {
-    const text = file.text.endsWith('\n') ? file.text.slice(0, -1) : file.text
-    return text.split('\n').length
-  }, [file.text])
-  if (file.binary) {
-    return <Status>Binary file ({formatBytes(file.size)}); not shown.</Status>
-  }
-  return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      {file.truncated && (
-        <div className="px-3 pt-2">
-          <Note>
-            Showing the first {formatBytes(PREVIEW_BYTES)} of {formatBytes(file.size)}.
-          </Note>
-        </div>
-      )}
-      <div className="flex min-w-max py-1.5 font-mono text-xs leading-[18px]">
-        <pre className="sticky left-0 shrink-0 bg-background pr-3 pl-2 text-right text-dim select-none">
-          {Array.from({ length: lines }, (_, i) => i + 1).join('\n')}
-        </pre>
-        <pre className="pr-3 text-soft">{file.text}</pre>
-      </div>
-    </div>
-  )
-}
-
 const ICONS: [RegExp, typeof File][] = [
   [/\.(lock)$|^(package-lock\.json|pnpm-lock\.yaml)$/i, FileLock],
   [/\.(json|jsonc|json5)$/i, FileJson],
@@ -503,9 +447,14 @@ function EntryIcon({ entry, open }: { entry: Pick<FileEntry, 'name' | 'kind'>; o
   if (entry.kind === 'dir')
     return open ? <FolderOpen className={cls} /> : <Folder className={cls} />
   if (entry.kind === 'symlink') return <FileSymlink className={cls} />
-  const name = entry.name.slice(entry.name.lastIndexOf('/') + 1)
+  return <FileIcon path={entry.name} className={cls} />
+}
+
+/** A file-type icon for a path (by name / extension). */
+export function FileIcon({ path, className }: { path: string; className?: string }) {
+  const name = path.slice(path.lastIndexOf('/') + 1)
   const Icon = ICONS.find(([re]) => re.test(name))?.[1] ?? File
-  return <Icon className={cls} />
+  return <Icon className={className} />
 }
 
 function Status({
@@ -533,10 +482,4 @@ function Note({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   )
-}
-
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

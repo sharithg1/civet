@@ -42,7 +42,7 @@ function backendWith(tree: Record<string, DirListing>) {
 }
 
 beforeEach(() => {
-  useFiles.setState({ dirs: {}, all: {}, preview: null })
+  useFiles.setState({ dirs: {}, all: {}, previews: {} })
   setPrefs({ expandedDirs: {}, showIgnoredFiles: false })
 })
 
