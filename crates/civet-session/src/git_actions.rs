@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use civet_proto::{
@@ -18,7 +19,7 @@ use civet_proto::{
 };
 
 use crate::SessionError;
-use crate::git::{Git, GitOutput, check_relative_path};
+use crate::git::{Git, GitOutput, canonical_or_same, check_relative_path};
 
 /// push / pull / fetch give up after this (a remote that never answers).
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -238,27 +239,56 @@ async fn discard(
         });
     }
 
-    if !restore.is_empty() {
-        if !staged {
-            write(git, dir, &["restore", "--worktree"], &restore).await?;
-        } else if head {
-            // No-overlay: a path HEAD lacks leaves the index and the disk.
-            write(
-                git,
-                dir,
-                &["restore", "--source=HEAD", "--staged", "--worktree"],
-                &restore,
-            )
-            .await?;
-        } else {
-            write(git, dir, &["rm", "--cached", "-q", "-r"], &restore).await?;
-            delete.extend(restore);
+    let snapshot = GitDiscardSnapshot { entries };
+    // Paths this discard has (possibly) changed so far.
+    let mut touched: HashSet<String> = HashSet::new();
+    let applied = async {
+        if !restore.is_empty() {
+            touched.extend(restore.iter().cloned());
+            if !staged {
+                write(git, dir, &["restore", "--worktree"], &restore).await?;
+            } else if head {
+                // No-overlay: a path HEAD lacks leaves the index and the disk.
+                write(
+                    git,
+                    dir,
+                    &["restore", "--source=HEAD", "--staged", "--worktree"],
+                    &restore,
+                )
+                .await?;
+            } else {
+                write(git, dir, &["rm", "--cached", "-q", "-r"], &restore).await?;
+                delete.extend(restore);
+            }
         }
+        for p in &delete {
+            // remove_file either deletes the file or fails without a change.
+            remove_file(&root, p)?;
+            touched.insert(p.clone());
+        }
+        Ok::<(), SessionError>(())
     }
-    for p in &delete {
-        remove_file(&root, p)?;
+    .await;
+    // All or nothing: a failure part-way (a file that can't be deleted)
+    // would otherwise lose the paths already discarded, since the client
+    // gets the error and no snapshot to undo them with.
+    if let Err(e) = applied {
+        let undo = GitDiscardSnapshot {
+            entries: snapshot
+                .entries
+                .iter()
+                .filter(|e| touched.contains(&e.path))
+                .cloned()
+                .collect(),
+        };
+        return Err(match apply_snapshot(git, dir, &root, &undo).await {
+            Ok(()) => e,
+            Err(undo) => SessionError::Git(format!(
+                "{e}; rolling back the paths already discarded also failed: {undo}"
+            )),
+        });
     }
-    Ok(GitDiscardSnapshot { entries })
+    Ok(snapshot)
 }
 
 /// Put back what [`discard`] overwrote: index entries first, then files.
@@ -273,6 +303,16 @@ async fn restore(git: &Git, dir: &Path, snapshot: &GitDiscardSnapshot) -> Result
         }
     }
     check_unchanged_since_discard(git, dir, &root, snapshot).await?;
+    apply_snapshot(git, dir, &root, snapshot).await
+}
+
+/// Write a snapshot's index entries, then its files (no checks).
+async fn apply_snapshot(
+    git: &Git,
+    dir: &Path,
+    root: &Path,
+    snapshot: &GitDiscardSnapshot,
+) -> Result<(), SessionError> {
     let mut index_info = Vec::new();
     let mut unindex = Vec::new();
     for e in snapshot.entries.iter().filter(|e| e.restore_index) {
@@ -306,9 +346,9 @@ async fn restore(git: &Git, dir: &Path, snapshot: &GitDiscardSnapshot) -> Result
         match &e.file {
             Some(b) => {
                 let data = read_blob(git, dir, &b.oid).await?;
-                write_file(&root, &e.path, &data, b.mode)?;
+                write_file(root, &e.path, &data, b.mode)?;
             }
-            None => remove_file(&root, &e.path)?,
+            None => remove_file(root, &e.path)?,
         }
     }
     Ok(())
@@ -790,7 +830,29 @@ async fn network(git: &Git, dir: &Path, args: &[&str]) -> Result<String, Session
 
 // ----- stash ----------------------------------------------------------------------
 
+/// One lock per repository (its common git dir) for Civet's stash actions:
+/// the stash list is shared by every worktree, and a pop finds its entry's
+/// `stash@{n}` and drops it in two steps, so a stash pushed from another
+/// worktree in between would shift `n`. git itself has no conditional drop,
+/// so a `git stash` run outside Civet (an agent's) can still interleave;
+/// the selector is re-checked right before the drop to keep that window tiny.
+async fn stash_lock(git: &Git, dir: &Path) -> Result<Arc<tokio::sync::Mutex<()>>, SessionError> {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    let common = git
+        .run(
+            dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .await?;
+    let key = canonical_or_same(Path::new(common.trim()));
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(locks.entry(key).or_default().clone())
+}
+
 async fn stash_all(git: &Git, dir: &Path) -> Result<(), SessionError> {
+    let lock = stash_lock(git, dir).await?;
+    let _held = lock.lock().await;
     let out = with_lock_retry(|| {
         git.output(
             dir,
@@ -808,6 +870,8 @@ async fn stash_all(git: &Git, dir: &Path) -> Result<(), SessionError> {
 /// shared stash list may shift meanwhile). If applying conflicts, the entry
 /// is kept.
 async fn stash_pop(git: &Git, dir: &Path) -> Result<(), SessionError> {
+    let lock = stash_lock(git, dir).await?;
+    let _held = lock.lock().await;
     let branch = git
         .output(dir, &["symbolic-ref", "-q", "--short", "HEAD"])
         .await?;
@@ -826,14 +890,25 @@ async fn stash_pop(git: &Git, dir: &Path) -> Result<(), SessionError> {
             e.to_string().trim_start_matches("git: ")
         )));
     }
-    let list = git.run(dir, &["stash", "list", "--format=%gd %H"]).await?;
-    if let Some(r) = list
-        .lines()
-        .find_map(|l| l.split_once(' ').filter(|(_, h)| *h == oid).map(|(r, _)| r))
-    {
-        git.run(dir, &["stash", "drop", "-q", r]).await?;
+    // Find the entry's selector now, and check it still names our commit
+    // right before dropping (a `git stash` outside Civet shifts selectors).
+    for _ in 0..LOCK_TRIES {
+        let list = git.run(dir, &["stash", "list", "--format=%gd %H"]).await?;
+        let Some(r) = list
+            .lines()
+            .find_map(|l| l.split_once(' ').filter(|(_, h)| *h == oid).map(|(r, _)| r))
+        else {
+            return Ok(());
+        };
+        let at = git.run(dir, &["rev-parse", "--verify", "-q", r]).await?;
+        if at.trim() == oid {
+            git.run(dir, &["stash", "drop", "-q", r]).await?;
+            return Ok(());
+        }
     }
-    Ok(())
+    Err(SessionError::Git(
+        "applied the stash, but the stash list kept changing; drop it in a terminal".into(),
+    ))
 }
 
 /// Stash entries made on `branch` (None: detached), newest first:

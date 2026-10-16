@@ -1740,6 +1740,39 @@ async fn git_discard_and_undo() {
         );
     }
 
+    // A discard that fails part-way (a file that can't be deleted) rolls
+    // back the paths it already discarded, so nothing is lost without Undo.
+    let locked = repo_dir.join("locked");
+    write("mod.txt", b"one\ntwo\n");
+    write("locked/keep.txt", b"untracked\n");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = act(
+        &f,
+        &wt,
+        GitAction::Discard {
+            paths: paths(&["mod.txt", "added.txt", "locked/keep.txt"]),
+            staged: true,
+        },
+    )
+    .await;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(r, Err(SessionError::Io(_))), "{r:?}");
+    assert_eq!(
+        std::fs::read(repo_dir.join("mod.txt")).unwrap(),
+        b"one\ntwo\n"
+    );
+    assert_eq!(
+        std::fs::read(repo_dir.join("added.txt")).unwrap(),
+        b"added\n"
+    );
+    assert_eq!(
+        git_out(&repo_dir, &["show", ":added.txt"]),
+        "added",
+        "index rolled back"
+    );
+    assert!(locked.join("keep.txt").exists());
+    std::fs::remove_dir_all(&locked).unwrap();
+
     // Paths that leave the worktree or touch .git are refused, by every
     // path-taking action, and nothing is changed.
     std::os::unix::fs::symlink(&f.root, repo_dir.join("out")).unwrap();
@@ -2150,4 +2183,27 @@ async fn git_stash_is_per_branch() {
     assert_eq!(git_out(&repo_dir, &["stash", "list"]).lines().count(), 1);
     act(&f, &w.id, GitAction::StashPop).await.unwrap();
     assert_eq!(std::fs::read(side.join("README")).unwrap(), b"side edit\n");
+
+    // Both worktrees stash and pop at the same time: each gets its own back
+    // and the shared list ends empty.
+    std::fs::write(repo_dir.join("README"), "main again\n").unwrap();
+    std::fs::write(side.join("README"), "side again\n").unwrap();
+    let (a, b) = tokio::join!(
+        act(&f, &main, GitAction::StashAll),
+        act(&f, &w.id, GitAction::StashAll)
+    );
+    a.unwrap();
+    b.unwrap();
+    let (a, b) = tokio::join!(
+        act(&f, &main, GitAction::StashPop),
+        act(&f, &w.id, GitAction::StashPop)
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(
+        std::fs::read(repo_dir.join("README")).unwrap(),
+        b"main again\n"
+    );
+    assert_eq!(std::fs::read(side.join("README")).unwrap(), b"side again\n");
+    assert_eq!(git_out(&repo_dir, &["stash", "list"]), "");
 }
