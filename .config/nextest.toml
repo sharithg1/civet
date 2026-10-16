@@ -1,0 +1,14 @@
+[profile.ci]
+# Bound the number of simultaneous runtimes/PTYs on the hosted runners.
+test-threads = 4
+fail-fast = false
+
+[test-groups]
+e2e = { max-threads = 1 }
+
+[[profile.default.overrides]]
+# harness::serial() only coordinates tests within one process. Preserve
+# serial execution of timing-sensitive scenarios with nextest's processes,
+# while allowing the rest of the workspace to run alongside them.
+filter = 'package(civet-e2e)'
+test-group = 'e2e'

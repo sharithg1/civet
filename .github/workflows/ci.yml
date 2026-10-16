@@ -42,10 +42,21 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: test
-        run: cargo test --workspace --all-features --locked
+        id: test
+        env:
+          # Built by Cargo for civetd's integration tests. Avoid the e2e
+          # harness invoking cargo build again in each nextest process.
+          CIVETD_BIN: ${{ github.workspace }}/target/debug/civetd
+        run: cargo nextest run --profile ci --workspace --all-features --locked
+      - name: doctests
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        run: cargo test --doc --workspace --all-features --locked
 
   # civetd runs on Linux remotes: build and test everything but the desktop
   # app there too (Tauri on Linux would need webkit2gtk and isn't shipped).
@@ -58,10 +69,19 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9
       - name: clippy
         run: cargo clippy --workspace --exclude civet-desktop --all-targets --all-features --locked -- -D warnings
       - name: test
-        run: cargo test --workspace --exclude civet-desktop --all-features --locked --no-fail-fast
+        id: test
+        env:
+          CIVETD_BIN: ${{ github.workspace }}/target/debug/civetd
+        run: cargo nextest run --profile ci --workspace --exclude civet-desktop --all-features --locked
+      - name: doctests
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        run: cargo test --doc --workspace --exclude civet-desktop --all-features --locked --no-fail-fast
 
   ui:
     name: desktop UI (typecheck, lint, test)

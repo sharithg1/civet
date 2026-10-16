@@ -220,6 +220,20 @@ scripts/e2e-report.sh                       # all of them incl. long ones, relea
 cargo test -p civet-e2e --release -- --include-ignored --nocapture --test-threads=1
 ```
 
+CI uses [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/)
+to run tests across binaries concurrently, with four test slots and a serial
+group for the timing-sensitive e2e scenarios (see `.config/nextest.toml`).
+To reproduce the macOS CI test steps after installing nextest:
+
+```sh
+CIVETD_BIN="$PWD/target/debug/civetd" cargo nextest run --profile ci --workspace --all-features --locked
+cargo test --doc --workspace --all-features --locked
+```
+
+On Linux, add `--exclude civet-desktop` to both commands. Cargo builds the
+daemon for its integration tests; `CIVETD_BIN` lets the e2e harness reuse it.
+Doctests run separately because nextest does not run them.
+
 The hardening harness (`tests/e2e`) puts an in-test UDP proxy between a
 real `ClientSession` and an in-process daemon (or the real `civetd`
 binary). The proxy drops X% of datagrams, adds latency + jitter, reorders,
