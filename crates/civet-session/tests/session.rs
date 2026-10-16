@@ -945,6 +945,345 @@ async fn browse_worktree_files() {
     assert!(!files.truncated);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn change_worktree_files() {
+    use civet_proto::{FileOp, MAX_UPLOAD_BYTES};
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    std::fs::create_dir_all(repo_dir.join("src")).unwrap();
+    std::fs::write(repo_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(f.root.join("secret"), "s").unwrap();
+    std::os::unix::fs::symlink(f.root.join("secret"), repo_dir.join("escape")).unwrap();
+    std::os::unix::fs::symlink(repo_dir.join(".git"), repo_dir.join("gitlink")).unwrap();
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    let op = |op: FileOp| f.mgr.file_op(&wt, op);
+    let s = |v: &str| v.to_owned();
+    let read = |p: &str| std::fs::read_to_string(repo_dir.join(p)).unwrap();
+    let gone = |p: &str| std::fs::symlink_metadata(repo_dir.join(p)).is_err();
+
+    // Create.
+    let r = op(FileOp::CreateFile {
+        path: s("./src//new.rs"),
+    })
+    .await
+    .unwrap();
+    assert_eq!((r.path.as_str(), r.trash_id), ("src/new.rs", None));
+    assert_eq!(read("src/new.rs"), "");
+    op(FileOp::CreateDir { path: s("docs") }).await.unwrap();
+    assert!(repo_dir.join("docs").is_dir());
+    op(FileOp::Write {
+        path: s("docs/a.md"),
+        data: b"# A".to_vec(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(read("docs/a.md"), "# A");
+    assert!(matches!(
+        op(FileOp::CreateFile {
+            path: s("nowhere/x")
+        })
+        .await,
+        Err(SessionError::NotFound(_))
+    ));
+    assert!(matches!(
+        op(FileOp::CreateFile {
+            path: s("README/x")
+        })
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        op(FileOp::Write {
+            path: s("big"),
+            data: vec![0; MAX_UPLOAD_BYTES + 1]
+        })
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(gone("big"));
+
+    // Nothing is overwritten.
+    for o in [
+        FileOp::CreateFile { path: s("README") },
+        FileOp::CreateDir { path: s("src") },
+        FileOp::Write {
+            path: s("README"),
+            data: b"x".to_vec(),
+        },
+        FileOp::Move {
+            from: s("docs/a.md"),
+            to: s("README"),
+        },
+        FileOp::Copy {
+            from: s("src"),
+            to: s("docs"),
+        },
+        FileOp::Move {
+            from: s("README"),
+            to: s("README"),
+        },
+    ] {
+        assert!(
+            matches!(op(o.clone()).await, Err(SessionError::AlreadyExists(_))),
+            "{o:?}"
+        );
+    }
+    assert_eq!(read("README"), "hi\n");
+    assert_eq!(read("docs/a.md"), "# A");
+
+    // Move / rename.
+    op(FileOp::Move {
+        from: s("docs/a.md"),
+        to: s("src/a.md"),
+    })
+    .await
+    .unwrap();
+    assert!(gone("docs/a.md"));
+    assert_eq!(read("src/a.md"), "# A");
+    op(FileOp::Move {
+        from: s("docs"),
+        to: s("src/docs"),
+    })
+    .await
+    .unwrap();
+    assert!(repo_dir.join("src/docs").is_dir() && gone("docs"));
+    assert!(matches!(
+        op(FileOp::Move {
+            from: s("src"),
+            to: s("src/docs/src")
+        })
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    // Case-only renames work on case-insensitive file systems too.
+    op(FileOp::Move {
+        from: s("src/a.md"),
+        to: s("src/A.md"),
+    })
+    .await
+    .unwrap();
+    let names: Vec<_> = std::fs::read_dir(repo_dir.join("src"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(
+        names.contains(&s("A.md")) && !names.contains(&s("a.md")),
+        "{names:?}"
+    );
+    op(FileOp::Move {
+        from: s("src/A.md"),
+        to: s("src/a.md"),
+    })
+    .await
+    .unwrap();
+    // A symlink moves as itself (its target stays put).
+    op(FileOp::Move {
+        from: s("escape"),
+        to: s("src/escape"),
+    })
+    .await
+    .unwrap();
+    assert!(
+        std::fs::symlink_metadata(repo_dir.join("src/escape"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_to_string(f.root.join("secret")).unwrap(), "s");
+    assert!(matches!(
+        op(FileOp::Move {
+            from: s("missing"),
+            to: s("x")
+        })
+        .await,
+        Err(SessionError::NotFound(_))
+    ));
+
+    // Copy (a tree, with a symlink kept as a link).
+    std::os::unix::fs::symlink("main.rs", repo_dir.join("src/link")).unwrap();
+    op(FileOp::Copy {
+        from: s("src"),
+        to: s("src2"),
+    })
+    .await
+    .unwrap();
+    assert_eq!(read("src2/main.rs"), "fn main() {}\n");
+    assert_eq!(read("src2/a.md"), "# A");
+    assert_eq!(
+        std::fs::read_link(repo_dir.join("src2/link")).unwrap(),
+        Path::new("main.rs")
+    );
+    assert!(matches!(
+        op(FileOp::Copy {
+            from: s("src"),
+            to: s("src/docs/again")
+        })
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    op(FileOp::Copy {
+        from: s("README"),
+        to: s("README copy"),
+    })
+    .await
+    .unwrap();
+    assert_eq!(read("README copy"), "hi\n");
+
+    // Trash and restore, round trip.
+    let t = op(FileOp::Trash { path: s("src2") }).await.unwrap();
+    let id = t.trash_id.clone().unwrap();
+    assert!(gone("src2"));
+    let trash = f.root.join("state/trash");
+    assert!(trash.join(&id).join("item/main.rs").is_file());
+    let r = op(FileOp::Restore {
+        trash_id: id.clone(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(r.path, "src2");
+    assert_eq!(read("src2/main.rs"), "fn main() {}\n");
+    assert!(!trash.join(&id).exists());
+    assert!(matches!(
+        op(FileOp::Restore { trash_id: id }).await,
+        Err(SessionError::NotFound(_))
+    ));
+    // Restoring onto a path that was taken again is refused, and the entry
+    // stays restorable.
+    let t = op(FileOp::Trash {
+        path: s("README copy"),
+    })
+    .await
+    .unwrap();
+    let id = t.trash_id.unwrap();
+    op(FileOp::CreateFile {
+        path: s("README copy"),
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        op(FileOp::Restore {
+            trash_id: id.clone()
+        })
+        .await,
+        Err(SessionError::AlreadyExists(_))
+    ));
+    op(FileOp::Trash {
+        path: s("README copy"),
+    })
+    .await
+    .unwrap();
+    op(FileOp::Restore { trash_id: id }).await.unwrap();
+    assert_eq!(read("README copy"), "hi\n");
+    for bad in ["../x", "1-2-3", ""] {
+        assert!(matches!(
+            op(FileOp::Restore { trash_id: s(bad) }).await,
+            Err(SessionError::NotFound(_))
+        ));
+    }
+
+    // Nothing outside the worktree, the root itself or `.git`.
+    let paths = [
+        "..",
+        "../secret",
+        "src/../../x",
+        "/tmp/x",
+        "",
+        ".",
+        ".git",
+        ".git/config",
+        ".GIT/HEAD",
+        "src/.git",
+        "gitlink/config",
+        "src/escape/x",
+    ];
+    for bad in paths {
+        for o in [
+            FileOp::CreateFile { path: s(bad) },
+            FileOp::CreateDir { path: s(bad) },
+            FileOp::Write {
+                path: s(bad),
+                data: vec![],
+            },
+            FileOp::Trash { path: s(bad) },
+            FileOp::Move {
+                from: s(bad),
+                to: s("moved"),
+            },
+            FileOp::Move {
+                from: s("README"),
+                to: s(bad),
+            },
+            FileOp::Copy {
+                from: s(bad),
+                to: s("copied"),
+            },
+            FileOp::Copy {
+                from: s("README"),
+                to: s(bad),
+            },
+        ] {
+            let r = op(o.clone()).await;
+            assert!(
+                matches!(
+                    r,
+                    Err(SessionError::InvalidArgument(_) | SessionError::AlreadyExists(_))
+                ),
+                "{o:?}: {r:?}"
+            );
+        }
+    }
+    assert!(repo_dir.join(".git/HEAD").is_file());
+    assert!(gone("moved") && gone("copied"));
+    assert_eq!(read("README"), "hi\n");
+    // A nested repository (its own .git) is neither moved nor trashed, and a
+    // copy of it leaves the .git out.
+    let nested = repo_dir.join("vendor");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    std::fs::write(nested.join("lib.rs"), "").unwrap();
+    assert!(matches!(
+        op(FileOp::Trash { path: s("vendor") }).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        op(FileOp::Move {
+            from: s("vendor"),
+            to: s("v2")
+        })
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    op(FileOp::Copy {
+        from: s("vendor"),
+        to: s("v3"),
+    })
+    .await
+    .unwrap();
+    assert!(repo_dir.join("v3/lib.rs").is_file() && gone("v3/.git"));
+
+    // Chunked reads for downloads.
+    let data: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
+    std::fs::write(repo_dir.join("blob.bin"), &data).unwrap();
+    let c = f
+        .mgr
+        .read_file_chunk(&wt, "blob.bin", 9_000, 4_096)
+        .await
+        .unwrap();
+    assert_eq!((c.size, c.data.as_slice()), (10_000, &data[9_000..]));
+    let c = f
+        .mgr
+        .read_file_chunk(&wt, "blob.bin", 20_000, 10)
+        .await
+        .unwrap();
+    assert!(c.data.is_empty());
+    for bad in ["../secret", "src/escape", "src"] {
+        assert!(matches!(
+            f.mgr.read_file_chunk(&wt, bad, 0, 10).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+    }
+}
+
 /// `git worktree add` in a terminal reaches clients as WorktreesChanged.
 #[tokio::test(flavor = "multi_thread")]
 async fn external_worktree_changes_emit_events() {

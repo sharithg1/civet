@@ -1218,6 +1218,185 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::ListAllFiles { worktree }).await?, Response::AllFiles(l) => l)
     }
 
+    /// `file_op`: create, move, copy, trash or restore worktree files.
+    /// Contents are written with `upload_to_worktree` instead.
+    pub async fn file_op(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        op: civet_proto::FileOp,
+    ) -> Result<civet_proto::FileOpResult, CmdError> {
+        if matches!(op, civet_proto::FileOp::Write { .. }) {
+            return Err(CmdError::new(
+                "invalidArgument",
+                "file_op: use upload_to_worktree to write files",
+            ));
+        }
+        self.request_file_op(host_id, worktree, op).await
+    }
+
+    async fn request_file_op(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        op: civet_proto::FileOp,
+    ) -> Result<civet_proto::FileOpResult, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::FILE_OPS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::FileOp { worktree, op }).await?, Response::FileOpDone(r) => r)
+    }
+
+    /// `upload_to_worktree`: copy local files and folders (dropped from
+    /// Finder) into `dir` of a worktree, under their own names. Nothing is
+    /// overwritten; files over [`civet_proto::MAX_UPLOAD_BYTES`] fail. One
+    /// result per input path, in order (`path`: relative to the worktree;
+    /// for a folder, the first failure inside it is its error).
+    pub async fn upload_to_worktree(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        dir: String,
+        paths: Vec<String>,
+    ) -> Result<Vec<DroppedFile>, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::FILE_OPS_MIN_DAEMON_VERSION)?;
+        let mut out = Vec::with_capacity(paths.len());
+        for source in paths {
+            let name = Path::new(&source)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let rel = if dir.is_empty() {
+                name
+            } else {
+                format!("{dir}/{name}")
+            };
+            let r = self.upload_tree(host_id, &worktree, &source, &rel).await;
+            out.push(match r {
+                Ok(()) => DroppedFile {
+                    source,
+                    path: Some(rel),
+                    error: None,
+                },
+                Err(e) => DroppedFile {
+                    source,
+                    path: None,
+                    error: Some(e.message),
+                },
+            });
+        }
+        Ok(out)
+    }
+
+    /// One dropped file or folder (recursively; `.git`, symlinks and
+    /// special files left out). Stops at the first failure.
+    async fn upload_tree(
+        &self,
+        host_id: &str,
+        worktree: &WorktreeId,
+        source: &str,
+        rel: &str,
+    ) -> Result<(), CmdError> {
+        let io = |p: &Path, e: std::io::Error| CmdError::new("io", format!("{}: {e}", p.display()));
+        // Depth first, parents before their children.
+        let mut todo = vec![(std::path::PathBuf::from(source), rel.to_owned())];
+        while let Some((local, rel)) = todo.pop() {
+            let meta = tokio::fs::symlink_metadata(&local)
+                .await
+                .map_err(|e| io(&local, e))?;
+            let op = if meta.is_dir() {
+                let mut rd = tokio::fs::read_dir(&local)
+                    .await
+                    .map_err(|e| io(&local, e))?;
+                let mut children = Vec::new();
+                while let Some(e) = rd.next_entry().await.map_err(|e| io(&local, e))? {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if !name.eq_ignore_ascii_case(".git") {
+                        children.push((e.path(), format!("{rel}/{name}")));
+                    }
+                }
+                children.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+                todo.extend(children);
+                civet_proto::FileOp::CreateDir { path: rel }
+            } else if meta.is_file() {
+                if meta.len() > civet_proto::MAX_UPLOAD_BYTES as u64 {
+                    return Err(CmdError::new(
+                        "invalidArgument",
+                        format!(
+                            "{}: larger than {} MiB",
+                            local.display(),
+                            civet_proto::MAX_UPLOAD_BYTES >> 20
+                        ),
+                    ));
+                }
+                let data = tokio::fs::read(&local).await.map_err(|e| io(&local, e))?;
+                civet_proto::FileOp::Write { path: rel, data }
+            } else {
+                continue;
+            };
+            self.request_file_op(host_id, worktree.clone(), op).await?;
+        }
+        Ok(())
+    }
+
+    /// `download_file`: save a worktree file to `dest` on this Mac (chosen
+    /// in a save dialog, so it may be replaced), in
+    /// [`civet_proto::MAX_FILE_CHUNK_BYTES`] slices. The data goes to
+    /// a fresh `<dest>.<unique>.civet-part` first and replaces `dest` only once complete, so
+    /// a failed download leaves `dest` as it was. Returns the bytes written.
+    pub async fn download_file(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        path: String,
+        dest: String,
+    ) -> Result<u64, CmdError> {
+        use tokio::io::AsyncWriteExt;
+        self.check_daemon_version(host_id, civet_proto::FILE_OPS_MIN_DAEMON_VERSION)?;
+        let io = |e: std::io::Error| CmdError::new("io", format!("{dest}: {e}"));
+        // Unique and exclusive: concurrent downloads to one `dest` never
+        // share (or truncate) each other's part file.
+        let part = format!(
+            "{dest}.{}-{}.civet-part",
+            std::process::id(),
+            self.inner.nonce.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&part)
+            .await
+            .map_err(io)?;
+        let mut offset = 0u64;
+        let r: Result<u64, CmdError> = async {
+            loop {
+                let request = Request::ReadFileChunk {
+                    worktree: worktree.clone(),
+                    path: path.clone(),
+                    offset,
+                    len: civet_proto::MAX_FILE_CHUNK_BYTES,
+                };
+                let chunk = expect_response!(self.request(host_id, request).await?, Response::FileChunk(c) => c)?;
+                if chunk.data.is_empty() {
+                    break;
+                }
+                file.write_all(&chunk.data).await.map_err(io)?;
+                offset += chunk.data.len() as u64;
+                if offset >= chunk.size {
+                    break;
+                }
+            }
+            file.flush().await.map_err(io)?;
+            file.sync_all().await.map_err(io)?;
+            tokio::fs::rename(&part, &dest).await.map_err(io)?;
+            Ok(offset)
+        }
+        .await;
+        if r.is_err() {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part).await;
+        }
+        r
+    }
+
     /// `list_panes` (also refreshes the pane cache used for notifications).
     pub async fn list_panes(&self, host_id: &str) -> Result<Vec<PaneInfo>, CmdError> {
         let host = self.host(host_id)?;

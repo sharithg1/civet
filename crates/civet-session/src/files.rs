@@ -1,4 +1,5 @@
-//! Read-only browsing of a worktree's files (the desktop's Files tab).
+//! Browsing a worktree's files (the desktop's Files tab); changes to them
+//! are in [`crate::fileops`].
 //!
 //! Every path a client sends is relative to the worktree root and must stay
 //! inside it: [`resolve`] rejects absolute paths and `..` components, then
@@ -12,8 +13,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use civet_proto::{
-    DirListing, FileEntry, FileKind, FileList, FilePreview, MAX_ALL_FILES, MAX_DIR_ENTRIES,
-    MAX_FILE_PREVIEW_BYTES,
+    DirListing, FileChunk, FileEntry, FileKind, FileList, FilePreview, MAX_ALL_FILES,
+    MAX_DIR_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_PREVIEW_BYTES,
 };
 
 use crate::SessionError;
@@ -52,12 +53,12 @@ pub(crate) fn resolve(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
     }
 }
 
-fn canonical_root(root: &Path) -> Result<PathBuf, SessionError> {
+pub(crate) fn canonical_root(root: &Path) -> Result<PathBuf, SessionError> {
     std::fs::canonicalize(root)
         .map_err(|_| SessionError::NotFound(format!("worktree directory {}", root.display())))
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, SessionError> + Send + 'static,
 ) -> Result<T, SessionError> {
     tokio::task::spawn_blocking(f)
@@ -173,30 +174,7 @@ pub(crate) async fn read_file(
     let root = canonical_root(root)?;
     let path = path.to_owned();
     blocking(move || {
-        let outside = || SessionError::InvalidArgument(format!("{path:?} is outside the worktree"));
-        let resolved = resolve(&root, &path)?;
-        // Open once and check the handle from then on: O_NOFOLLOW refuses a
-        // final symlink (the resolved path has none), O_NONBLOCK keeps a
-        // fifo from blocking the open.
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&resolved)
-            .map_err(|e| match e.raw_os_error() {
-                Some(libc::ELOOP) => outside(),
-                _ => SessionError::Io(e),
-            })?;
-        // A directory on the way swapped for a symlink since `resolve`.
-        if !crate::sys::fd_path(&file)?.starts_with(&root) {
-            return Err(outside());
-        }
-        let meta = file.metadata()?;
-        // Not a fifo or device: reading one could block forever.
-        if !meta.is_file() {
-            return Err(SessionError::InvalidArgument(format!(
-                "{path:?} is not a regular file"
-            )));
-        }
+        let (file, meta) = open_regular(&root, &path)?;
         let cap = max_bytes.min(MAX_FILE_PREVIEW_BYTES);
         let mut buf = Vec::new();
         // One byte past the cap tells whether there is more.
@@ -213,6 +191,64 @@ pub(crate) async fn read_file(
             } else {
                 decode_text(&buf, truncated)
             },
+        })
+    })
+    .await
+}
+
+/// A regular file inside `root` (canonical), opened for reading, with its
+/// metadata.
+fn open_regular(
+    root: &Path,
+    path: &str,
+) -> Result<(std::fs::File, std::fs::Metadata), SessionError> {
+    let outside = || SessionError::InvalidArgument(format!("{path:?} is outside the worktree"));
+    let resolved = resolve(root, path)?;
+    // Open once and check the handle from then on: O_NOFOLLOW refuses a
+    // final symlink (the resolved path has none), O_NONBLOCK keeps a
+    // fifo from blocking the open.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&resolved)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) => outside(),
+            _ => SessionError::Io(e),
+        })?;
+    // A directory on the way swapped for a symlink since `resolve`.
+    if !crate::sys::fd_path(&file)?.starts_with(root) {
+        return Err(outside());
+    }
+    let meta = file.metadata()?;
+    // Not a fifo or device: reading one could block forever.
+    if !meta.is_file() {
+        return Err(SessionError::InvalidArgument(format!(
+            "{path:?} is not a regular file"
+        )));
+    }
+    Ok((file, meta))
+}
+
+/// Up to `len` bytes (at most [`MAX_FILE_CHUNK_BYTES`]) of a regular file
+/// from `offset`, for downloads. Same path rules as [`read_file`].
+pub(crate) async fn read_chunk(
+    root: &Path,
+    path: &str,
+    offset: u64,
+    len: u64,
+) -> Result<FileChunk, SessionError> {
+    use std::io::{Seek, SeekFrom};
+    let root = canonical_root(root)?;
+    let path = path.to_owned();
+    blocking(move || {
+        let (mut file, meta) = open_regular(&root, &path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut data = Vec::new();
+        file.take(len.min(MAX_FILE_CHUNK_BYTES))
+            .read_to_end(&mut data)?;
+        Ok(FileChunk {
+            size: meta.len(),
+            data,
         })
     })
     .await

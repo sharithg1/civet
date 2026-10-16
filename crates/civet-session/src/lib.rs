@@ -23,6 +23,7 @@
 
 mod changes;
 mod error;
+mod fileops;
 mod files;
 mod git;
 mod git_actions;
@@ -61,8 +62,8 @@ pub const ENV_WORKTREE: &str = "CIVET_WORKTREE";
 /// Configuration for a [`SessionManager`].
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
-    /// `~/.civet` (or `$CIVET_STATE_DIR`). Holds `repos.json`, `status/` and
-    /// `hooks/`.
+    /// `~/.civet` (or `$CIVET_STATE_DIR`). Holds `repos.json`, `status/`,
+    /// `hooks/` and `trash/`.
     pub state_dir: PathBuf,
     /// Shell for panes without a command and for `-lc` wrapping.
     /// Default (None): `$SHELL`, else `/bin/bash`, else `/bin/sh`.

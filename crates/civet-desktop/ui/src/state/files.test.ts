@@ -125,4 +125,36 @@ describe('paths', () => {
     expect(files.parentDir('a/b/c')).toBe('a/b')
     expect(files.parentDir('a')).toBe('')
   })
+
+  it('lists visible rows in tree order for range selection', () => {
+    const ok = (l: DirListing) => ({ status: 'ok' as const, value: l })
+    const dirs = {
+      '': ok(listing('src/', 'docs/', 'a')),
+      src: ok(listing('bin/', 'main.rs')),
+      'src/bin': ok(listing('x.rs')),
+      docs: ok(listing('b.md'))
+    }
+    const rows = files.visibleRows(dirs, ['src', 'src/bin'])
+    expect(rows.map((r) => `${r.depth}:${r.path}`)).toEqual([
+      '0:src',
+      '1:src/bin',
+      '2:src/bin/x.rs',
+      '1:src/main.rs',
+      '0:docs',
+      '0:a'
+    ])
+  })
+
+  it('expanded folders follow a move, or are forgotten', () => {
+    setPrefs({ expandedDirs: { [KEY]: ['src', 'src/bin', 'srcx', 'docs'] } })
+    files.moveExpanded('h', '/w', 'src', 'lib/src')
+    expect(usePrefs.getState().expandedDirs[KEY]).toEqual([
+      'lib/src',
+      'lib/src/bin',
+      'srcx',
+      'docs'
+    ])
+    files.moveExpanded('h', '/w', 'lib/src', null)
+    expect(usePrefs.getState().expandedDirs[KEY]).toEqual(['srcx', 'docs'])
+  })
 })

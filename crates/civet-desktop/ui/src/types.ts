@@ -100,6 +100,26 @@ export type FilePreview = {
 /** Worktree-relative paths (`/`-separated), sorted. */
 export type FileList = { paths: string[]; truncated: boolean }
 
+/**
+ * A change to worktree files (`file_op`, civetd >= 0.1.15). Paths are
+ * relative to the worktree root; nothing is overwritten (`alreadyExists`)
+ * and `.git` is off limits. File contents go through `uploadToWorktree`.
+ */
+export type FileOp =
+  | { createFile: { path: string } }
+  | { createDir: { path: string } }
+  | { move: { from: string; to: string } }
+  | { copy: { from: string; to: string } }
+  /** To the daemon's trash; `trashId` of the result restores it. */
+  | { trash: { path: string } }
+  | { restore: { trashId: string } }
+
+export type FileOpResult = {
+  /** The path created or changed (for `restore`: where the entry is back). */
+  path: string
+  trashId: string | null
+}
+
 export type GitChangeKind =
   | 'modified'
   | 'added'

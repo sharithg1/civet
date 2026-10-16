@@ -1,5 +1,5 @@
 //! Tiny unsafe surface: signalling process groups, dup/poll of the PTY fd,
-//! the path of an open file.
+//! the path of an open file, renames that never replace.
 
 use civet_proto::KillSignal;
 
@@ -95,4 +95,59 @@ pub(crate) fn fd_path(_file: &std::fs::File) -> std::io::Result<std::path::PathB
         std::io::ErrorKind::Unsupported,
         "the path of an open file is not available on this platform",
     ))
+}
+
+/// `rename(from, to)`, but failing with `AlreadyExists` instead of replacing
+/// an existing `to` (`renameat2(RENAME_NOREPLACE)` on Linux,
+/// `renamex_np(RENAME_EXCL)` on macOS). Where the file system or platform
+/// lacks that, falls back to checking first (racy, but nothing better).
+#[allow(unsafe_code)]
+pub(crate) fn rename_noreplace(
+    from: &std::path::Path,
+    to: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &std::path::Path| {
+        std::ffi::CString::new(p.as_os_str().as_bytes())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+    };
+    let (f, t) = (c(from)?, c(to)?);
+    #[cfg(target_os = "linux")]
+    // SAFETY: both pointers are NUL-terminated strings owned by `f` / `t`,
+    // alive for the call; AT_FDCWD makes them relative to the cwd as rename
+    // does.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            f.as_ptr(),
+            libc::AT_FDCWD,
+            t.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } as libc::c_int;
+    #[cfg(target_os = "macos")]
+    // SAFETY: as above; renamex_np only reads the two strings.
+    let rc = unsafe { libc::renamex_np(f.as_ptr(), t.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let rc: libc::c_int = {
+        let _ = (f, t);
+        -1
+    };
+    if rc == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    let unsupported = cfg!(not(any(target_os = "linux", target_os = "macos")))
+        || matches!(
+            err.raw_os_error(),
+            Some(libc::EINVAL | libc::ENOSYS | libc::ENOTSUP)
+        );
+    if !unsupported {
+        return Err(err);
+    }
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
+    }
+    std::fs::rename(from, to)
 }

@@ -48,6 +48,8 @@ describe('TauriBackend commands', () => {
     await backend.listFiles('h', '/w', 'src', false)
     await backend.readFile('h', '/w', 'src/a.ts', 1024)
     await backend.listAllFiles('h', '/w')
+    await backend.fileOp('h', '/w', { move: { from: 'a', to: 'b/a' } })
+    await backend.uploadToWorktree('h', '/w', 'src', ['/tmp/a.png'])
     await backend.listPanes('h')
     await backend.writeInput('h', 3, 'ls\r')
     await backend.writeInputBinary('h', 3, '\x00\xff')
@@ -91,6 +93,8 @@ describe('TauriBackend commands', () => {
       ['list_files', { hostId: 'h', worktree: '/w', dir: 'src', includeIgnored: false }],
       ['read_file', { hostId: 'h', worktree: '/w', path: 'src/a.ts', maxBytes: 1024 }],
       ['list_all_files', { hostId: 'h', worktree: '/w' }],
+      ['file_op', { hostId: 'h', worktree: '/w', op: { move: { from: 'a', to: 'b/a' } } }],
+      ['upload_to_worktree', { hostId: 'h', worktree: '/w', dir: 'src', paths: ['/tmp/a.png'] }],
       ['list_panes', { hostId: 'h' }],
       ['write_input', { hostId: 'h', pane: 3, data: 'ls\r' }],
       ['write_input_binary', { hostId: 'h', pane: 3, data: '\x00\xff' }],

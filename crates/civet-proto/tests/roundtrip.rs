@@ -217,6 +217,55 @@ fn all_requests() -> Vec<Request> {
             staged: true,
             context_lines: 3,
         },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::CreateFile {
+                path: "a.txt".into(),
+            },
+        },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::CreateDir {
+                path: "src/new".into(),
+            },
+        },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::Move {
+                from: "a".into(),
+                to: "b/a".into(),
+            },
+        },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::Copy {
+                from: "a".into(),
+                to: "a copy".into(),
+            },
+        },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::Trash { path: "a".into() },
+        },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::Restore {
+                trash_id: "1-2-3".into(),
+            },
+        },
+        Request::FileOp {
+            worktree: WorktreeId::from("/w"),
+            op: FileOp::Write {
+                path: "up.png".into(),
+                data: vec![1, 2, 3],
+            },
+        },
+        Request::ReadFileChunk {
+            worktree: WorktreeId::from("/w"),
+            path: "big.bin".into(),
+            offset: 8 << 20,
+            len: 8 << 20,
+        },
         Request::GitBranch {
             worktree: WorktreeId::from("/w"),
         },
@@ -387,6 +436,18 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             additions: Some(1),
             deletions: Some(0),
             diff: "diff --git a/b.rs b/b.rs\n@@ -1 +1,2 @@\n x\n+y\n".into(),
+        })),
+        Ok(Response::FileOpDone(FileOpResult {
+            path: "a".into(),
+            trash_id: Some("1-2-3".into()),
+        })),
+        Ok(Response::FileOpDone(FileOpResult {
+            path: "b".into(),
+            trash_id: None,
+        })),
+        Ok(Response::FileChunk(FileChunk {
+            size: 10,
+            data: vec![0, 1, 2],
         })),
         Ok(Response::GitBranch(GitBranchInfo {
             branch: Some("feat/x".into()),

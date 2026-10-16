@@ -540,6 +540,18 @@ impl Server {
                 .git_action(&worktree, action)
                 .await
                 .map(|snapshot| snapshot.map_or(Response::Ok, Response::GitDiscarded)),
+            Request::FileOp { worktree, op } => {
+                s.file_op(&worktree, op).await.map(Response::FileOpDone)
+            }
+            Request::ReadFileChunk {
+                worktree,
+                path,
+                offset,
+                len,
+            } => s
+                .read_file_chunk(&worktree, &path, offset, len)
+                .await
+                .map(Response::FileChunk),
             Request::CreateWorktree {
                 repo,
                 branch,

@@ -243,7 +243,7 @@ export function ChangesCount({
 }) {
   useChangesPolling(hostId, worktree, showing ? CHANGES_POLL_MS : CHANGES_BACKGROUND_POLL_MS)
   const count = useChanges((s) => changedFileCount(s.byWorktree[wsKey(hostId, worktree)]?.status))
-  return count > 0 ? <span className="font-mono text-xs text-quiet">{count}</span> : null
+  return count > 0 ? <span className="shrink-0 font-mono text-xs text-quiet">{count}</span> : null
 }
 
 function CommitBox({

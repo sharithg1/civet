@@ -71,6 +71,10 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 | `worktree <text>` | Click a sidebar worktree by its text (`Implement QUIC resume`, `scrollback-paging`…). |
 | `right <files\|changes\|branch\|ports>` | Switch the right panel tab. |
 | `click-file` / `dblclick-file <name>` | A row in the Files tree (exact entry name, e.g. `Cargo.toml`). |
+| `rclick-file` / `cmd-click-file` / `shift-click-file <name>` | Right-click (opens the context menu), ⌘-click or ⇧-click a Files row. |
+| `drag-file <from> -> <to>` | Drag a Files row onto another row (a folder, or a file: its folder) with the mouse. |
+| `menu <text>` | Click an item of the open context menu (text prefix, e.g. `menu New File`). |
+| `type <text>` | Type into the focused element (e.g. the inline name field). |
 | `click-change` / `dblclick-change <name>` | A row in the Changes list (file name). |
 | `meta-click-change` / `shift-click-change` / `hover-change <name>` | ⌘- / ⇧-click a Changes row (multi-select), or hover it to show its buttons. |
 | `click-button <name>` | A button by its exact accessible name (icon buttons: the tooltip label, e.g. `Stage all`, `More git actions`). |

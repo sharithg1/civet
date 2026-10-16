@@ -17,6 +17,50 @@ async function connected() {
 }
 
 describe('MockBackend', () => {
+  it('changes worktree files like the daemon: no overwrite, no .git, trash + restore', async () => {
+    const { b } = await connected()
+    const op = (o: Parameters<MockBackend['fileOp']>[2]) => {
+      const p = b.fileOp('devbox', '/w', o)
+      void vi.runAllTimersAsync()
+      return p
+    }
+    const names = async (dir: string) =>
+      (await b.listFiles('devbox', '/w', dir, true)).entries.map((e) => e.name)
+    await op({ createDir: { path: 'notes' } })
+    expect(await names('notes')).toEqual([])
+    await op({ createFile: { path: 'notes/a.md' } })
+    await op({ copy: { from: 'notes', to: 'notes2' } })
+    await op({ move: { from: 'notes2/a.md', to: 'b.md' } })
+    expect(await names('notes2')).toEqual([])
+    expect(await names('')).toContain('b.md')
+    await expect(op({ createFile: { path: 'README.md' } })).rejects.toMatchObject({
+      code: 'alreadyExists'
+    })
+    await expect(op({ move: { from: 'notes', to: 'notes/x' } })).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    for (const path of ['.git/config', '../x', '/etc', ''])
+      await expect(op({ createFile: { path } })).rejects.toMatchObject({ code: 'invalidArgument' })
+
+    const t = await op({ trash: { path: 'docs' } })
+    expect(await names('')).not.toContain('docs')
+    await op({ createDir: { path: 'docs' } })
+    await expect(op({ restore: { trashId: t.trashId! } })).rejects.toMatchObject({
+      code: 'alreadyExists'
+    })
+    await op({ trash: { path: 'docs' } })
+    expect(await op({ restore: { trashId: t.trashId! } })).toMatchObject({ path: 'docs' })
+    expect(await names('docs')).toEqual(['INTERFACES.md', 'logo.png'])
+    // Other worktrees are untouched.
+    expect((await b.listFiles('devbox', '/other', '', false)).entries.map((e) => e.name)).toContain(
+      'README.md'
+    )
+
+    const up = await b.uploadToWorktree('devbox', '/w', 'docs', ['/tmp/shot.png', '/x/logo.png'])
+    expect(up.map((u) => u.path)).toEqual(['docs/shot.png', null])
+    expect(up[1]!.error).toMatch(/already exists/)
+  })
+
   it('connects with progress and lists repos, worktrees and panes', async () => {
     const { b, summary, states } = await connected()
     expect(summary).toMatchObject({ hostId: 'devbox', state: 'connected', transport: 'quic' })
@@ -84,7 +128,7 @@ describe('MockBackend', () => {
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
     await vi.runAllTimersAsync()
     const s = await p
-    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.2', livePanes: 7 })
+    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.15', livePanes: 7 })
     expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
     // Reconnect keeps the stored target and transport.
     b.simulateFailure('old-box', 'lost')
@@ -98,7 +142,7 @@ describe('MockBackend', () => {
     await vi.runAllTimersAsync()
     const after = await restarted
     expect(after.upgrade).toBeNull()
-    expect(after.daemonVersion).toBe('0.1.2')
+    expect(after.daemonVersion).toBe('0.1.15')
     expect(after.instanceId).not.toBe(s.instanceId)
     expect(await b.listPanes('old-box')).toEqual([])
     await expect(b.reconnectHost('nope')).rejects.toMatchObject({ code: 'noSuchHost' })

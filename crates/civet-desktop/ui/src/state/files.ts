@@ -9,7 +9,7 @@
 
 import { create } from 'zustand'
 import { CivetError, type CivetBackend } from '@/backend'
-import type { DirListing, FileList, FilePreview } from '@/types'
+import type { DirListing, FileEntry, FileList, FilePreview } from '@/types'
 import { setPrefs, usePrefs } from './prefs'
 import { useStore, wsKey } from './store'
 
@@ -142,8 +142,13 @@ export function collapseAll(hostId: string, worktree: string): void {
 
 /** Expand every ancestor of `path` (e.g. after picking it in quick-open). */
 export function revealPath(hostId: string, worktree: string, path: string): void {
+  expandDir(hostId, worktree, parentDir(path))
+}
+
+/** Expand `dir` and its ancestors, loading what is needed. */
+export function expandDir(hostId: string, worktree: string, dir: string): void {
   const open = new Set(expandedDirs(hostId, worktree))
-  for (let dir = parentDir(path); dir; dir = parentDir(dir)) open.add(dir)
+  for (let d = dir; d; d = parentDir(d)) open.add(d)
   setExpanded(wsKey(hostId, worktree), [...open])
   loadShown(hostId, worktree)
 }
@@ -167,6 +172,72 @@ export async function refreshFiles(hostId: string, worktree: string): Promise<vo
   const jobs = ['', ...visible].map((d) => loadDir(hostId, worktree, d, true))
   if (useFiles.getState().all[key]) jobs.push(loadAllFiles(hostId, worktree, true))
   await Promise.all(jobs)
+}
+
+/**
+ * Reload these directories now if they are cached (after a file op), and
+ * the quick-open list if it was loaded. Listings of `gone` directories and
+ * everything under them are dropped.
+ */
+export async function refreshDirs(
+  hostId: string,
+  worktree: string,
+  dirs: string[],
+  gone: string[] = []
+): Promise<void> {
+  const key = wsKey(hostId, worktree)
+  if (gone.length) {
+    useFiles.setState((s) => {
+      const cached = s.dirs[key] ?? {}
+      const kept = Object.fromEntries(
+        Object.entries(cached).filter(([d]) => !gone.some((g) => isUnder(d, g)))
+      )
+      return { dirs: { ...s.dirs, [key]: kept } }
+    })
+  }
+  const cached = useFiles.getState().dirs[key] ?? {}
+  const jobs = [...new Set(dirs)]
+    .filter((d) => cached[d])
+    .map((d) => loadDir(hostId, worktree, d, true))
+  if (useFiles.getState().all[key]) jobs.push(loadAllFiles(hostId, worktree, true))
+  await Promise.all(jobs)
+}
+
+/** `path` is `root` or inside it. */
+export function isUnder(path: string, root: string): boolean {
+  return root === '' || path === root || path.startsWith(`${root}/`)
+}
+
+/** Expanded directories follow a rename / move of `from` to `to`, or are forgotten (`to` null). */
+export function moveExpanded(hostId: string, worktree: string, from: string, to: string | null) {
+  const open = expandedDirs(hostId, worktree)
+  if (!open.some((d) => isUnder(d, from))) return
+  setExpanded(
+    wsKey(hostId, worktree),
+    open.flatMap((d) => (!isUnder(d, from) ? [d] : to == null ? [] : [to + d.slice(from.length)]))
+  )
+}
+
+export type TreeRow = { path: string; entry: FileEntry; depth: number }
+
+/** The tree's rows in display order: entries of loaded, expanded directories. */
+export function visibleRows(
+  dirs: Record<string, Loadable<DirListing>> | undefined,
+  expanded: readonly string[]
+): TreeRow[] {
+  const open = new Set(expanded)
+  const out: TreeRow[] = []
+  const walk = (dir: string, depth: number) => {
+    const l = dirs?.[dir]
+    if (l?.status !== 'ok') return
+    for (const entry of l.value.entries) {
+      const path = joinPath(dir, entry.name)
+      out.push({ path, entry, depth })
+      if (entry.kind === 'dir' && open.has(path)) walk(path, depth + 1)
+    }
+  }
+  walk('', 0)
+  return out
 }
 
 /** Show or hide gitignored files; cached listings are dropped. */
