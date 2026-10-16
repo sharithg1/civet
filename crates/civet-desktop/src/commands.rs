@@ -4,8 +4,8 @@
 //! Keep the list in sync with `build.rs` (ACL) and the capability file.
 
 use civet_proto::{
-    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, RepoInfo,
-    ScrollbackQuery, SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
+    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, ScrollbackQuery,
+    SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -15,7 +15,7 @@ use crate::batch::RecordSink;
 use crate::error::CmdError;
 use crate::events::{
     DaemonInfoView, ForwardView, HostSummary, HostTarget, LaunchedAgent, PingResult, PortsEvent,
-    ScrollbackPageView, TransportChoice,
+    RepoView, ScrollbackPageView, TransportChoice,
 };
 use crate::hosts::HostManager;
 
@@ -97,12 +97,12 @@ pub async fn ping(state: State<'_, AppState>, host_id: String) -> Res<PingResult
 }
 
 #[tauri::command]
-pub async fn list_repos(state: State<'_, AppState>, host_id: String) -> Res<Vec<RepoInfo>> {
+pub async fn list_repos(state: State<'_, AppState>, host_id: String) -> Res<Vec<RepoView>> {
     state.hosts.list_repos(&host_id).await
 }
 
 #[tauri::command]
-pub async fn add_repo(state: State<'_, AppState>, host_id: String, path: String) -> Res<RepoInfo> {
+pub async fn add_repo(state: State<'_, AppState>, host_id: String, path: String) -> Res<RepoView> {
     state.hosts.add_repo(&host_id, path).await
 }
 

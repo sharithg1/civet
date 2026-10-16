@@ -139,6 +139,38 @@ impl DaemonUpgrade {
     }
 }
 
+/// `list_repos` / `add_repo` result: a project as the UI sees it, the proto
+/// `RepoInfo` plus its kind (`"git"` / `"folder"`). Daemons older than
+/// [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`] only have repositories.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoView {
+    /// Id, name, path, default branch.
+    #[serde(flatten)]
+    pub repo: civet_proto::RepoInfo,
+    /// Repository or plain folder.
+    pub kind: civet_proto::ProjectKind,
+}
+
+impl From<civet_proto::ProjectInfo> for RepoView {
+    fn from(p: civet_proto::ProjectInfo) -> Self {
+        Self {
+            repo: p.repo,
+            kind: p.kind,
+        }
+    }
+}
+
+impl RepoView {
+    /// A repository from a daemon without folder projects.
+    pub fn git(repo: civet_proto::RepoInfo) -> Self {
+        Self {
+            repo,
+            kind: civet_proto::ProjectKind::Git,
+        }
+    }
+}
+
 /// `daemon_info` result: the proto `DaemonInfo` with the u64 instance id as
 /// a decimal string (a JSON number would lose precision in JS).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

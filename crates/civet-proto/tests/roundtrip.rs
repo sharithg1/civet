@@ -269,6 +269,10 @@ fn all_requests() -> Vec<Request> {
         Request::GitBranch {
             worktree: WorktreeId::from("/w"),
         },
+        Request::ListProjects,
+        Request::AddProject {
+            path: "~/notes".into(),
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -448,6 +452,23 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
         Ok(Response::FileChunk(FileChunk {
             size: 10,
             data: vec![0, 1, 2],
+        })),
+        Ok(Response::Projects(vec![
+            ProjectInfo {
+                repo: repo(),
+                kind: ProjectKind::Git,
+            },
+            ProjectInfo {
+                repo: RepoInfo {
+                    default_branch: None,
+                    ..repo()
+                },
+                kind: ProjectKind::Folder,
+            },
+        ])),
+        Ok(Response::Project(ProjectInfo {
+            repo: repo(),
+            kind: ProjectKind::Folder,
         })),
         Ok(Response::GitBranch(GitBranchInfo {
             branch: Some("feat/x".into()),
@@ -808,6 +829,25 @@ fn clipboard_event_is_appended() {
         v,
         serde_json::json!({"clipboard": {"pane": 3, "text": "hi"}})
     );
+}
+
+#[test]
+fn project_requests_are_appended() {
+    // Appended within protocol 1 after ReadFileChunk (27) / FileChunk (22).
+    assert_eq!(encode(&Request::ListProjects).unwrap(), vec![28]);
+    assert_eq!(
+        encode(&Request::AddProject { path: "a".into() }).unwrap(),
+        vec![29, 1, b'a']
+    );
+    assert_eq!(encode(&Response::Projects(vec![])).unwrap(), vec![23, 0]);
+    assert_eq!(encode(&ProjectKind::Folder).unwrap(), vec![1]);
+    let v = serde_json::to_value(Response::Project(ProjectInfo {
+        repo: repo(),
+        kind: ProjectKind::Folder,
+    }))
+    .unwrap();
+    assert_eq!(v["project"]["kind"], "folder");
+    assert_eq!(v["project"]["repo"]["defaultBranch"], "main");
 }
 
 /// Struct-variant fields must be camelCase in JSON too (`rename_all` on an
