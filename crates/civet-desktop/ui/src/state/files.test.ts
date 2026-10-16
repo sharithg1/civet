@@ -76,6 +76,26 @@ describe('files store', () => {
     expect(usePrefs.getState().expandedDirs[KEY]).toEqual(['src', 'hidden/below'])
   })
 
+  it('reopening a folder after a refresh loads its remembered expanded subfolders', async () => {
+    const listFiles = backendWith({
+      '': listing('src/'),
+      src: listing('nested/'),
+      'src/nested': listing('x')
+    })
+    const status = (d: string) => useFiles.getState().dirs[KEY]?.[d]?.status
+    files.toggleDir('h', '/w', 'src')
+    files.toggleDir('h', '/w', 'src/nested')
+    await vi.waitFor(() => expect(status('src/nested')).toBe('ok'))
+    files.toggleDir('h', '/w', 'src')
+    await files.refreshFiles('h', '/w')
+    expect(status('src/nested')).toBeUndefined()
+
+    listFiles.mockClear()
+    files.toggleDir('h', '/w', 'src')
+    await vi.waitFor(() => expect(status('src/nested')).toBe('ok'))
+    expect(listFiles.mock.calls.map((c) => c[2]).sort()).toEqual(['src', 'src/nested'])
+  })
+
   it('reveals every ancestor of a picked file', () => {
     backendWith({})
     files.revealPath('h', '/w', 'a/b/c.txt')

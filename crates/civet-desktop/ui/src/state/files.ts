@@ -108,6 +108,20 @@ export async function loadDir(
   }
 }
 
+/** Expanded directories whose ancestors are all expanded too (shown in the tree). */
+function visibleExpanded(open: readonly string[]): string[] {
+  const set = new Set(open)
+  return open.filter((d) => {
+    for (let p = parentDir(d); p; p = parentDir(p)) if (!set.has(p)) return false
+    return true
+  })
+}
+
+/** Load every shown directory not cached yet (e.g. a remembered subfolder of one just expanded). */
+function loadShown(hostId: string, worktree: string): void {
+  for (const d of visibleExpanded(expandedDirs(hostId, worktree))) void loadDir(hostId, worktree, d)
+}
+
 export function toggleDir(hostId: string, worktree: string, dir: string): void {
   const key = wsKey(hostId, worktree)
   const open = expandedDirs(hostId, worktree)
@@ -118,7 +132,7 @@ export function toggleDir(hostId: string, worktree: string, dir: string): void {
     )
   } else {
     setExpanded(key, [...open, dir])
-    void loadDir(hostId, worktree, dir)
+    loadShown(hostId, worktree)
   }
 }
 
@@ -129,13 +143,9 @@ export function collapseAll(hostId: string, worktree: string): void {
 /** Expand every ancestor of `path` (e.g. after picking it in quick-open). */
 export function revealPath(hostId: string, worktree: string, path: string): void {
   const open = new Set(expandedDirs(hostId, worktree))
-  for (let dir = parentDir(path); dir; dir = parentDir(dir)) {
-    if (!open.has(dir)) {
-      open.add(dir)
-      void loadDir(hostId, worktree, dir)
-    }
-  }
+  for (let dir = parentDir(path); dir; dir = parentDir(dir)) open.add(dir)
   setExpanded(wsKey(hostId, worktree), [...open])
+  loadShown(hostId, worktree)
 }
 
 /**
@@ -144,12 +154,9 @@ export function revealPath(hostId: string, worktree: string, path: string): void
  */
 export async function refreshFiles(hostId: string, worktree: string): Promise<void> {
   const key = wsKey(hostId, worktree)
-  const open = new Set(expandedDirs(hostId, worktree))
-  const visible = [...open].filter((d) => {
-    for (let p = parentDir(d); p; p = parentDir(p)) if (!open.has(p)) return false
-    return true
-  })
-  // Hidden listings (under a collapsed parent) are refetched when shown.
+  const visible = visibleExpanded(expandedDirs(hostId, worktree))
+  // Hidden listings (under a collapsed parent) are refetched when shown
+  // (`loadShown`).
   useFiles.setState((s) => {
     const dirs = s.dirs[key] ?? {}
     const kept = Object.fromEntries(

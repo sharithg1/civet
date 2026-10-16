@@ -91,6 +91,12 @@ export function FilesTab({
   const paths = all?.status === 'ok' ? all.value.paths : null
   const matches = useMemo(() => (paths && query ? fuzzyFilter(query, paths) : []), [paths, query])
 
+  // Whenever there is a query: also after switching worktrees or reconnecting.
+  const searching = query !== ''
+  useEffect(() => {
+    if (searching && connected) void loadAllFiles(hostId, worktree)
+  }, [searching, hostId, worktree, connected])
+
   useEffect(() => {
     if (!connected) return
     void refreshFiles(hostId, worktree)
@@ -133,7 +139,6 @@ export function FilesTab({
           onQuery={(q) => {
             setQuery(q)
             setSel(0)
-            if (q && connected) void loadAllFiles(hostId, worktree)
           }}
           onKey={(k) => {
             if (k === 'Enter' && matches[sel]) pick(matches[sel].path)
