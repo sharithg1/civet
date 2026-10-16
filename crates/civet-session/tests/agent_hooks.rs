@@ -203,7 +203,8 @@ async fn wait_hook_status(
 /// `--settings <file>` (added by the PATH shim), takes the hook script from
 /// that file and fires UserPromptSubmit, a PreToolUse, a permission
 /// Notification, a parallel subagent's PreToolUse (must not clear the
-/// prompt), PostToolUse and Stop.
+/// prompt), PostToolUse and Stop. Each transition waits for the test to
+/// acknowledge the previous one, so polling cannot miss a short-lived status.
 fn fake_claude(bin: &Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(bin).unwrap();
@@ -212,17 +213,17 @@ if [ "$1" != "--settings" ]; then echo "fake-claude: no settings: $*"; sleep 30;
 settings="$2"
 hook=$(sed -n "s/.*\"command\": \"'\(.*\)' done\".*/\1/p" "$settings" | head -n 1)
 echo "fake-claude hook=$hook"
-sleep 0.3
+advance() { IFS= read -r step && [ "$step" = "$1" ] || exit 1; }
 printf '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}' | "$hook" running
-sleep 0.6
+advance permission
 printf '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | "$hook" running soft
-sleep 0.6
 printf '{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"}' | "$hook" needs_input
-sleep 0.4
+advance soft
 printf '{"hook_event_name":"PreToolUse","tool_name":"Read"}' | "$hook" running soft
-sleep 1.6
+echo fake-claude-soft-fired
+advance resume
 printf '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | "$hook" running
-sleep 0.6
+advance stop
 printf '{"hook_event_name":"Stop"}' | "$hook" done
 echo fake-claude-finished
 sleep 30
@@ -232,29 +233,54 @@ sleep 30
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+async fn wait_output(f: &Fixture, pane: PaneId, marker: &str) {
+    tokio::time::timeout(T, async {
+        loop {
+            if f.mgr
+                .screen_text(pane)
+                .unwrap()
+                .iter()
+                .any(|line| line.contains(marker))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {marker:?}"));
+}
+
 async fn run_claude_flow(f: &Fixture, pane: PaneId, rx: &mut broadcast::Receiver<Event>) {
     let s = wait_hook_status(rx, pane, AgentStatus::Running).await;
     assert_eq!(s.source, AgentStatusSource::Hook);
+    // The interactive-shell caller already used input sequence numbers 1 and 2.
+    input(f, pane, 10, "permission\n");
     let s = wait_hook_status(rx, pane, AgentStatus::NeedsInput).await;
     assert_eq!(
         s.message.as_deref(),
         Some("Claude needs your permission to use Bash")
     );
-    let at = Instant::now();
     // The subagent's PreToolUse ("soft") must not end the prompt.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    input(f, pane, 11, "soft\n");
+    wait_output(f, pane, "fake-claude-soft-fired").await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), next_status(rx, pane))
+            .await
+            .is_err(),
+        "soft PreToolUse must not change the pending permission status"
+    );
     assert_eq!(
         f.mgr.pane_info(pane).unwrap().status,
         AgentStatus::NeedsInput
     );
+    input(f, pane, 12, "resume\n");
     let s = next_status(rx, pane).await;
     assert_eq!(s.status, AgentStatus::Running, "{s:?}");
     assert_eq!(s.source, AgentStatusSource::Hook);
-    assert!(
-        at.elapsed() >= Duration::from_millis(1200),
-        "too early: {s:?}"
-    );
+    input(f, pane, 13, "stop\n");
     wait_hook_status(rx, pane, AgentStatus::Done).await;
+    wait_output(f, pane, "fake-claude-finished").await;
 }
 
 /// Environment that hides any real `claude` of the machine running the

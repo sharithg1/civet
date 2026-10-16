@@ -496,28 +496,41 @@ async fn flow_control_window_and_coalescing() {
     let f = fixture();
     let info = f
         .mgr
-        .spawn_pane(sh(
-            "i=0; while [ $i -lt 150 ]; do echo line $i; i=$((i+1)); sleep 0.01; done; echo finished; sleep 30",
-        ))
+        .spawn_pane(sh("stty -echo; echo ready; while IFS= read -r line; do \
+             case \"$line\" in finish) seq 1 150; echo finished ;; \
+             *) echo \"$line\" ;; esac; done"))
         .await
         .unwrap();
+    wait_screen(&f.mgr, info.id, "ready").await;
     let sub = f.mgr.subscribe(client(), info.id).unwrap();
-    // Without acks, at most MAX_INFLIGHT_UPDATES updates are sent.
+    // Produce each update only after receiving the previous one, so filling
+    // the window does not depend on shell sleeps or the runner's scheduling.
     let mut unacked = Vec::new();
-    loop {
-        match tokio::time::timeout(Duration::from_millis(800), sub.next()).await {
-            Ok(Some(PaneOutput::Screen(u))) => {
-                unacked.push(u.state);
-                assert!(sub.inflight() <= MAX_INFLIGHT_UPDATES);
-                assert!(unacked.len() <= MAX_INFLIGHT_UPDATES, "window exceeded");
-            }
-            Ok(Some(PaneOutput::InputAck { .. })) => {}
-            Ok(None) => panic!("closed"),
-            Err(_) => break,
+    for i in 0..MAX_INFLIGHT_UPDATES {
+        if i > 0 {
+            f.mgr
+                .write_input(client(), &input(info.id, i as u64, &format!("line {i}\n")))
+                .unwrap();
         }
+        unacked.push(next_screen(&sub).await.state);
+        assert_eq!(sub.inflight(), unacked.len());
     }
-    assert_eq!(unacked.len(), MAX_INFLIGHT_UPDATES, "window should fill");
+    // Keep producing while the window is full: the PTY must still drain,
+    // but the subscriber must not receive another screen until it acks.
+    f.mgr
+        .write_input(
+            client(),
+            &input(info.id, MAX_INFLIGHT_UPDATES as u64, "finish\n"),
+        )
+        .unwrap();
     wait_screen(&f.mgr, info.id, "finished").await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), next_screen(&sub))
+            .await
+            .is_err(),
+        "window exceeded"
+    );
+    assert_eq!(sub.inflight(), MAX_INFLIGHT_UPDATES);
     // Acking reopens the window; the next update jumps to the newest state
     // (newest wins) relative to the last sent one.
     sub.ack(*unacked.last().unwrap());
