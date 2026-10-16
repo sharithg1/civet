@@ -936,11 +936,11 @@ function removePaneEverywhere(hostId: string, pane: PaneId): void {
   })
 }
 
-async function spawnShell(hostId: string, worktree: string): Promise<PaneInfo> {
+async function spawnShell(hostId: string, worktree: string, cwd?: string): Promise<PaneInfo> {
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   const pane = await backend().spawnPane(hostId, {
     worktree,
-    cwd: wt?.path ?? null,
+    cwd: cwd ?? wt?.path ?? null,
     command: null,
     env: [],
     size: DEFAULT_SPAWN_SIZE,
@@ -951,10 +951,15 @@ async function spawnShell(hostId: string, worktree: string): Promise<PaneInfo> {
   return pane
 }
 
-export async function newTerminalTab(hostId: string, worktree: string): Promise<void> {
+/** A shell tab in the worktree (in `cwd`, an absolute path on the host, if given). */
+export async function newTerminalTab(
+  hostId: string,
+  worktree: string,
+  cwd?: string
+): Promise<void> {
   if (isRemoving(hostId, worktree)) return
   try {
-    const pane = await spawnShell(hostId, worktree)
+    const pane = await spawnShell(hostId, worktree, cwd)
     openPaneInTab(hostId, worktree, pane.id)
   } catch (err) {
     reportError('Could not open a terminal', err)

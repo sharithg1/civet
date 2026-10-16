@@ -139,3 +139,19 @@ describe('MockBackend', () => {
     await expect(b.listRepos('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
   })
 })
+
+describe('MockBackend files', () => {
+  it('lists, previews and quick-opens, hiding ignored files by default', async () => {
+    const { b } = await connected()
+    const root = await b.listFiles('devbox', '/w', '', false)
+    expect(root.entries.map((e) => e.name)).not.toContain('target')
+    const all = await b.listFiles('devbox', '/w', '', true)
+    expect(all.entries.filter((e) => e.ignored).map((e) => e.name)).toEqual(['target', 'debug.log'])
+    expect((await b.readFile('devbox', '/w', 'README.md', 1024)).text).toContain('Civet')
+    expect((await b.readFile('devbox', '/w', 'docs/logo.png', 1024)).binary).toBe(true)
+    await expect(b.listFiles('devbox', '/w', '../x', false)).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    expect((await b.listAllFiles('devbox', '/w')).paths).toContain('crates/civetd/src/main.rs')
+  })
+})

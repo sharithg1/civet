@@ -518,6 +518,46 @@ impl SessionManager {
         Err(SessionError::NotFound(format!("worktree {worktree}")))
     }
 
+    /// A worktree's directory, for the file requests below.
+    async fn worktree_root(&self, worktree: &WorktreeId) -> Result<PathBuf, SessionError> {
+        let (_, w) = self.find_worktree(worktree).await?;
+        Ok(PathBuf::from(w.path))
+    }
+
+    /// One directory level of a worktree (`dir` relative to its root),
+    /// gitignored entries left out unless `include_ignored`. Paths that
+    /// leave the worktree are InvalidArgument (see [`crate::files`]).
+    pub async fn list_files(
+        &self,
+        worktree: &WorktreeId,
+        dir: &str,
+        include_ignored: bool,
+    ) -> Result<civet_proto::DirListing, SessionError> {
+        let root = self.worktree_root(worktree).await?;
+        crate::files::list_dir(&self.inner.git, &root, dir, include_ignored).await
+    }
+
+    /// The start of a worktree file for a read-only preview (same path
+    /// rules as [`Self::list_files`]).
+    pub async fn read_file(
+        &self,
+        worktree: &WorktreeId,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<civet_proto::FilePreview, SessionError> {
+        let root = self.worktree_root(worktree).await?;
+        crate::files::read_file(&root, path, max_bytes).await
+    }
+
+    /// Every tracked and untracked, not ignored file of a worktree.
+    pub async fn list_all_files(
+        &self,
+        worktree: &WorktreeId,
+    ) -> Result<civet_proto::FileList, SessionError> {
+        let root = self.worktree_root(worktree).await?;
+        crate::files::list_all(&self.inner.git, &root).await
+    }
+
     /// `git worktree remove [--force]`. Refuses the main worktree. With
     /// `force`, a locked worktree is removed too (`-f -f`). A worktree whose
     /// directory is already gone is unregistered with `git worktree prune`

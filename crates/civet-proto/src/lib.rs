@@ -62,9 +62,10 @@ pub use agent::{
 };
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
-    AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, ErrorCode, Event,
-    KillSignal, LaunchAgentRequest, PaneInfo, PullRequestInfo, PullRequestState, RepoInfo, Request,
-    Response, RpcError, SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
+    AgentStatusEvent, CommandSpec, ControlRequest, ControlResponse, DaemonInfo, DirListing,
+    ErrorCode, Event, FileEntry, FileKind, FileList, FilePreview, KillSignal, LaunchAgentRequest,
+    PaneInfo, PullRequestInfo, PullRequestState, RepoInfo, Request, Response, RpcError,
+    SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -106,6 +107,21 @@ pub const UPLOAD_FILE_MIN_DAEMON_VERSION: &str = "0.1.4";
 /// Oldest daemon that understands [`Request::ListPullRequests`] (appended
 /// within protocol 1, gated like [`UPLOAD_FILE_MIN_DAEMON_VERSION`]).
 pub const LIST_PULL_REQUESTS_MIN_DAEMON_VERSION: &str = "0.1.5";
+
+/// Oldest daemon that understands [`Request::ListFiles`],
+/// [`Request::ReadFile`] and [`Request::ListAllFiles`] (appended within
+/// protocol 1, gated like [`UPLOAD_FILE_MIN_DAEMON_VERSION`]).
+pub const LIST_FILES_MIN_DAEMON_VERSION: &str = "0.1.10";
+
+/// Most entries in a [`DirListing`]; the rest of a huge directory is left
+/// out (`truncated`).
+pub const MAX_DIR_ENTRIES: usize = 10_000;
+
+/// Largest [`Request::ReadFile`] preview (well under the frame limit).
+pub const MAX_FILE_PREVIEW_BYTES: u64 = 1024 * 1024;
+
+/// Most paths in a [`FileList`] (`truncated` beyond).
+pub const MAX_ALL_FILES: usize = 50_000;
 
 /// Largest [`Request::UploadFile`] payload (headroom under the frame limit).
 pub const MAX_UPLOAD_BYTES: usize = 15 * 1024 * 1024;

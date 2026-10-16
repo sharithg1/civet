@@ -1,11 +1,12 @@
 // Right panel (Files / Changes / Branch / Ports), styled after Cursor's review pane:
 // its own header row of icon pills with the panel toggle at the far right,
 // then a PR-like branch view (state badge, branch → base, title, sections).
-// civetd does not expose a worktree's files, git status, diffs, commits or
-// PRs yet, so Files and Changes are explanatory empty states and Branch shows
-// what the daemon does report (branch, HEAD, path, sessions) plus "Remove
-// worktree…". Ports lists listening ports and port forwards (PortsTab.tsx).
-// Backend follow-up: list_files / git_status / git_diff / branch_info.
+// Files browses and previews the worktree's files (FilesTab.tsx). civetd does
+// not expose git status, diffs, commits or PRs yet, so Changes is an
+// explanatory empty state and Branch shows what the daemon does report
+// (branch, HEAD, path, sessions) plus "Remove worktree…". Ports lists
+// listening ports and port forwards (PortsTab.tsx).
+// Backend follow-up: git_status / git_diff / branch_info.
 import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
 import { panesOfWorktree, pushToast, useStore, type RightTab } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
@@ -14,6 +15,7 @@ import { DOT_LABEL, paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree
 import { useWorktreeInfo } from './chrome'
 import { usePorts } from '@/state/ports'
 import { IconButton } from './IconButton'
+import { FilesTab } from './FilesTab'
 import { PortsTab } from './PortsTab'
 import { StatusDot } from './StatusDot'
 import { RightPanelToggle } from './TitleBar'
@@ -91,12 +93,10 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   const paneMap = useStore((s) => s.panes[hostId])
   const labelPref = usePrefs((s) => s.worktreeLabel)
   if (!wt) return null
+  const connected = host?.state === 'connected'
   if (tab === 'files') {
     return (
-      <Empty icon={FileText}>
-        File browsing isn&apos;t available yet: civetd doesn&apos;t list a worktree&apos;s files.
-        Use a Terminal tab <Code>⌥T</Code> meanwhile.
-      </Empty>
+      <FilesTab hostId={hostId} worktree={worktree} root={wt.info.path} connected={connected} />
     )
   }
   if (tab === 'changes') {
@@ -109,7 +109,6 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   }
   const { repo, info } = wt
   const branch = worktreeBranch(info)
-  const connected = host?.state === 'connected'
   const remote = `${host?.label ?? hostId}:${info.path}`
   const panes = panesOfWorktree(paneMap, worktree).sort((a, b) => a.id - b.id)
   if (tab === 'ports') {

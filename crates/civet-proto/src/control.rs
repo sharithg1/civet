@@ -73,6 +73,70 @@ pub struct PullRequestInfo {
     pub state: PullRequestState,
 }
 
+/// Kind of a [`FileEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileKind {
+    /// Regular file (or anything else that is neither a directory nor a
+    /// symlink: fifo, socket...).
+    File,
+    /// Directory.
+    Dir,
+    /// Symbolic link (not followed).
+    Symlink,
+}
+
+/// One entry of a directory listing ([`Request::ListFiles`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    /// File name (no directory part).
+    pub name: String,
+    /// Kind, from `lstat`.
+    pub kind: FileKind,
+    /// Size in bytes (`lstat`); 0 for directories.
+    pub size: u64,
+    /// True if git ignores it (only listed when ignored entries are asked
+    /// for).
+    pub ignored: bool,
+}
+
+/// One directory level of a worktree ([`Response::Files`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirListing {
+    /// Directories first, then by name (case-insensitive).
+    pub entries: Vec<FileEntry>,
+    /// True if the directory had more than [`crate::MAX_DIR_ENTRIES`]
+    /// entries and the rest were left out.
+    pub truncated: bool,
+}
+
+/// Read-only preview of a file ([`Response::FilePreview`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePreview {
+    /// Size of the whole file in bytes.
+    pub size: u64,
+    /// True if the file looks binary (a NUL byte in its first 8 KiB);
+    /// `text` is then empty.
+    pub binary: bool,
+    /// True if only the first `max_bytes` were read.
+    pub truncated: bool,
+    /// Contents as UTF-8 (invalid sequences replaced).
+    pub text: String,
+}
+
+/// Every file of a worktree, for quick-open ([`Response::AllFiles`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileList {
+    /// Paths relative to the worktree root (`/`-separated), sorted.
+    pub paths: Vec<String>,
+    /// True if there were more than [`crate::MAX_ALL_FILES`].
+    pub truncated: bool,
+}
+
 /// Program + argv for a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,6 +413,40 @@ pub enum Request {
         /// Repository.
         repo: RepoId,
     },
+    /// One directory level of a worktree, gitignored entries left out
+    /// unless `include_ignored` (`.git` never listed). -> [`Response::Files`].
+    /// Paths are relative to the worktree root and may not leave it
+    /// (`..`, absolute paths and symlinks out are `InvalidArgument`).
+    /// Clients send it only to daemons of at least
+    /// [`crate::LIST_FILES_MIN_DAEMON_VERSION`] (also [`Request::ReadFile`],
+    /// [`Request::ListAllFiles`]).
+    ListFiles {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Directory relative to the worktree root (`""` = the root).
+        dir: String,
+        /// Also list (and flag) gitignored entries.
+        include_ignored: bool,
+    },
+    /// The start of a file, for a read-only preview.
+    /// -> [`Response::FilePreview`]. Same path rules as
+    /// [`Request::ListFiles`].
+    ReadFile {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// File relative to the worktree root.
+        path: String,
+        /// Read at most this much (capped at
+        /// [`crate::MAX_FILE_PREVIEW_BYTES`]).
+        max_bytes: u64,
+    },
+    /// Every tracked and untracked, not ignored file of a worktree (`git
+    /// ls-files -co --exclude-standard`), for quick-open.
+    /// -> [`Response::AllFiles`]
+    ListAllFiles {
+        /// Worktree.
+        worktree: WorktreeId,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -396,6 +494,12 @@ pub enum Response {
     },
     /// Reply to [`Request::ListPullRequests`].
     PullRequests(Vec<PullRequestInfo>),
+    /// Reply to [`Request::ListFiles`].
+    Files(DirListing),
+    /// Reply to [`Request::ReadFile`].
+    FilePreview(FilePreview),
+    /// Reply to [`Request::ListAllFiles`].
+    AllFiles(FileList),
 }
 
 /// Error category for a failed request.

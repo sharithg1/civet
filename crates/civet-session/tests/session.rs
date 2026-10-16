@@ -822,6 +822,117 @@ async fn recreate_after_remove_reuses_untouched_branch() {
     ));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn browse_worktree_files() {
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    std::fs::write(repo_dir.join(".gitignore"), "target/\n*.log\n").unwrap();
+    std::fs::create_dir_all(repo_dir.join("src/bin")).unwrap();
+    std::fs::create_dir_all(repo_dir.join("target")).unwrap();
+    std::fs::write(repo_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(repo_dir.join("target/out"), "x").unwrap();
+    std::fs::write(repo_dir.join("debug.log"), "x").unwrap();
+    std::fs::write(repo_dir.join("Notes.md"), "n").unwrap();
+    std::fs::write(repo_dir.join("blob.bin"), b"\x89PNG\0\0").unwrap();
+    // Tracked although it matches *.log: still listed.
+    std::fs::write(repo_dir.join("kept.log"), "k").unwrap();
+    git(&repo_dir, &["add", "-f", "kept.log"]);
+    std::fs::write(f.root.join("secret"), "s").unwrap();
+    std::os::unix::fs::symlink(f.root.join("secret"), repo_dir.join("escape")).unwrap();
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+
+    let names =
+        |l: &civet_proto::DirListing| l.entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    let top = f.mgr.list_files(&wt, "", false).await.unwrap();
+    assert_eq!(
+        names(&top),
+        [
+            "src",
+            ".gitignore",
+            "blob.bin",
+            "escape",
+            "kept.log",
+            "Notes.md",
+            "README"
+        ]
+    );
+    assert!(!top.truncated);
+    let escape = top.entries.iter().find(|e| e.name == "escape").unwrap();
+    assert_eq!(escape.kind, civet_proto::FileKind::Symlink);
+    let readme = top.entries.iter().find(|e| e.name == "README").unwrap();
+    assert_eq!((readme.kind, readme.size), (civet_proto::FileKind::File, 3));
+
+    let all = f.mgr.list_files(&wt, ".", true).await.unwrap();
+    let flagged: Vec<_> = all
+        .entries
+        .iter()
+        .filter(|e| e.ignored)
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(flagged, ["target", "debug.log"]);
+    let src = f.mgr.list_files(&wt, "src", false).await.unwrap();
+    assert_eq!(names(&src), ["bin", "main.rs"]);
+    // Inside an ignored directory, everything is flagged.
+    let target = f.mgr.list_files(&wt, "target", true).await.unwrap();
+    assert!(target.entries.iter().all(|e| e.ignored));
+
+    let p = f.mgr.read_file(&wt, "src/main.rs", 1024).await.unwrap();
+    assert_eq!(p.text, "fn main() {}\n");
+    assert!(!p.binary && !p.truncated);
+    let p = f.mgr.read_file(&wt, "src/main.rs", 4).await.unwrap();
+    assert_eq!((p.text.as_str(), p.truncated, p.size), ("fn m", true, 13));
+    let p = f.mgr.read_file(&wt, "blob.bin", 1024).await.unwrap();
+    assert!(p.binary && p.text.is_empty());
+
+    // Nothing outside the worktree, however it is spelled.
+    for bad in ["..", "../secret", "src/../../secret", "/etc", "escape"] {
+        assert!(
+            matches!(
+                f.mgr.list_files(&wt, bad, true).await,
+                Err(SessionError::InvalidArgument(_))
+            ),
+            "list {bad:?}"
+        );
+        assert!(
+            matches!(
+                f.mgr.read_file(&wt, bad, 1024).await,
+                Err(SessionError::InvalidArgument(_))
+            ),
+            "read {bad:?}"
+        );
+    }
+    assert!(matches!(
+        f.mgr.read_file(&wt, "src", 1024).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        f.mgr.list_files(&wt, "missing", false).await,
+        Err(SessionError::NotFound(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .list_files(&WorktreeId(f.root.to_string_lossy().into()), "", false)
+            .await,
+        Err(SessionError::NotFound(_))
+    ));
+
+    let files = f.mgr.list_all_files(&wt).await.unwrap();
+    assert_eq!(
+        files.paths,
+        [
+            ".gitignore",
+            "Notes.md",
+            "README",
+            "blob.bin",
+            "escape",
+            "kept.log",
+            "src/main.rs"
+        ]
+    );
+    assert!(!files.truncated);
+}
+
 /// `git worktree add` in a terminal reaches clients as WorktreesChanged.
 #[tokio::test(flavor = "multi_thread")]
 async fn external_worktree_changes_emit_events() {
