@@ -22,8 +22,6 @@ packet, not a new TCP + SSH + WebSocket handshake.
   state sync, reconnect cases, scrollback, prediction, failure modes.
 * [docs/INTERFACES.md](docs/INTERFACES.md): the binding contract between
   the crates (wire types, APIs, constants, on-disk layout, env vars).
-* [docs/HANDOFF.md](docs/HANDOFF.md): hand a task from an agent to a new
-  worktree + agent (`civet handoff`, the Claude Code / Codex skill).
 * [crates/civet-term/SPIKE.md](crates/civet-term/SPIKE.md): terminal crate
   choice. [crates/civet-session/HOOKS.md](crates/civet-session/HOOKS.md):
   agent status hooks.
@@ -201,7 +199,8 @@ pointed at that daemon). `civet install-skills` installs the
 ask the agent to "hand off" a side task: it writes a brief and runs
 `civet handoff`, which creates a new worktree from the current `HEAD` and
 starts a new agent there on the brief. It shows up in the app right away.
-See [docs/HANDOFF.md](docs/HANDOFF.md).
+`civet handoff --help` lists the options; the skill is
+[crates/civetd/skills/civet-handoff/SKILL.md](crates/civetd/skills/civet-handoff/SKILL.md).
 
 **Settings → General → Terminal → Local echo prediction**: Auto (mosh-style
 underlined guesses on links slower than ~30 ms) or Off; stored with the
