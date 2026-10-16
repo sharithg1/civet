@@ -55,6 +55,7 @@ import type {
   FileOp,
   FileOpResult,
   FilePreview,
+  HostDirListing,
   GitAction,
   GitBranchInfo,
   GitDiffInfo,
@@ -64,7 +65,7 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.1.15'
+export const MOCK_VERSION = '0.1.17'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -535,6 +536,36 @@ const MOCK_FILES: Record<string, string> = {
 
 /** Mock daemons support file ops from this version on (like FILE_OPS_MIN_DAEMON_VERSION). */
 const MOCK_FILE_OPS_VERSION = '0.1.15'
+
+/** Every mock host's home directory. */
+export const MOCK_HOME = '/home/dev'
+
+/**
+ * Directories on every mock host (for `listDirs`), relative to the home
+ * directory; `*` marks a git repository. Added repos and every ancestor
+ * exist too.
+ */
+const MOCK_HOST_DIRS = [
+  '.cache',
+  '.config',
+  'Desktop',
+  'Documents/notes',
+  'Downloads',
+  'go',
+  'mirrors/linux.git*',
+  'src/civet*',
+  'src/civet/crates',
+  'src/civet/docs',
+  'src/civet-worktrees/quic-resume*',
+  'src/civet-worktrees/scrollback-paging*',
+  'src/civet-worktrees/fix-flaky-e2e*',
+  'src/dotfiles*',
+  'src/experiments/raft-sim*',
+  'src/experiments/scratch',
+  'src/orca*',
+  'src/orca-worktrees/fix-wake-reconnect*',
+  'src/website*'
+]
 
 /**
  * A worktree's files in memory: file bodies by path plus the set of
@@ -1048,6 +1079,42 @@ export class MockBackend implements CivetBackend {
     ])
     h.event('reposChanged')
     return repo
+  }
+
+  async listDirs(hostId: string, path: string): Promise<HostDirListing> {
+    // Both older mock daemons predate ListDirs.
+    const v = this.host(hostId).summary.daemonVersion
+    if (v === MOCK_OLD_VERSION || v === MOCK_PRE_GIT_ACTIONS_VERSION)
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; this needs v0.1.17 or newer (restart the daemon to upgrade)`
+      )
+    await sleep(40)
+    const p = path.trim()
+    const abs =
+      p === '~' || p === ''
+        ? MOCK_HOME
+        : p.startsWith('~/')
+          ? `${MOCK_HOME}/${p.slice(2)}`
+          : p.startsWith('/')
+            ? p
+            : `${MOCK_HOME}/${p}`
+    const dir = abs.replace(/\/+$/, '')
+    const all = new Map<string, boolean>()
+    for (const d of MOCK_HOST_DIRS) all.set(`${MOCK_HOME}/${d.replace(/\*$/, '')}`, d.endsWith('*'))
+    for (const r of this.host(hostId).repos) all.set(r.path.replace(/\/+$/, ''), true)
+    for (const d of [...all.keys()]) {
+      for (let i = d.lastIndexOf('/'); i > 0; i = d.lastIndexOf('/', i - 1)) {
+        const up = d.slice(0, i)
+        if (!all.has(up)) all.set(up, false)
+      }
+    }
+    if (dir && !all.has(dir)) throw new CivetError('notFound', `"${abs}" not found`)
+    const dirs = [...all]
+      .filter(([d]) => d.startsWith(`${dir}/`) && !d.slice(dir.length + 1).includes('/'))
+      .map(([d, gitRepo]) => ({ name: d.slice(dir.length + 1), gitRepo }))
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+    return { path: abs, dirs, truncated: false }
   }
 
   async removeRepo(hostId: string, repo: string) {

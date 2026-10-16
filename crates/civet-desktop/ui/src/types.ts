@@ -88,6 +88,22 @@ export type FileEntry = {
 /** One directory level: directories first, then by name. */
 export type DirListing = { entries: FileEntry[]; truncated: boolean }
 
+/** A subdirectory of a host directory (`list_dirs`, civetd >= 0.1.17). */
+export type HostDir = {
+  name: string
+  /** Has `.git` (repository or worktree root) or is a bare repository. */
+  gitRepo: boolean
+}
+
+/** Subdirectories of any host directory, for completing a folder path. */
+export type HostDirListing = {
+  /** The directory listed: absolute, `~` expanded. */
+  path: string
+  /** By name (case-insensitive), hidden ones included. */
+  dirs: HostDir[]
+  truncated: boolean
+}
+
 export type FilePreview = {
   /** Size of the whole file. */
   size: number

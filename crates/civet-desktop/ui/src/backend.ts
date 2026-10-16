@@ -39,6 +39,7 @@ import type {
   WorktreeInfo,
   PullRequestInfo,
   DirListing,
+  HostDirListing,
   FileList,
   FileOp,
   FileOpResult,
@@ -111,6 +112,11 @@ export interface CivetBackend {
   listRepos(hostId: string): Promise<RepoInfo[]>
   addRepo(hostId: string, path: string): Promise<RepoInfo>
   removeRepo(hostId: string, repo: RepoId): Promise<void>
+  /**
+   * Subdirectories of any host directory (absolute or `~/…`), git
+   * repositories flagged, for completing a folder path (civetd >= 0.1.17).
+   */
+  listDirs(hostId: string, path: string): Promise<HostDirListing>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
@@ -309,6 +315,9 @@ export class TauriBackend implements CivetBackend {
   }
   removeRepo(hostId: string, repo: RepoId) {
     return this.callVoid('remove_repo', { hostId, repo })
+  }
+  listDirs(hostId: string, path: string) {
+    return this.call<HostDirListing>('list_dirs', { hostId, path })
   }
   listWorktrees(hostId: string, repo: RepoId) {
     return this.call<WorktreeInfo[]>('list_worktrees', { hostId, repo })

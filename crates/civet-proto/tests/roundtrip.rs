@@ -269,6 +269,9 @@ fn all_requests() -> Vec<Request> {
         Request::GitBranch {
             worktree: WorktreeId::from("/w"),
         },
+        Request::ListDirs {
+            path: "~/src".into(),
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -470,6 +473,20 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             has_remote: false,
         })),
         Ok(Response::GitDiscarded(discard_snapshot())),
+        Ok(Response::Dirs(HostDirListing {
+            path: "/home/u/src".into(),
+            dirs: vec![
+                HostDir {
+                    name: "civet".into(),
+                    git_repo: true,
+                },
+                HostDir {
+                    name: "notes".into(),
+                    git_repo: false,
+                },
+            ],
+            truncated: false,
+        })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -807,6 +824,33 @@ fn clipboard_event_is_appended() {
     assert_eq!(
         v,
         serde_json::json!({"clipboard": {"pane": 3, "text": "hi"}})
+    );
+}
+
+#[test]
+fn list_dirs_is_appended() {
+    // Appended within protocol 1 after ReadFileChunk / FileChunk.
+    let req = encode(&Request::ListDirs { path: "~".into() }).unwrap();
+    assert_eq!(req, vec![28, 1, b'~']);
+    let resp = encode(&Response::Dirs(HostDirListing {
+        path: "/".into(),
+        dirs: vec![],
+        truncated: false,
+    }))
+    .unwrap();
+    assert_eq!(resp, vec![23, 1, b'/', 0, 0]);
+    let v = serde_json::to_value(Response::Dirs(HostDirListing {
+        path: "/h".into(),
+        dirs: vec![HostDir {
+            name: "r".into(),
+            git_repo: true,
+        }],
+        truncated: false,
+    }))
+    .unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"dirs": {"path": "/h", "dirs": [{"name": "r", "gitRepo": true}], "truncated": false}})
     );
 }
 

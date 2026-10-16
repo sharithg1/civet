@@ -13,8 +13,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use civet_proto::{
-    DirListing, FileChunk, FileEntry, FileKind, FileList, FilePreview, MAX_ALL_FILES,
-    MAX_DIR_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_PREVIEW_BYTES,
+    DirListing, FileChunk, FileEntry, FileKind, FileList, FilePreview, HostDir, HostDirListing,
+    MAX_ALL_FILES, MAX_DIR_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_PREVIEW_BYTES,
 };
 
 use crate::SessionError;
@@ -136,6 +136,59 @@ fn read_entries(dir: &Path) -> Result<Vec<FileEntry>, SessionError> {
         });
     }
     Ok(out)
+}
+
+/// The subdirectories of `dir` (any directory on the host, not just a
+/// worktree: the "Add project" folder field completes paths with it),
+/// sorted by name (case-insensitive), at most [`MAX_DIR_ENTRIES`]. Symlinks
+/// to directories are followed; unreadable entries are skipped.
+pub(crate) async fn list_host_dirs(dir: PathBuf) -> Result<HostDirListing, SessionError> {
+    blocking(move || {
+        let shown = dir.display().to_string();
+        let meta = std::fs::metadata(&dir).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => SessionError::NotFound(shown.clone()),
+            _ => SessionError::Io(e),
+        })?;
+        if !meta.is_dir() {
+            return Err(SessionError::InvalidArgument(format!(
+                "{shown} is not a directory"
+            )));
+        }
+        let mut dirs = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            dirs.push(HostDir {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                git_repo: is_git_repo(&path),
+            });
+        }
+        dirs.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        let truncated = dirs.len() > MAX_DIR_ENTRIES;
+        dirs.truncate(MAX_DIR_ENTRIES);
+        Ok(HostDirListing {
+            path: shown,
+            dirs,
+            truncated,
+        })
+    })
+    .await
+}
+
+/// A repository or worktree root (has `.git`, a directory or a gitdir
+/// file) or a bare repository (`HEAD`, `objects/`, `refs/`). Only stats,
+/// no git: it runs for every listed directory.
+fn is_git_repo(dir: &Path) -> bool {
+    dir.join(".git").exists()
+        || (dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir())
 }
 
 /// Which of the NUL-separated names in `stdin` (relative to `dir`) git

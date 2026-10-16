@@ -233,6 +233,15 @@ pub async fn remove_worktree(
 }
 
 #[tauri::command]
+pub async fn list_dirs(
+    state: State<'_, AppState>,
+    host_id: String,
+    path: String,
+) -> Res<civet_proto::HostDirListing> {
+    state.hosts.list_dirs(&host_id, path).await
+}
+
+#[tauri::command]
 pub async fn list_files(
     state: State<'_, AppState>,
     host_id: String,
@@ -558,6 +567,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_repos,
         add_repo,
         remove_repo,
+        list_dirs,
         prepare_file_drop,
         upload_file,
         list_worktrees,

@@ -594,6 +594,20 @@ impl SessionManager {
         crate::files::list_dir(&self.inner.git, &root, dir, include_ignored).await
     }
 
+    /// The subdirectories of any directory on the host (`~` expanded;
+    /// relative paths are relative to the home directory), flagging git
+    /// repositories, for completing a path to add as a project.
+    pub async fn list_dirs(&self, path: &str) -> Result<civet_proto::HostDirListing, SessionError> {
+        let path = path.trim();
+        let mut dir = expand_home(path);
+        if dir.is_relative() {
+            dir = dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/"))
+                .join(dir);
+        }
+        crate::files::list_host_dirs(dir).await
+    }
+
     /// The start of a worktree file for a read-only preview (same path
     /// rules as [`Self::list_files`]).
     pub async fn read_file(
