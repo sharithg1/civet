@@ -1,6 +1,6 @@
 # Civet
 
-<img width="1728" height="1083" alt="image" src="https://github.com/user-attachments/assets/6bf08b82-4e82-45b8-8bd0-b6a2b499990a" />
+<img width="1728" height="1084" alt="image" src="https://github.com/user-attachments/assets/8bc260b2-acce-49ab-85b8-087bce883fc5" />
 
 
 Civet is a remote-first workspace for coding agents. A Rust daemon,
