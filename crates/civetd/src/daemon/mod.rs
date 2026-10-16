@@ -165,6 +165,8 @@ impl Daemon {
 
         let mut session_config = SessionConfig::new(&paths.root);
         session_config.shell = opts.shell.clone();
+        // `civet handoff` & co. in panes run this binary against this daemon.
+        session_config.cli_program = std::env::current_exe().ok();
         let sessions = SessionManager::new(session_config)?;
         let server = Arc::new(server::Server::new(
             sessions,

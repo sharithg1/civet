@@ -1043,6 +1043,9 @@ pub struct SessionConfig {
     pub idle_after: std::time::Duration,
     /// Path of the git binary. Default "git".
     pub git: std::path::PathBuf,
+    /// Target of the `hooks/bin/civet` pane shim (the daemon's binary).
+    /// None = no shim. Default None.
+    pub cli_program: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1256,7 +1259,9 @@ pane" = `agent.is_some()` or the program basename is one of `claude`,
 
 Agent hook installation: the session writes `<state_dir>/hooks/`
 (`civet-status-hook.sh`, `claude-settings.json`, PATH shims `bin/claude` and
-`bin/codex`, zsh `ZDOTDIR` shim `zsh/.zshenv`). Every pane gets
+`bin/codex`, `bin/civet` when `SessionConfig::cli_program` is set (the
+daemon sets it to its own binary: `CIVET_STATE_DIR=<state> exec <civetd>
+"$@"`), zsh `ZDOTDIR` shim `zsh/.zshenv`). Every pane gets
 `CIVET_SHIM_DIR=<state_dir>/hooks/bin` first on `PATH`, `TERM_PROGRAM=civet`,
 and shell integration that keeps the shim dir first after the user's rc
 files (zsh `ZDOTDIR` + `precmd`, bash `PROMPT_COMMAND`, fish `-C`; `-lc`
@@ -1308,6 +1313,10 @@ civetd serve        [--state-dir DIR] [--bind IP] [--port-range 60001-60999] [--
 civetd bootstrap    [--state-dir DIR] [--replace] [--bind IP]
 civetd stdio-tunnel [--state-dir DIR]
 civetd version      [--json]
+civetd handoff      (--prompt TEXT | --prompt-file FILE|-) [--agent claude|codex] [--title T]
+                    [--branch B] [--base REV] [--from DIR] [--carry-changes]
+                    [--outside-pane] [--state-dir DIR] [-- CMD ARGS…]
+civetd install-skills [--claude] [--codex]
 ```
 
 - **serve**: take an exclusive `flock` on `<state>/civetd.lock` (exit 3 if
@@ -1339,6 +1348,21 @@ civetd version      [--json]
 - **stdio-tunnel**: connect to `<state>/civetd.sock` and copy bytes both ways
   between it and stdin/stdout (`tokio::io::copy_bidirectional` on a joined
   stdin/stdout); exit when either side closes. Exit 2 if no daemon is running.
+- **handoff** (client; panes run it as `civet handoff` through the
+  `hooks/bin/civet` shim): requires `CIVET_PANE_ID` unless `--outside-pane`;
+  reads `<state>/daemon.json` and connects to `<state>/civetd.sock` (never
+  starts a daemon); finds the git checkout of `--from` (default cwd), `ListRepos`
+  / `AddRepo` its main worktree, `CreateWorktree` from `--base` (default
+  its `HEAD`) on `--branch` or a slug of the title (suffix `-2`… on
+  `AlreadyExists`), optionally applies the uncommitted changes
+  (`--carry-changes`; `RemoveWorktree` if that fails), then `SpawnPane` in
+  the worktree running `<agent> <prompt>` (or `CMD ARGS… <prompt>`), titled
+  `--title` or the prompt's first line. Prints one JSON object
+  `{repo, worktree, branch, base, pane, title, agent, carriedChanges}`.
+  See `docs/HANDOFF.md`.
+- **install-skills**: write the embedded `civet-handoff` `SKILL.md` to
+  `~/.claude/skills/civet-handoff/` and/or
+  `${CODEX_HOME:-~/.codex}/skills/civet-handoff/`; prints the paths.
 - **version**: `civetd 0.1.0 (proto 1, x86_64-unknown-linux-musl)`; `--json`
   prints `{"version":"0.1.0","proto_version":1,"target":"..."}`. The target
   triple comes from a `build.rs` exporting `TARGET` (add one).
@@ -1864,6 +1888,7 @@ Remote/host side (`~/.civet`, or `$CIVET_STATE_DIR`):
 | `hooks/claude-settings.json` | generated Claude Code hook settings |
 | `hooks/civet-status-hook.sh` | status hook helper |
 | `hooks/bin/claude`, `hooks/bin/codex` | PATH shims adding Civet's hooks (first on every pane's PATH) |
+| `hooks/bin/civet` | runs this daemon's `civetd` against this state dir (`civet handoff`) |
 | `hooks/zsh/.zshenv` | zsh `ZDOTDIR` shim for panes |
 | `logs/civetd.log` | daemon log when detached |
 
