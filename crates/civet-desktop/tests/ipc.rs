@@ -172,6 +172,11 @@ fn every_command_through_ipc() {
         ("remove_repo", json!({ "hostId": "x", "repo": "r" })),
         ("list_worktrees", json!({ "hostId": "x", "repo": "r" })),
         ("list_pull_requests", json!({ "hostId": "x", "repo": "r" })),
+        ("git_status", json!({ "hostId": "x", "worktree": "/w" })),
+        (
+            "git_diff",
+            json!({ "hostId": "x", "worktree": "/w", "path": "a", "oldPath": null, "staged": false, "contextLines": 3 }),
+        ),
         (
             "create_worktree",
             json!({ "hostId": "x", "repo": "r", "branch": "b", "base": null, "path": null }),

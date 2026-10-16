@@ -73,6 +73,82 @@ pub struct PullRequestInfo {
     pub state: PullRequestState,
 }
 
+/// How a file changed, in a [`GitFileChange`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitChangeKind {
+    /// Content (or mode) changed.
+    Modified,
+    /// New file (staged, or intent-to-add).
+    Added,
+    /// Deleted.
+    Deleted,
+    /// Renamed from `old_path`.
+    Renamed,
+    /// Copied from `old_path`.
+    Copied,
+    /// File type changed (regular file, symlink, submodule).
+    TypeChanged,
+    /// Not tracked by git (and not ignored).
+    Untracked,
+    /// Unmerged (merge / rebase conflict).
+    Conflicted,
+}
+
+/// One changed path of a worktree, as [`Request::GitStatus`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileChange {
+    /// Path relative to the worktree root (`/`-separated).
+    pub path: String,
+    /// Source path of a rename or copy.
+    pub old_path: Option<String>,
+    /// Kind of change.
+    pub kind: GitChangeKind,
+    /// Added lines; None if binary or not counted.
+    pub additions: Option<u64>,
+    /// Deleted lines; None if binary or not counted.
+    pub deletions: Option<u64>,
+}
+
+/// A worktree's `git status`: index vs. HEAD (`staged`), working tree vs.
+/// index (`unstaged`), untracked and unmerged files. A path can be both
+/// staged and unstaged. Sorted by path within each list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusInfo {
+    /// Changes in the index.
+    pub staged: Vec<GitFileChange>,
+    /// Changes in the working tree not yet staged.
+    pub unstaged: Vec<GitFileChange>,
+    /// Untracked files (each file, not just directories).
+    pub untracked: Vec<GitFileChange>,
+    /// Unmerged paths.
+    pub conflicted: Vec<GitFileChange>,
+    /// True if entries beyond [`crate::MAX_GIT_STATUS_ENTRIES`] were left out.
+    pub truncated: bool,
+}
+
+/// One file's diff, as [`Request::GitDiff`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffInfo {
+    /// Requested path.
+    pub path: String,
+    /// git considers the file binary (`diff` is empty).
+    pub binary: bool,
+    /// The patch is over [`crate::MAX_GIT_DIFF_BYTES`] or
+    /// [`crate::MAX_GIT_DIFF_LINES`] changed lines (`diff` is empty).
+    pub too_large: bool,
+    /// Added lines; None if binary.
+    pub additions: Option<u64>,
+    /// Deleted lines; None if binary.
+    pub deletions: Option<u64>,
+    /// `git diff` output for the file (headers and hunks); empty if there
+    /// is no change, or if `binary` / `too_large`.
+    pub diff: String,
+}
+
 /// Program + argv for a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,6 +425,28 @@ pub enum Request {
         /// Repository.
         repo: RepoId,
     },
+    /// The worktree's changes (`git status`, line counts from
+    /// `git diff --numstat`). -> [`Response::GitStatus`]. Clients send it
+    /// only to daemons of at least [`crate::GIT_STATUS_MIN_DAEMON_VERSION`].
+    GitStatus {
+        /// Worktree.
+        worktree: WorktreeId,
+    },
+    /// One file's unified diff: index vs. HEAD if `staged`, else working
+    /// tree vs. index (an untracked file against nothing). -> [`Response::GitDiff`].
+    /// Gated like [`Request::GitStatus`].
+    GitDiff {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Path relative to the worktree root (as in [`GitFileChange`]).
+        path: String,
+        /// Source path of a rename / copy, to diff the pair.
+        old_path: Option<String>,
+        /// Index vs. HEAD instead of working tree vs. index.
+        staged: bool,
+        /// Context lines around each hunk (`-U`).
+        context_lines: u32,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -396,6 +494,10 @@ pub enum Response {
     },
     /// Reply to [`Request::ListPullRequests`].
     PullRequests(Vec<PullRequestInfo>),
+    /// Reply to [`Request::GitStatus`].
+    GitStatus(GitStatusInfo),
+    /// Reply to [`Request::GitDiff`].
+    GitDiff(GitDiffInfo),
 }
 
 /// Error category for a failed request.

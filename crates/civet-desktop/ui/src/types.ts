@@ -74,6 +74,46 @@ export type PullRequestInfo = {
   state: PullRequestState
 }
 
+export type GitChangeKind =
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'typeChanged'
+  | 'untracked'
+  | 'conflicted'
+
+export type GitFileChange = {
+  /** Relative to the worktree root. */
+  path: string
+  /** Source of a rename / copy. */
+  oldPath: string | null
+  kind: GitChangeKind
+  /** null: binary or not counted. */
+  additions: number | null
+  deletions: number | null
+}
+
+export type GitStatusInfo = {
+  staged: GitFileChange[]
+  unstaged: GitFileChange[]
+  untracked: GitFileChange[]
+  conflicted: GitFileChange[]
+  /** Entries past the daemon's cap were left out. */
+  truncated: boolean
+}
+
+export type GitDiffInfo = {
+  path: string
+  binary: boolean
+  tooLarge: boolean
+  additions: number | null
+  deletions: number | null
+  /** `git diff` output (headers + hunks); empty when binary / tooLarge / unchanged. */
+  diff: string
+}
+
 export type CommandSpec = { program: string; args: string[] }
 
 export type SpawnPaneRequest = {

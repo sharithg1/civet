@@ -1090,3 +1090,183 @@ async fn osc52_clipboard_write_is_an_event() {
         other => panic!("unexpected {other:?}"),
     }
 }
+
+// ----- git status / diff ------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_status_and_diffs() {
+    use civet_proto::GitChangeKind;
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    let write = |p: &str, s: &[u8]| {
+        let full = repo_dir.join(p);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, s).unwrap();
+    };
+    write("old.txt", b"one\ntwo\nthree\n");
+    write("gone.txt", b"bye\n");
+    write("img.bin", b"\x89PNG\0\0\x01");
+    git(&repo_dir, &["add", "."]);
+    git(&repo_dir, &["commit", "-q", "-m", "more"]);
+
+    let clean = f.mgr.git_status(&wt).await.unwrap();
+    assert!(clean.staged.is_empty() && clean.unstaged.is_empty() && clean.untracked.is_empty());
+
+    write("README", b"hi\nthere\n");
+    std::fs::remove_file(repo_dir.join("gone.txt")).unwrap();
+    git(&repo_dir, &["mv", "old.txt", "new.txt"]);
+    write("img.bin", b"\x89PNG\0\0\x02");
+    write("dir/untracked file.txt", b"a\nb\nc");
+
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(!s.truncated);
+    assert_eq!(s.staged.len(), 1);
+    assert_eq!(s.staged[0].path, "new.txt");
+    assert_eq!(s.staged[0].old_path.as_deref(), Some("old.txt"));
+    assert_eq!(s.staged[0].kind, GitChangeKind::Renamed);
+    assert_eq!(
+        (s.staged[0].additions, s.staged[0].deletions),
+        (Some(0), Some(0))
+    );
+    let unstaged: Vec<_> = s
+        .unstaged
+        .iter()
+        .map(|c| (c.path.as_str(), c.kind, c.additions, c.deletions))
+        .collect();
+    assert_eq!(
+        unstaged,
+        vec![
+            ("README", GitChangeKind::Modified, Some(1), Some(0)),
+            ("gone.txt", GitChangeKind::Deleted, Some(0), Some(1)),
+            ("img.bin", GitChangeKind::Modified, None, None),
+        ]
+    );
+    assert_eq!(s.untracked.len(), 1);
+    assert_eq!(s.untracked[0].path, "dir/untracked file.txt");
+    assert_eq!(s.untracked[0].additions, Some(3));
+
+    let d = f.mgr.git_diff(&wt, "README", None, false, 3).await.unwrap();
+    assert!(!d.binary && !d.too_large);
+    assert!(
+        d.diff.contains("@@ -1 +1,2 @@\n hi\n+there\n"),
+        "{}",
+        d.diff
+    );
+
+    let d = f
+        .mgr
+        .git_diff(&wt, "gone.txt", None, false, 3)
+        .await
+        .unwrap();
+    assert!(d.diff.contains("deleted file mode") && d.diff.contains("-bye"));
+
+    let d = f
+        .mgr
+        .git_diff(&wt, "new.txt", Some("old.txt"), true, 3)
+        .await
+        .unwrap();
+    assert!(d.diff.contains("rename from old.txt"), "{}", d.diff);
+
+    let d = f
+        .mgr
+        .git_diff(&wt, "img.bin", None, false, 3)
+        .await
+        .unwrap();
+    assert!(d.binary && d.diff.is_empty());
+
+    let d = f
+        .mgr
+        .git_diff(&wt, "dir/untracked file.txt", None, false, 3)
+        .await
+        .unwrap();
+    assert_eq!((d.additions, d.deletions), (Some(3), Some(0)));
+    assert!(
+        d.diff.contains("new file mode") && d.diff.contains("+c"),
+        "{}",
+        d.diff
+    );
+
+    // Too many lines: flagged, no patch.
+    let big: String = (0..30_000).map(|i| format!("{i}\n")).collect();
+    write("big.txt", big.as_bytes());
+    let d = f
+        .mgr
+        .git_diff(&wt, "big.txt", None, false, 3)
+        .await
+        .unwrap();
+    assert!(d.too_large && d.diff.is_empty());
+    assert_eq!(d.additions, Some(30_000));
+    // Few lines but over the byte cap: git is cut off, still flagged.
+    let wide = "x".repeat(4096) + "\n";
+    write("wide.txt", wide.repeat(400).as_bytes());
+    let d = f
+        .mgr
+        .git_diff(&wt, "wide.txt", None, false, 3)
+        .await
+        .unwrap();
+    assert!(d.too_large && d.diff.is_empty());
+
+    // Paths escaping the worktree are refused.
+    for bad in ["../x", "/etc/passwd", ""] {
+        assert!(matches!(
+            f.mgr.git_diff(&wt, bad, None, false, 3).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+    }
+    std::os::unix::fs::symlink(&f.root, repo_dir.join("out")).unwrap();
+    assert!(matches!(
+        f.mgr.git_diff(&wt, "out/state/x", None, false, 3).await,
+        Err(SessionError::InvalidArgument(_) | SessionError::NotFound(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .git_status(&WorktreeId::from("/no/such/worktree"))
+            .await,
+        Err(SessionError::NotFound(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_status_of_an_unborn_branch_and_a_conflict() {
+    use civet_proto::GitChangeKind;
+    let f = fixture();
+    let repo_dir = f.root.join("fresh");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    git(&repo_dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo_dir.join("a.txt"), "x\n").unwrap();
+    git(&repo_dir, &["add", "a.txt"]);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(s.staged.len(), 1);
+    assert_eq!(s.staged[0].kind, GitChangeKind::Added);
+    assert_eq!(s.staged[0].additions, Some(1));
+    let d = f.mgr.git_diff(&wt, "a.txt", None, true, 3).await.unwrap();
+    assert!(d.diff.contains("+x"), "{}", d.diff);
+
+    git(&repo_dir, &["commit", "-q", "-m", "a"]);
+    git(&repo_dir, &["checkout", "-q", "-b", "other"]);
+    std::fs::write(repo_dir.join("a.txt"), "other\n").unwrap();
+    git(&repo_dir, &["commit", "-q", "-am", "other"]);
+    git(&repo_dir, &["checkout", "-q", "main"]);
+    std::fs::write(repo_dir.join("a.txt"), "main\n").unwrap();
+    git(&repo_dir, &["commit", "-q", "-am", "main"]);
+    let _ = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_dir)
+        .args(["merge", "-q", "other"])
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(s.conflicted.len(), 1);
+    assert_eq!(s.conflicted[0].path, "a.txt");
+    assert!(s.staged.is_empty() && s.unstaged.is_empty());
+    let d = f.mgr.git_diff(&wt, "a.txt", None, false, 3).await.unwrap();
+    assert!(d.diff.contains("diff --cc"), "{}", d.diff);
+}

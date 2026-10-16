@@ -58,6 +58,21 @@ function fakeBackend(over: Partial<CivetBackend> = {}): CivetBackend {
     listPanes: async () => [],
     listWorktrees: async () => [],
     listPullRequests: async () => [],
+    gitStatus: async () => ({
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      conflicted: [],
+      truncated: false
+    }),
+    gitDiff: async (_h: string, _w: string, path: string) => ({
+      path,
+      binary: false,
+      tooLarge: false,
+      additions: 0,
+      deletions: 0,
+      diff: ''
+    }),
     setPrediction: vi.fn(noop),
     notifyNetworkChange: noop,
     onHostState: un,

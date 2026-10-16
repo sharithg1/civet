@@ -352,6 +352,36 @@ impl SessionManager {
         crate::github::list_pull_requests(Path::new(&r.path)).await
     }
 
+    /// The worktree's uncommitted changes (see [`crate::changes::status`]).
+    pub async fn git_status(
+        &self,
+        worktree: &WorktreeId,
+    ) -> Result<civet_proto::GitStatusInfo, SessionError> {
+        let (_, w) = self.find_worktree(worktree).await?;
+        crate::changes::status(&self.inner.git, Path::new(&w.path)).await
+    }
+
+    /// One file's diff in the worktree (see [`crate::changes::diff`]).
+    pub async fn git_diff(
+        &self,
+        worktree: &WorktreeId,
+        path: &str,
+        old_path: Option<&str>,
+        staged: bool,
+        context_lines: u32,
+    ) -> Result<civet_proto::GitDiffInfo, SessionError> {
+        let (_, w) = self.find_worktree(worktree).await?;
+        crate::changes::diff(
+            &self.inner.git,
+            Path::new(&w.path),
+            path,
+            old_path,
+            staged,
+            context_lines,
+        )
+        .await
+    }
+
     /// `git worktree add [-b branch] -- <path> [base]`. Default path:
     /// `<parent of main worktree>/<repo name>-worktrees/<branch, '/' -> '-'>`.
     /// With `base` (must resolve to a commit: `git rev-parse --verify

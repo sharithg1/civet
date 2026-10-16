@@ -194,6 +194,16 @@ fn all_requests() -> Vec<Request> {
         Request::ListPullRequests {
             repo: RepoId::from("r"),
         },
+        Request::GitStatus {
+            worktree: WorktreeId::from("/w"),
+        },
+        Request::GitDiff {
+            worktree: WorktreeId::from("/w"),
+            path: "src/new.rs".into(),
+            old_path: Some("src/old.rs".into()),
+            staged: true,
+            context_lines: 3,
+        },
     ]
 }
 
@@ -241,6 +251,39 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             url: "https://github.com/o/r/pull/42".into(),
             state: PullRequestState::Merged,
         }])),
+        Ok(Response::GitStatus(GitStatusInfo {
+            staged: vec![GitFileChange {
+                path: "b.rs".into(),
+                old_path: Some("a.rs".into()),
+                kind: GitChangeKind::Renamed,
+                additions: Some(2),
+                deletions: Some(1),
+            }],
+            unstaged: vec![GitFileChange {
+                path: "img.png".into(),
+                old_path: None,
+                kind: GitChangeKind::Modified,
+                additions: None,
+                deletions: None,
+            }],
+            untracked: vec![GitFileChange {
+                path: "new.txt".into(),
+                old_path: None,
+                kind: GitChangeKind::Untracked,
+                additions: Some(3),
+                deletions: Some(0),
+            }],
+            conflicted: vec![],
+            truncated: false,
+        })),
+        Ok(Response::GitDiff(GitDiffInfo {
+            path: "b.rs".into(),
+            binary: false,
+            too_large: false,
+            additions: Some(1),
+            deletions: Some(0),
+            diff: "diff --git a/b.rs b/b.rs\n@@ -1 +1,2 @@\n x\n+y\n".into(),
+        })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]

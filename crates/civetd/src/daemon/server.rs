@@ -501,6 +501,19 @@ impl Server {
                 .list_pull_requests(&repo)
                 .await
                 .map(Response::PullRequests),
+            Request::GitStatus { worktree } => {
+                s.git_status(&worktree).await.map(Response::GitStatus)
+            }
+            Request::GitDiff {
+                worktree,
+                path,
+                old_path,
+                staged,
+                context_lines,
+            } => s
+                .git_diff(&worktree, &path, old_path.as_deref(), staged, context_lines)
+                .await
+                .map(Response::GitDiff),
             Request::CreateWorktree {
                 repo,
                 branch,

@@ -37,7 +37,9 @@ import type {
   TransportChoice,
   WorktreeId,
   WorktreeInfo,
-  PullRequestInfo
+  PullRequestInfo,
+  GitStatusInfo,
+  GitDiffInfo
 } from './types'
 
 export type Unlisten = () => void
@@ -104,6 +106,15 @@ export interface CivetBackend {
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
+  /** `git status` of a worktree with line counts (needs civetd >= 0.1.10). */
+  gitStatus(hostId: string, worktree: WorktreeId): Promise<GitStatusInfo>
+  /** One file's diff: index vs. HEAD if `staged`, else working tree vs. index. */
+  gitDiff(
+    hostId: string,
+    worktree: WorktreeId,
+    path: string,
+    opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
+  ): Promise<GitDiffInfo>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -258,6 +269,24 @@ export class TauriBackend implements CivetBackend {
   }
   listPullRequests(hostId: string, repo: RepoId) {
     return this.call<PullRequestInfo[]>('list_pull_requests', { hostId, repo })
+  }
+  gitStatus(hostId: string, worktree: WorktreeId) {
+    return this.call<GitStatusInfo>('git_status', { hostId, worktree })
+  }
+  gitDiff(
+    hostId: string,
+    worktree: WorktreeId,
+    path: string,
+    opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
+  ) {
+    return this.call<GitDiffInfo>('git_diff', {
+      hostId,
+      worktree,
+      path,
+      oldPath: opts.oldPath ?? null,
+      staged: opts.staged,
+      contextLines: opts.contextLines ?? 3
+    })
   }
   createWorktree(
     hostId: string,

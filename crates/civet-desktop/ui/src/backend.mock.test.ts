@@ -139,3 +139,17 @@ describe('MockBackend', () => {
     await expect(b.listRepos('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
   })
 })
+
+describe('MockBackend git', () => {
+  it('reports changes and diffs', async () => {
+    const { b } = await connected()
+    const wt = (await b.listWorktrees('devbox', 'civet'))[1]!
+    const s = await b.gitStatus('devbox', wt.id)
+    expect(s.unstaged.length).toBeGreaterThan(0)
+    const file = s.unstaged.find((c) => c.kind === 'modified' && c.additions != null)!
+    const d = await b.gitDiff('devbox', wt.id, file.path, { staged: false })
+    expect(d.diff).toContain('@@')
+    const bin = s.unstaged.find((c) => c.additions == null)!
+    expect((await b.gitDiff('devbox', wt.id, bin.path, { staged: false })).binary).toBe(true)
+  })
+})

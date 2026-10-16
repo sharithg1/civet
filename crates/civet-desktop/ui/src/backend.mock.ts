@@ -46,7 +46,10 @@ import type {
   TermSize,
   TransportChoice,
   WorktreeInfo,
-  PullRequestInfo
+  PullRequestInfo,
+  GitDiffInfo,
+  GitFileChange,
+  GitStatusInfo
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
@@ -499,6 +502,8 @@ function randomStep(): string {
 const MOCK_TAKEN_LOCALLY = new Set([3001, 8080])
 
 export class MockBackend implements CivetBackend {
+  /** Status polls so far: the agent worktree's change grows with them. */
+  private gitPolls = 0
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
   private hosts = new Map<string, MockHost>()
@@ -874,6 +879,30 @@ export class MockBackend implements CivetBackend {
     return [...(this.host(hostId).worktrees.get(repo) ?? [])]
   }
 
+  async gitStatus(hostId: string, worktree: string): Promise<GitStatusInfo> {
+    this.checkGitSupport(hostId)
+    return mockGitStatus(worktree, this.gitPolls++)
+  }
+
+  async gitDiff(
+    hostId: string,
+    worktree: string,
+    path: string,
+    opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
+  ): Promise<GitDiffInfo> {
+    this.checkGitSupport(hostId)
+    return mockGitDiff(worktree, path, opts.staged, this.gitPolls)
+  }
+
+  private checkGitSupport(hostId: string): void {
+    if (this.host(hostId).summary.daemonVersion === MOCK_OLD_VERSION) {
+      throw new CivetError(
+        'unsupported',
+        `the daemon on ${hostId} (${MOCK_OLD_VERSION}) is too old; restart it to upgrade`
+      )
+    }
+  }
+
   async listPullRequests(_hostId: string, repo: string): Promise<PullRequestInfo[]> {
     if (repo !== 'civet') return []
     const pr = (
@@ -1092,4 +1121,151 @@ export class MockBackend implements CivetBackend {
   async onFileDrop(_cb: (e: FileDropEvent) => void) {
     return () => {}
   }
+}
+
+// ── Git status / diffs (right panel → Changes) ──────────────────────────────
+
+const change = (
+  path: string,
+  kind: GitFileChange['kind'],
+  additions: number | null,
+  deletions: number | null,
+  oldPath: string | null = null
+): GitFileChange => ({ path, oldPath, kind, additions, deletions })
+
+/** Lines of the file an "agent" keeps writing in non-main worktrees. */
+const growingLines = (polls: number) => 4 + Math.min(40, polls)
+
+function mockGitStatus(worktree: string, polls: number): GitStatusInfo {
+  const empty: GitStatusInfo = {
+    staged: [],
+    unstaged: [],
+    untracked: [],
+    conflicted: [],
+    truncated: false
+  }
+  if (worktree.endsWith('/civet')) return empty
+  if (worktree.endsWith('fix-flaky-e2e')) {
+    return { ...empty, conflicted: [change('tests/e2e/src/reconnect.rs', 'conflicted', 6, 2)] }
+  }
+  return {
+    ...empty,
+    staged: [
+      change(
+        'crates/civet-transport/src/resume.rs',
+        'renamed',
+        3,
+        1,
+        'crates/civet-transport/src/rejoin.rs'
+      ),
+      change('docs/RESUME.md', 'added', 5, 0)
+    ],
+    unstaged: [
+      change('crates/civet-transport/src/session.rs', 'modified', growingLines(polls), 2),
+      change('crates/civet-transport/src/legacy.rs', 'deleted', 0, 3),
+      change('assets/logo.png', 'modified', null, null)
+    ],
+    untracked: [change('crates/civet-transport/tests/resume.rs', 'untracked', 4, 0)]
+  }
+}
+
+function mockGitDiff(_worktree: string, path: string, staged: boolean, polls: number): GitDiffInfo {
+  const base = { path, binary: false, tooLarge: false }
+  const diff = (header: string, hunks: string, additions: number, deletions: number) => ({
+    ...base,
+    additions,
+    deletions,
+    diff: `diff --git a/${path} b/${path}\n${header}${hunks}`
+  })
+  if (path.endsWith('.png'))
+    return { ...base, binary: true, additions: null, deletions: null, diff: '' }
+  if (path.endsWith('reconnect.rs')) {
+    return diff(
+      `index 1111111,2222222..0000000\n--- a/${path}\n+++ b/${path}\n`,
+      [
+        '@@@ -10,4 -10,4 +10,10 @@@',
+        '  fn reconnect_after_wake() {',
+        '++<<<<<<< HEAD',
+        ' +    let deadline = Duration::from_secs(5);',
+        '++=======',
+        '+     let deadline = Duration::from_secs(10);',
+        '++>>>>>>> fix-flaky-e2e',
+        '      wait_for(deadline);',
+        '  }',
+        ''
+      ].join('\n'),
+      6,
+      2
+    )
+  }
+  if (path.endsWith('session.rs') && !staged) {
+    const n = growingLines(polls)
+    const added = Array.from({ length: n }, (_, i) =>
+      i === 0 ? '+    // Resume the session on the new path.' : `+    self.replay(${i}).await?;`
+    )
+    return diff(
+      `index 3a4b5c6..7d8e9f0 100644\n--- a/${path}\n+++ b/${path}\n`,
+      [
+        `@@ -40,7 +40,${5 + n} @@ impl Session {`,
+        '     pub async fn resume(&mut self) -> Result<(), Error> {',
+        '-        let token = self.token.clone();',
+        '-        self.reconnect(token).await',
+        '+        let token = self.token.clone().ok_or(Error::NoToken)?;',
+        '+        self.reconnect(token).await?;',
+        ...added.slice(2),
+        '+        Ok(())',
+        '     }',
+        ' ',
+        '     fn on_path_change(&mut self) {',
+        ''
+      ].join('\n'),
+      n,
+      2
+    )
+  }
+  if (path.endsWith('legacy.rs')) {
+    return diff(
+      `deleted file mode 100644\nindex 4444444..0000000\n--- a/${path}\n+++ /dev/null\n`,
+      ['@@ -1,3 +0,0 @@', '-//! Old reconnect path.', '-', '-pub fn rejoin() {}', ''].join('\n'),
+      0,
+      3
+    )
+  }
+  if (path.endsWith('resume.rs') && staged) {
+    return diff(
+      'similarity index 82%\nrename from crates/civet-transport/src/rejoin.rs\nrename to crates/civet-transport/src/resume.rs\n' +
+        `index 5555555..6666666 100644\n--- a/crates/civet-transport/src/rejoin.rs\n+++ b/${path}\n`,
+      [
+        '@@ -1,6 +1,8 @@',
+        '-//! Rejoin a session.',
+        '+//! Resume a session after a network change.',
+        '+//!',
+        '+//! See docs/RESUME.md.',
+        ' ',
+        ' use crate::Session;',
+        ' ',
+        ' pub fn resume(s: &mut Session) {',
+        ''
+      ].join('\n'),
+      3,
+      1
+    )
+  }
+  const lines = path.endsWith('.md')
+    ? [
+        '# Session resume',
+        '',
+        'A client keeps its session across',
+        'network changes and sleep.',
+        ''
+      ]
+    : [
+        '#[tokio::test]',
+        'async fn resumes() {',
+        '    let s = connect().await;',
+        '    s.resume().await.unwrap();'
+      ]
+  const n = lines.length
+  const header = `new file mode 100644\nindex 0000000..7777777\n--- /dev/null\n+++ b/${path}\n`
+  return diff(header, `@@ -0,0 +1,${n} @@\n${lines.map((l) => `+${l}`).join('\n')}\n`, n, 0)
 }

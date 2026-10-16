@@ -23,6 +23,8 @@
     "allow-upload-file",
     "allow-list-worktrees",
     "allow-list-pull-requests",
+    "allow-git-status",
+    "allow-git-diff",
     "allow-create-worktree",
     "allow-remove-worktree",
     "allow-list-panes",
