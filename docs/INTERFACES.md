@@ -1359,6 +1359,7 @@ civetd install-skills [--claude] [--codex]
   the worktree running `<agent> <prompt>` (or `CMD ARGS… <prompt>`), titled
   `--title` or the prompt's first line. Prints one JSON object
   `{repo, worktree, branch, base, pane, title, agent, carriedChanges}`.
+  See `docs/HANDOFF.md`.
 - **install-skills**: write the embedded `civet-handoff` `SKILL.md` to
   `~/.claude/skills/civet-handoff/` and/or
   `${CODEX_HOME:-~/.codex}/skills/civet-handoff/`; prints the paths.

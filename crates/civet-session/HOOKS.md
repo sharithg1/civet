@@ -152,7 +152,7 @@ The script is a no-op outside Civet panes, so a global installation is safe.
 When the daemon names its binary (`SessionConfig::cli_program`; `civetd`
 always does), the shim dir also holds `civet`, which runs that binary with
 the daemon's `CIVET_STATE_DIR`. Agents use it for `civet handoff` (see
-[docs/INTERFACES.md](../../docs/INTERFACES.md) 5.1).
+[docs/HANDOFF.md](../../docs/HANDOFF.md)).
 
 ## Codex (more signals, manual)
 
