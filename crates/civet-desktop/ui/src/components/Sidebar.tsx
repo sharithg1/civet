@@ -55,7 +55,6 @@ import {
   wsKey,
   wtKey
 } from '@/state/store'
-import { FileIcon } from './FilesTab'
 import type { HostView } from '@/state/store'
 import { applyOrder, clampSidebarWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
 import { dropLineClass, useReorder, type Reorder } from '@/lib/reorder'
@@ -684,7 +683,8 @@ function WorktreeRow({
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const labelPref = usePrefs((s) => s.worktreeLabel)
   const tabsPref = usePrefs((s) => s.sidebarTabs)
-  const tabs = useWorktreeTabs(hostId, wt.id)
+  // File tabs stay in the title bar only: the sidebar lists sessions.
+  const tabs = useWorktreeTabs(hostId, wt.id).filter((t) => t.file == null)
   const panes = panesOfWorktree(paneMap, wt.id)
   const dot = worktreeDot(panes, host.state === 'connected', unread)
   const branch = worktreeBranch(wt)
@@ -771,9 +771,7 @@ function WorktreeRow({
                 >
                   {t.agent && hasAgentLogo(t.agent.agent) ? (
                     <AgentLogo agent={t.agent.agent} className="size-3" />
-                  ) : t.agent ? null : t.file != null ? (
-                    <FileIcon path={t.file} className="size-3 shrink-0 text-dim" />
-                  ) : (
+                  ) : t.agent ? null : (
                     <Terminal className="size-3 shrink-0 text-dim" />
                   )}
                   <span
