@@ -399,6 +399,24 @@ impl ShellKind {
             Self::Bash | Self::Zsh | Self::Posix => "PATH=\"$CIVET_SHIM_DIR:$PATH\"; ",
         }
     }
+
+    /// Flags that run a command string. csh/tcsh only accept `-l` as the
+    /// sole argument, so they get a plain `-c` (which still reads ~/.cshrc).
+    pub(crate) fn command_flag(self) -> &'static str {
+        match self {
+            Self::Csh => "-c",
+            _ => "-lc",
+        }
+    }
+
+    /// Command string that execs the program and args passed after it.
+    /// csh/tcsh put all of them in `$argv` (`$0` is the shell itself).
+    pub(crate) fn exec_args(self) -> &'static str {
+        match self {
+            Self::Csh => "exec $argv:q",
+            _ => "exec \"$0\" \"$@\"",
+        }
+    }
 }
 
 /// How a pane's shell is started so the agent shims stay first on PATH.

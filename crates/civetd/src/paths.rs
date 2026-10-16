@@ -122,7 +122,7 @@ pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
 
 /// `geteuid()`.
 #[allow(unsafe_code)]
-fn effective_uid() -> u32 {
+pub(crate) fn effective_uid() -> u32 {
     // SAFETY: geteuid takes no arguments, cannot fail and has no
     // memory-safety preconditions.
     unsafe { libc::geteuid() }

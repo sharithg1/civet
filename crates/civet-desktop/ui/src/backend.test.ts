@@ -206,4 +206,29 @@ describe('TauriBackend attach/detach ordering', () => {
     await again
     expect(order).toEqual(['attach_pane', 'detach_pane', 'attach_pane'])
   })
+
+  it("a stale attachment's detach doesn't detach its successor", async () => {
+    const order: string[] = []
+    let releaseFirst!: () => void
+    let attaches = 0
+    const info = { pane: 1, state: 0, size: termSize(80, 24), historyLines: 0, lastInputSeq: 0 }
+    const { backend } = setup((cmd) => {
+      order.push(cmd)
+      if (cmd === 'attach_pane' && attaches++ === 0) {
+        return new Promise((r) => (releaseFirst = () => r(info)))
+      }
+      return cmd === 'attach_pane' ? info : null
+    })
+    // Leave before the first attach resolves, then re-open.
+    const first = backend.attachPane('h', 1, () => {})
+    const second = backend.attachPane('h', 1, () => {})
+    await Promise.resolve()
+    expect(order).toEqual(['attach_pane']) // the second waits its turn
+    releaseFirst()
+    await (await first).detach()
+    const b = await second
+    expect(order).toEqual(['attach_pane', 'attach_pane'])
+    await b.detach()
+    expect(order).toEqual(['attach_pane', 'attach_pane', 'detach_pane'])
+  })
 })

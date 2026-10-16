@@ -230,6 +230,40 @@ async fn env_cwd_and_shell_panes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tcsh_runs_commands() {
+    // tcsh rejects `-lc` (`-l` must be its only argument).
+    let Some(tcsh) = ["/bin/tcsh", "/usr/bin/tcsh"]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+    else {
+        eprintln!("skipping: no tcsh");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = SessionConfig::new(dir.path().join("state"));
+    cfg.shell = Some(tcsh.into());
+    let mgr = SessionManager::new(cfg).unwrap();
+
+    // Program + args: quoting survives the `$argv` exec.
+    let p = mgr
+        .spawn_pane(req("printf", &["[%s]\\n", "a b", "argv-ok"]))
+        .await
+        .unwrap();
+    wait_screen(&mgr, p.id, "[argv-ok]").await;
+    let text = mgr.screen_text(p.id).unwrap().join("\n");
+    assert!(text.contains("[a b]"), "{text}");
+
+    // Command string, with the shim dir first on PATH.
+    let mut r = req("echo first=`echo $PATH | cut -d: -f1`; echo cmd-ok", &[]);
+    r.size = TermSize::new(400, 24);
+    let p = mgr.spawn_pane(r).await.unwrap();
+    wait_screen(&mgr, p.id, "cmd-ok").await;
+    let text = mgr.screen_text(p.id).unwrap().join("\n");
+    assert!(text.contains("hooks/bin"), "{text}");
+    mgr.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn input_round_trip_with_cat() {
     let f = fixture();
     let info = f.mgr.spawn_pane(req("cat", &[])).await.unwrap();

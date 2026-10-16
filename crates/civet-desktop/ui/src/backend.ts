@@ -194,6 +194,17 @@ export class TauriBackend implements CivetBackend {
    * commands concurrently, so the attach waits for the detach to land first.
    */
   private detaching = new Map<string, Promise<void>>()
+  /**
+   * In-flight attach per pane, so `attach_pane` calls for a pane land in
+   * order (the last one's sink wins on the Rust side).
+   */
+  private attaching = new Map<string, Promise<void>>()
+  /**
+   * The newest attachment per pane. `detach_pane` isn't per-sink, so only
+   * the owner may send it: a stale attachment's cleanup (left before its
+   * attach resolved, then re-opened) must not detach its successor.
+   */
+  private owners = new Map<string, symbol>()
 
   constructor(private readonly deps: TauriDeps = defaultDeps) {}
 
@@ -275,7 +286,12 @@ export class TauriBackend implements CivetBackend {
 
   async attachPane(hostId: string, pane: PaneId, onOutput: PaneOutputHandler) {
     const key = `${hostId}\u0000${pane}`
-    await this.detaching.get(key)?.catch(() => {})
+    const owner = Symbol('attachment')
+    this.owners.set(key, owner)
+    const prev = this.attaching.get(key)
+    let settle!: () => void
+    const turn = new Promise<void>((r) => (settle = r))
+    this.attaching.set(key, turn)
     let active = true
     const channel = new this.deps.Channel<ArrayBuffer>()
     // Set the handler before invoking: the first (Full) record may arrive
@@ -293,10 +309,16 @@ export class TauriBackend implements CivetBackend {
     }
     let info: SubscribeInfo
     try {
+      if (prev) await prev
+      await this.detaching.get(key)?.catch(() => {})
       info = await this.call<SubscribeInfo>('attach_pane', { hostId, pane, onOutput: channel })
     } catch (err) {
       active = false
+      if (this.owners.get(key) === owner) this.owners.delete(key)
       throw err
+    } finally {
+      settle()
+      if (this.attaching.get(key) === turn) this.attaching.delete(key)
     }
     return {
       info,
@@ -304,6 +326,9 @@ export class TauriBackend implements CivetBackend {
         if (!active) return
         active = false
         channel.onmessage = () => {}
+        // A newer attachment replaced this sink; detaching would cut it off.
+        if (this.owners.get(key) !== owner) return
+        this.owners.delete(key)
         const p = this.callVoid('detach_pane', { hostId, pane })
         this.detaching.set(key, p)
         try {

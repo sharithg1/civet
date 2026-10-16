@@ -616,7 +616,8 @@ impl SessionManager {
     /// * argv: no command → `[$SHELL, -l]`; with command →
     ///   `[$SHELL, -lc, exec "$0" "$@", program, args...]`. A command with no
     ///   args whose `program` contains whitespace is treated as a shell
-    ///   command string: `[$SHELL, -lc, program]`.
+    ///   command string: `[$SHELL, -lc, program]`. csh/tcsh get `-c` and
+    ///   `exec $argv:q` instead (they reject `-lc`).
     /// * env: daemon env + TERM, COLORTERM, CIVET_PANE_ID,
     ///   CIVET_STATUS_FILE, CIVET_SHIM_DIR, PATH (shim dir first),
     ///   TERM_PROGRAM=civet, shell integration (zsh `ZDOTDIR`, bash
@@ -676,7 +677,11 @@ impl SessionManager {
                 let base = basename(first_word(&cmd.program)).to_owned();
                 let line = cmd.program.trim().to_owned();
                 (
-                    vec![shell.clone(), "-lc".to_owned(), format!("{prefix}{line}")],
+                    vec![
+                        shell.clone(),
+                        kind.command_flag().to_owned(),
+                        format!("{prefix}{line}"),
+                    ],
                     vec![line],
                     base,
                 )
@@ -690,8 +695,8 @@ impl SessionManager {
                 );
                 let mut argv = vec![
                     shell.clone(),
-                    "-lc".to_owned(),
-                    format!("{prefix}exec \"$0\" \"$@\""),
+                    kind.command_flag().to_owned(),
+                    format!("{prefix}{}", kind.exec_args()),
                     cmd.program.clone(),
                 ];
                 argv.extend(args.iter().cloned());
