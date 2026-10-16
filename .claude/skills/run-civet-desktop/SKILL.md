@@ -37,11 +37,11 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
    cd crates/civet-desktop/ui && PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH" pnpm exec vite --port 5199 --strictPort
    ```
 
-2. Wait for it, then pipe a script to the driver. Screenshots go to `$SHOTS`
+2. Wait for it (up to ~30 s; stop if it never answers), then pipe a script to the driver. Screenshots go to `$SHOTS`
    (default `./shots`) — point it at your scratchpad.
 
    ```sh
-   for i in $(seq 50); do curl -s localhost:5199 >/dev/null && break; done
+   curl -sf --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null localhost:5199 || { echo "Vite is not up"; exit 1; }
    SHOTS=<scratchpad>/shots node .claude/skills/run-civet-desktop/driver.mjs <<'EOF'
    connect devbox
    right files
@@ -59,7 +59,7 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 
    Output: `tabs ["Claude 1","session.rs*<"]`, `screenshot <path>`. Read the
    PNG to look at it. Exit code 1 and `FAILED <line>: <reason>` on the first
-   step that fails; page errors are printed at the end.
+   step that fails; page errors are printed at the end and also make it exit 1.
 
 3. Stop Vite: `pkill -f "vite --port 5199"`.
 
@@ -114,4 +114,4 @@ cd crates/civet-desktop/ui && pnpm typecheck && pnpm lint && pnpm test
 ## Troubleshooting
 
 - `page.goto: net::ERR_CONNECTION_REFUSED` — Vite isn't up yet (or died); run
-  the `curl` wait loop, check the Vite task output.
+  the `curl` wait first, check the Vite task output.

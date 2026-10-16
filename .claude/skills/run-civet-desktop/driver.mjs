@@ -101,4 +101,5 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 for (const e of errors) console.log('pageerror', e)
 await browser.close()
-process.exit(failed ? 1 : 0)
+// A page exception fails the run even when every command went through.
+process.exit(failed || errors.length > 0 ? 1 : 0)
