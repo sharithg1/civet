@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-git-action"
+description = "Enables the git_action command without any pre-configured scope."
+commands.allow = ["git_action"]
+
+[[permission]]
+identifier = "deny-git-action"
+description = "Denies the git_action command without any pre-configured scope."
+commands.deny = ["git_action"]

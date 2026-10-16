@@ -72,6 +72,10 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 | `right <files\|changes\|branch\|ports>` | Switch the right panel tab. |
 | `click-file` / `dblclick-file <name>` | A row in the Files tree (exact entry name, e.g. `Cargo.toml`). |
 | `click-change` / `dblclick-change <name>` | A row in the Changes list (file name). |
+| `meta-click-change` / `shift-click-change` / `hover-change <name>` | ⌘- / ⇧-click a Changes row (multi-select), or hover it to show its buttons. |
+| `click-button <name>` | A button by its exact accessible name (icon buttons: the tooltip label, e.g. `Stage all`, `More git actions`). |
+| `menu-item <text>` | An item of the open dropdown / context menu, by the start of its text. |
+| `commit-message <text>` | Type into the Changes tab's commit message box. |
 | `click-tab` / `dblclick-tab` / `close-tab <label>` | An editor tab in the title bar. |
 | `tabs` | Print the editor tab strip: `*` = italic (preview tab), `<` = active. |
 | `ss [name]` | Screenshot to `$SHOTS/<name>.png`. |
@@ -99,6 +103,12 @@ cd crates/civet-desktop/ui && pnpm typecheck && pnpm lint && pnpm test
 - The `main` worktree of the mock `civet` repo has **no git changes**; use
   `Implement QUIC resume` (quic-resume) for the Changes tab. It also has a
   running mock agent tab (`Claude 1`).
+- Git actions in the Changes tab change per-worktree mock state (`MockGit`
+  in `backend.mock.ts`). `quic-resume` is ahead of its upstream; a `fetch`
+  makes it behind by one (so `push` is rejected until a `pull`); branches
+  other than `quic-resume` / `fix-flaky-e2e` have no upstream (Publish).
+  `fix-flaky-e2e` has a conflict. Connect `pre-git-box` for a civetd too old
+  for git actions (controls greyed out).
 - The right panel's Files / Changes / Branch / Ports buttons are also
   `role="tab"`; editor tabs are the ones with `data-tab-id`. Don't select
   `[role="tab"]` alone.

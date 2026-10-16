@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-git-branch"
+description = "Enables the git_branch command without any pre-configured scope."
+commands.allow = ["git_branch"]
+
+[[permission]]
+identifier = "deny-git-branch"
+description = "Denies the git_branch command without any pre-configured scope."
+commands.deny = ["git_branch"]

@@ -1393,3 +1393,817 @@ async fn git_status_of_an_unborn_branch_and_a_conflict() {
     let d = f.mgr.git_diff(&wt, "a.txt", None, false, 3).await.unwrap();
     assert!(d.diff.contains("diff --cc"), "{}", d.diff);
 }
+
+// ----- git actions ------------------------------------------------------------
+
+/// `git` with stdout, for assertions.
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A repo whose commits (made by the daemon's git, which has no identity
+/// env) work: identity and no signing in its local config.
+fn action_repo(root: &Path, name: &str) -> PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    identity(&repo);
+    std::fs::write(repo.join("README"), "hi\n").unwrap();
+    git(&repo, &["add", "README"]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
+    repo
+}
+
+fn identity(repo: &Path) {
+    git(repo, &["config", "user.name", "t"]);
+    git(repo, &["config", "user.email", "t@example.com"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
+}
+
+async fn act(
+    f: &Fixture,
+    wt: &WorktreeId,
+    action: civet_proto::GitAction,
+) -> Result<Option<civet_proto::GitDiscardSnapshot>, SessionError> {
+    f.mgr.git_action(wt, action).await
+}
+
+fn paths(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+fn listed(v: &[civet_proto::GitFileChange]) -> Vec<&str> {
+    v.iter().map(|c| c.path.as_str()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_stage_unstage_and_commit() {
+    use civet_proto::GitAction;
+    let f = fixture();
+    let repo_dir = action_repo(&f.root, "proj");
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    std::fs::write(repo_dir.join("README"), "hi\nthere\n").unwrap();
+    std::fs::write(repo_dir.join("a b.txt"), "a\n").unwrap();
+    std::fs::write(repo_dir.join("*"), "glob\n").unwrap();
+
+    // A literal "*" stages only itself.
+    act(
+        &f,
+        &wt,
+        GitAction::Stage {
+            paths: paths(&["*"]),
+        },
+    )
+    .await
+    .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(listed(&s.staged), vec!["*"]);
+    act(
+        &f,
+        &wt,
+        GitAction::Stage {
+            paths: paths(&["README", "a b.txt"]),
+        },
+    )
+    .await
+    .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(listed(&s.staged), vec!["*", "README", "a b.txt"]);
+    act(
+        &f,
+        &wt,
+        GitAction::Unstage {
+            paths: paths(&["README", "*"]),
+        },
+    )
+    .await
+    .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(listed(&s.staged), vec!["a b.txt"]);
+    assert_eq!(listed(&s.unstaged), vec!["README"]);
+    assert_eq!(listed(&s.untracked), vec!["*"]);
+
+    // Empty message refused; a real one commits only what is staged.
+    let commit = |message: &str, amend, all| GitAction::Commit {
+        message: message.into(),
+        amend,
+        all,
+    };
+    assert!(matches!(
+        act(&f, &wt, commit("  ", false, false)).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    act(&f, &wt, commit("Add a b\n\nBody", false, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        git_out(&repo_dir, &["log", "-1", "--format=%B"]),
+        "Add a b\n\nBody"
+    );
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(s.staged.is_empty());
+    assert_eq!(listed(&s.unstaged), vec!["README"]);
+
+    // Nothing staged: git's refusal comes back readable.
+    match act(&f, &wt, commit("x", false, false)).await {
+        Err(SessionError::Git(m)) => assert!(m.contains("no changes added to commit"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    // Commit all takes untracked files too; amend with no message keeps it.
+    act(&f, &wt, commit("Everything", false, true))
+        .await
+        .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(s.unstaged.is_empty() && s.untracked.is_empty());
+    std::fs::write(repo_dir.join("late.txt"), "late\n").unwrap();
+    act(
+        &f,
+        &wt,
+        GitAction::Stage {
+            paths: paths(&["late.txt"]),
+        },
+    )
+    .await
+    .unwrap();
+    act(&f, &wt, commit("", true, false)).await.unwrap();
+    assert_eq!(
+        git_out(&repo_dir, &["log", "-1", "--format=%s"]),
+        "Everything"
+    );
+    assert_eq!(git_out(&repo_dir, &["rev-list", "--count", "HEAD"]), "3");
+    assert!(git_out(&repo_dir, &["show", "--name-only", "--format=", "HEAD"]).contains("late.txt"));
+
+    // Unstage on an unborn branch drops the index entry.
+    let fresh = f.root.join("fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    git(&fresh, &["init", "-q", "-b", "main"]);
+    std::fs::write(fresh.join("x"), "x\n").unwrap();
+    git(&fresh, &["add", "x"]);
+    let r2 = f.mgr.add_repo(&fresh.to_string_lossy()).await.unwrap();
+    let wt2 = f.mgr.list_worktrees(&r2.id).await.unwrap()[0].id.clone();
+    act(
+        &f,
+        &wt2,
+        GitAction::Unstage {
+            paths: paths(&["x"]),
+        },
+    )
+    .await
+    .unwrap();
+    let s = f.mgr.git_status(&wt2).await.unwrap();
+    assert!(s.staged.is_empty());
+    assert_eq!(listed(&s.untracked), vec!["x"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_discard_and_undo() {
+    use civet_proto::GitAction;
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let repo_dir = action_repo(&f.root, "proj");
+    let write = |p: &str, s: &[u8]| {
+        let full = repo_dir.join(p);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, s).unwrap();
+    };
+    write("mod.txt", b"one\n");
+    write("gone.txt", b"bye\n");
+    write("run.sh", b"#!/bin/sh\n");
+    std::fs::set_permissions(
+        repo_dir.join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    write("both.txt", b"base\n");
+    git(&repo_dir, &["add", "."]);
+    git(&repo_dir, &["commit", "-q", "-m", "files"]);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+
+    write("mod.txt", b"one\ntwo\n");
+    std::fs::remove_file(repo_dir.join("gone.txt")).unwrap();
+    write("run.sh", b"#!/bin/sh\necho hi\n");
+    write("new/deep/untracked.bin", b"\x00\x01\x02binary");
+    std::os::unix::fs::symlink("mod.txt", repo_dir.join("link")).unwrap();
+    // Staged and modified again.
+    write("both.txt", b"staged\n");
+    git(&repo_dir, &["add", "both.txt"]);
+    write("both.txt", b"staged\nand more\n");
+    // Staged new file.
+    write("added.txt", b"added\n");
+    git(&repo_dir, &["add", "added.txt"]);
+
+    let before = f.mgr.git_status(&wt).await.unwrap();
+    let all = paths(&[
+        "mod.txt",
+        "gone.txt",
+        "run.sh",
+        "new/deep/untracked.bin",
+        "link",
+        "both.txt",
+        "added.txt",
+    ]);
+
+    // Unstaged discard: back to the index; untracked files deleted.
+    let snap = act(
+        &f,
+        &wt,
+        GitAction::Discard {
+            paths: all.clone(),
+            staged: false,
+        },
+    )
+    .await
+    .unwrap()
+    .expect("snapshot");
+    assert_eq!(std::fs::read(repo_dir.join("mod.txt")).unwrap(), b"one\n");
+    assert_eq!(std::fs::read(repo_dir.join("gone.txt")).unwrap(), b"bye\n");
+    assert_eq!(
+        std::fs::read(repo_dir.join("both.txt")).unwrap(),
+        b"staged\n"
+    );
+    assert!(!repo_dir.join("new").exists(), "empty dirs pruned");
+    assert!(std::fs::symlink_metadata(repo_dir.join("link")).is_err());
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(s.unstaged.is_empty() && s.untracked.is_empty(), "{s:?}");
+    assert_eq!(listed(&s.staged), vec!["added.txt", "both.txt"]);
+    let untracked: Vec<_> = snap
+        .entries
+        .iter()
+        .filter(|e| e.untracked)
+        .map(|e| e.path.as_str())
+        .collect();
+    assert_eq!(untracked, vec!["new/deep/untracked.bin", "link"]);
+    assert!(snap.entries.iter().all(|e| !e.restore_index));
+    let gone = snap.entries.iter().find(|e| e.path == "gone.txt").unwrap();
+    assert!(gone.file.is_none());
+
+    // Undo puts every file back as it was (content, mode, symlink).
+    act(&f, &wt, GitAction::RestoreDiscarded(snap))
+        .await
+        .unwrap();
+    assert_eq!(f.mgr.git_status(&wt).await.unwrap(), before);
+    assert_eq!(
+        std::fs::read(repo_dir.join("new/deep/untracked.bin")).unwrap(),
+        b"\x00\x01\x02binary"
+    );
+    assert_eq!(
+        std::fs::read_link(repo_dir.join("link")).unwrap(),
+        Path::new("mod.txt")
+    );
+    assert!(!repo_dir.join("gone.txt").exists());
+    let mode = std::fs::metadata(repo_dir.join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o111, 0o111);
+
+    // Staged discard: index and working tree back to HEAD; a staged new
+    // file leaves both. Undo restores the index too.
+    let snap = act(
+        &f,
+        &wt,
+        GitAction::Discard {
+            paths: all.clone(),
+            staged: true,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(
+        s.staged.is_empty() && s.unstaged.is_empty() && s.untracked.is_empty(),
+        "{s:?}"
+    );
+    assert!(!repo_dir.join("added.txt").exists());
+    assert_eq!(std::fs::read(repo_dir.join("both.txt")).unwrap(), b"base\n");
+    act(&f, &wt, GitAction::RestoreDiscarded(snap))
+        .await
+        .unwrap();
+    assert_eq!(f.mgr.git_status(&wt).await.unwrap(), before);
+    assert_eq!(
+        std::fs::read(repo_dir.join("both.txt")).unwrap(),
+        b"staged\nand more\n"
+    );
+    assert_eq!(
+        git_out(&repo_dir, &["show", ":both.txt"]),
+        "staged",
+        "index entry restored"
+    );
+
+    // Undo refuses once a discarded path changed again (an agent's newer
+    // edit has no snapshot), and leaves that edit alone.
+    for staged in [false, true] {
+        let snap = act(
+            &f,
+            &wt,
+            GitAction::Discard {
+                paths: paths(&["mod.txt", "new/deep/untracked.bin"]),
+                staged,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        write("mod.txt", b"agent wrote this\n");
+        assert!(matches!(
+            act(&f, &wt, GitAction::RestoreDiscarded(snap.clone())).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+        assert_eq!(
+            std::fs::read(repo_dir.join("mod.txt")).unwrap(),
+            b"agent wrote this\n"
+        );
+        // Same for a deleted untracked file that came back.
+        git(&repo_dir, &["checkout", "-q", "--", "mod.txt"]);
+        write("new/deep/untracked.bin", b"recreated");
+        assert!(matches!(
+            act(&f, &wt, GitAction::RestoreDiscarded(snap)).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+        assert_eq!(
+            std::fs::read(repo_dir.join("new/deep/untracked.bin")).unwrap(),
+            b"recreated"
+        );
+    }
+
+    // A discard that fails part-way (a file that can't be deleted) rolls
+    // back the paths it already discarded, so nothing is lost without Undo.
+    let locked = repo_dir.join("locked");
+    write("mod.txt", b"one\ntwo\n");
+    write("locked/keep.txt", b"untracked\n");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = act(
+        &f,
+        &wt,
+        GitAction::Discard {
+            paths: paths(&["mod.txt", "added.txt", "locked/keep.txt"]),
+            staged: true,
+        },
+    )
+    .await;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(r, Err(SessionError::Io(_))), "{r:?}");
+    assert_eq!(
+        std::fs::read(repo_dir.join("mod.txt")).unwrap(),
+        b"one\ntwo\n"
+    );
+    assert_eq!(
+        std::fs::read(repo_dir.join("added.txt")).unwrap(),
+        b"added\n"
+    );
+    assert_eq!(
+        git_out(&repo_dir, &["show", ":added.txt"]),
+        "added",
+        "index rolled back"
+    );
+    assert!(locked.join("keep.txt").exists());
+    std::fs::remove_dir_all(&locked).unwrap();
+
+    // Paths that leave the worktree or touch .git are refused, by every
+    // path-taking action, and nothing is changed.
+    std::os::unix::fs::symlink(&f.root, repo_dir.join("out")).unwrap();
+    std::fs::write(f.root.join("victim"), "keep\n").unwrap();
+    for bad in [
+        "../x",
+        "/etc/passwd",
+        "",
+        ".git/config",
+        "sub/.git/HEAD",
+        "out/victim",
+    ] {
+        let p = paths(&[bad]);
+        for action in [
+            GitAction::Stage { paths: p.clone() },
+            GitAction::Unstage { paths: p.clone() },
+            GitAction::Discard {
+                paths: p.clone(),
+                staged: true,
+            },
+        ] {
+            let r = act(&f, &wt, action.clone()).await;
+            assert!(
+                matches!(r, Err(SessionError::InvalidArgument(_))),
+                "{action:?}: {r:?}"
+            );
+        }
+    }
+    let restore = |path: &str, oid: &str| {
+        GitAction::RestoreDiscarded(civet_proto::GitDiscardSnapshot {
+            entries: vec![civet_proto::GitDiscardEntry {
+                path: path.into(),
+                file: Some(civet_proto::GitBlobRef {
+                    oid: oid.into(),
+                    mode: 0o100644,
+                }),
+                restore_index: false,
+                index: None,
+                untracked: true,
+            }],
+        })
+    };
+    let blob = git_out(&repo_dir, &["rev-parse", "HEAD:README"]);
+    for bad in ["out/victim", "../victim", ".git/hooks/pre-commit"] {
+        assert!(matches!(
+            act(&f, &wt, restore(bad, &blob)).await,
+            Err(SessionError::InvalidArgument(_))
+        ));
+    }
+    assert!(matches!(
+        act(&f, &wt, restore("ok.txt", "--output=/tmp/x")).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert_eq!(std::fs::read(f.root.join("victim")).unwrap(), b"keep\n");
+    assert!(!repo_dir.join(".git/hooks/pre-commit").exists());
+}
+
+/// main and `other` both change a.txt; `other` also deletes b.txt that
+/// main changes. Merging `other` into main conflicts on both.
+fn conflicted_repo(root: &Path) -> PathBuf {
+    let repo = action_repo(root, "conflict");
+    std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+    std::fs::write(repo.join("b.txt"), "base\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+    git(&repo, &["checkout", "-q", "-b", "other"]);
+    std::fs::write(repo.join("a.txt"), "theirs\n").unwrap();
+    git(&repo, &["rm", "-q", "b.txt"]);
+    git(&repo, &["commit", "-q", "-am", "other"]);
+    git(&repo, &["checkout", "-q", "main"]);
+    std::fs::write(repo.join("a.txt"), "ours\n").unwrap();
+    std::fs::write(repo.join("b.txt"), "ours\n").unwrap();
+    git(&repo, &["commit", "-q", "-am", "main"]);
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["merge", "-q", "other"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    repo
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_accept_conflicts() {
+    use civet_proto::{ConflictSide, GitAction};
+    let f = fixture();
+    let repo_dir = conflicted_repo(&f.root);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let wt = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    assert_eq!(
+        listed(&f.mgr.git_status(&wt).await.unwrap().conflicted),
+        vec!["a.txt", "b.txt"]
+    );
+    // Conflicts can't be discarded, nor a clean path "accepted".
+    assert!(matches!(
+        act(
+            &f,
+            &wt,
+            GitAction::Discard {
+                paths: paths(&["a.txt"]),
+                staged: false
+            }
+        )
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        act(
+            &f,
+            &wt,
+            GitAction::AcceptConflict {
+                paths: paths(&["README"]),
+                side: ConflictSide::Ours
+            }
+        )
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+
+    act(
+        &f,
+        &wt,
+        GitAction::AcceptConflict {
+            paths: paths(&["a.txt", "b.txt"]),
+            side: ConflictSide::Theirs,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(repo_dir.join("a.txt")).unwrap(), b"theirs\n");
+    // Theirs deleted b.txt: taking their side removes it.
+    assert!(!repo_dir.join("b.txt").exists());
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(s.conflicted.is_empty(), "{s:?}");
+    assert_eq!(listed(&s.staged), vec!["a.txt", "b.txt"]);
+
+    // Ours, and "mark resolved" (stage) of a hand-edited file.
+    git(&repo_dir, &["merge", "--abort"]);
+    let _ = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_dir)
+        .args(["merge", "-q", "other"])
+        .output()
+        .unwrap();
+    act(
+        &f,
+        &wt,
+        GitAction::AcceptConflict {
+            paths: paths(&["b.txt"]),
+            side: ConflictSide::Ours,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(repo_dir.join("b.txt")).unwrap(), b"ours\n");
+    std::fs::write(repo_dir.join("a.txt"), "merged by hand\n").unwrap();
+    act(
+        &f,
+        &wt,
+        GitAction::Stage {
+            paths: paths(&["a.txt"]),
+        },
+    )
+    .await
+    .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert!(s.conflicted.is_empty());
+    act(
+        &f,
+        &wt,
+        GitAction::Commit {
+            message: "Merge other".into(),
+            amend: false,
+            all: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        git_out(&repo_dir, &["rev-list", "--count", "--merges", "HEAD"]),
+        "1"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_push_pull_fetch_and_undo_commit() {
+    use civet_proto::GitAction;
+    let f = fixture();
+    let origin = f.root.join("origin.git");
+    git(
+        &f.root,
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    let repo_dir = action_repo(&f.root, "proj");
+    git(
+        &repo_dir,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    );
+    git(&repo_dir, &["push", "-q", "-u", "origin", "main"]);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+
+    // An agent worktree: a new branch, upstream configured but not pushed.
+    let w = f
+        .mgr
+        .create_worktree(&repo.id, "feat/x", Some("main"), None)
+        .await
+        .unwrap();
+    let wt = w.id.clone();
+    let wdir = PathBuf::from(&w.path);
+    let b = f.mgr.git_branch(&wt).await.unwrap();
+    assert_eq!(b.branch.as_deref(), Some("feat/x"));
+    assert_eq!(b.upstream, None);
+    assert!(b.has_remote);
+    assert!(!b.can_undo_commit, "HEAD is main's pushed commit");
+
+    std::fs::write(wdir.join("f.txt"), "f\n").unwrap();
+    act(
+        &f,
+        &wt,
+        GitAction::Commit {
+            message: "f".into(),
+            amend: false,
+            all: true,
+        },
+    )
+    .await
+    .unwrap();
+    // Undo needs the current HEAD; a stale one is refused.
+    let b = f.mgr.git_branch(&wt).await.unwrap();
+    assert!(b.can_undo_commit);
+    assert_eq!(b.ahead, 0, "no upstream yet");
+    assert!(matches!(
+        act(
+            &f,
+            &wt,
+            GitAction::UndoCommit {
+                head: "0".repeat(40)
+            }
+        )
+        .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    let head = b.head.clone().unwrap();
+    act(&f, &wt, GitAction::UndoCommit { head: head.clone() })
+        .await
+        .unwrap();
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(
+        listed(&s.staged),
+        vec!["f.txt"],
+        "soft reset keeps the index"
+    );
+    act(
+        &f,
+        &wt,
+        GitAction::Commit {
+            message: "f again".into(),
+            amend: false,
+            all: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    // First push creates the remote branch and tracks it.
+    act(&f, &wt, GitAction::Push).await.unwrap();
+    let b = f.mgr.git_branch(&wt).await.unwrap();
+    assert_eq!(b.upstream.as_deref(), Some("origin/feat/x"));
+    assert_eq!((b.ahead, b.behind), (0, 0));
+    assert!(!b.can_undo_commit, "HEAD is pushed");
+    let head = b.head.clone().unwrap();
+    assert!(matches!(
+        act(&f, &wt, GitAction::UndoCommit { head }).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert_eq!(
+        git_out(&origin, &["rev-parse", "refs/heads/feat/x"]),
+        git_out(&wdir, &["rev-parse", "HEAD"])
+    );
+
+    // Someone else pushes; fetch sees it, pull merges it.
+    let other = f.root.join("other");
+    git(
+        &f.root,
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "feat/x",
+            &origin.to_string_lossy(),
+            "other",
+        ],
+    );
+    identity(&other);
+    std::fs::write(other.join("theirs.txt"), "t\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "theirs"]);
+    git(&other, &["push", "-q"]);
+    std::fs::write(wdir.join("mine.txt"), "m\n").unwrap();
+    act(
+        &f,
+        &wt,
+        GitAction::Commit {
+            message: "mine".into(),
+            amend: false,
+            all: true,
+        },
+    )
+    .await
+    .unwrap();
+    act(&f, &wt, GitAction::Fetch).await.unwrap();
+    let b = f.mgr.git_branch(&wt).await.unwrap();
+    assert_eq!((b.ahead, b.behind), (1, 1));
+    // Diverged: push is rejected with git's message.
+    match act(&f, &wt, GitAction::Push).await {
+        Err(SessionError::Git(m)) => assert!(m.contains("rejected"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    act(&f, &wt, GitAction::Pull).await.unwrap();
+    let b = f.mgr.git_branch(&wt).await.unwrap();
+    assert_eq!((b.ahead, b.behind), (2, 0));
+    assert!(wdir.join("theirs.txt").exists());
+    act(&f, &wt, GitAction::Push).await.unwrap();
+
+    // A pull that conflicts reports it and leaves the conflict to resolve.
+    std::fs::write(other.join("theirs.txt"), "other side\n").unwrap();
+    git(&other, &["pull", "-q", "--no-rebase"]);
+    git(&other, &["commit", "-q", "-am", "edit"]);
+    git(&other, &["push", "-q"]);
+    std::fs::write(wdir.join("theirs.txt"), "my side\n").unwrap();
+    act(
+        &f,
+        &wt,
+        GitAction::Commit {
+            message: "edit mine".into(),
+            amend: false,
+            all: true,
+        },
+    )
+    .await
+    .unwrap();
+    match act(&f, &wt, GitAction::Pull).await {
+        Err(SessionError::Git(m)) => assert!(m.contains("CONFLICT"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(listed(&s.conflicted), vec!["theirs.txt"]);
+
+    // No remote at all: push says so.
+    let lone = action_repo(&f.root, "lone");
+    let r2 = f.mgr.add_repo(&lone.to_string_lossy()).await.unwrap();
+    let wt2 = f.mgr.list_worktrees(&r2.id).await.unwrap()[0].id.clone();
+    assert!(!f.mgr.git_branch(&wt2).await.unwrap().has_remote);
+    match act(&f, &wt2, GitAction::Push).await {
+        Err(SessionError::Git(m)) => assert!(m.contains("no remote"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    match act(&f, &wt2, GitAction::Pull).await {
+        Err(SessionError::Git(m)) => assert!(m.contains("no upstream"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_stash_is_per_branch() {
+    use civet_proto::GitAction;
+    let f = fixture();
+    let repo_dir = action_repo(&f.root, "proj");
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let main = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    let w = f
+        .mgr
+        .create_worktree(&repo.id, "side", Some("main"), None)
+        .await
+        .unwrap();
+    let side = PathBuf::from(&w.path);
+
+    assert!(matches!(
+        act(&f, &main, GitAction::StashAll).await,
+        Err(SessionError::Git(_))
+    ));
+    std::fs::write(repo_dir.join("README"), "main edit\n").unwrap();
+    std::fs::write(repo_dir.join("new.txt"), "untracked\n").unwrap();
+    act(&f, &main, GitAction::StashAll).await.unwrap();
+    let s = f.mgr.git_status(&main).await.unwrap();
+    assert!(s.unstaged.is_empty() && s.untracked.is_empty());
+    assert_eq!(f.mgr.git_branch(&main).await.unwrap().stashes, 1);
+
+    // The other worktree's stash (newer, same shared list) is not ours.
+    std::fs::write(side.join("README"), "side edit\n").unwrap();
+    act(&f, &w.id, GitAction::StashAll).await.unwrap();
+    assert_eq!(f.mgr.git_branch(&w.id).await.unwrap().stashes, 1);
+    assert_eq!(f.mgr.git_branch(&main).await.unwrap().stashes, 1);
+
+    act(&f, &main, GitAction::StashPop).await.unwrap();
+    assert_eq!(
+        std::fs::read(repo_dir.join("README")).unwrap(),
+        b"main edit\n"
+    );
+    assert!(repo_dir.join("new.txt").exists());
+    assert_eq!(f.mgr.git_branch(&main).await.unwrap().stashes, 0);
+    assert!(matches!(
+        act(&f, &main, GitAction::StashPop).await,
+        Err(SessionError::Git(_))
+    ));
+    // The side entry is still there and still pops into its worktree.
+    assert_eq!(git_out(&repo_dir, &["stash", "list"]).lines().count(), 1);
+    act(&f, &w.id, GitAction::StashPop).await.unwrap();
+    assert_eq!(std::fs::read(side.join("README")).unwrap(), b"side edit\n");
+
+    // Both worktrees stash and pop at the same time: each gets its own back
+    // and the shared list ends empty.
+    std::fs::write(repo_dir.join("README"), "main again\n").unwrap();
+    std::fs::write(side.join("README"), "side again\n").unwrap();
+    let (a, b) = tokio::join!(
+        act(&f, &main, GitAction::StashAll),
+        act(&f, &w.id, GitAction::StashAll)
+    );
+    a.unwrap();
+    b.unwrap();
+    let (a, b) = tokio::join!(
+        act(&f, &main, GitAction::StashPop),
+        act(&f, &w.id, GitAction::StashPop)
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(
+        std::fs::read(repo_dir.join("README")).unwrap(),
+        b"main again\n"
+    );
+    assert_eq!(std::fs::read(side.join("README")).unwrap(), b"side again\n");
+    assert_eq!(git_out(&repo_dir, &["stash", "list"]), "");
+}

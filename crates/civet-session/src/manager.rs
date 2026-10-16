@@ -382,6 +382,31 @@ impl SessionManager {
         .await
     }
 
+    /// The worktree's branch and upstream (see [`crate::git_actions::branch`]).
+    pub async fn git_branch(
+        &self,
+        worktree: &WorktreeId,
+    ) -> Result<civet_proto::GitBranchInfo, SessionError> {
+        let (_, w) = self.find_worktree(worktree).await?;
+        crate::git_actions::branch(&self.inner.git, Path::new(&w.path)).await
+    }
+
+    /// Run a git write operation in the worktree (see
+    /// [`crate::git_actions::run`]). Returns the snapshot of a
+    /// [`civet_proto::GitAction::Discard`], None for the others.
+    pub async fn git_action(
+        &self,
+        worktree: &WorktreeId,
+        action: civet_proto::GitAction,
+    ) -> Result<Option<civet_proto::GitDiscardSnapshot>, SessionError> {
+        let (_, w) = self.find_worktree(worktree).await?;
+        let out = crate::git_actions::run(&self.inner.git, Path::new(&w.path), action).await?;
+        Ok(match out {
+            crate::git_actions::ActionOutcome::Done => None,
+            crate::git_actions::ActionOutcome::Discarded(s) => Some(s),
+        })
+    }
+
     /// `git worktree add [-b branch] -- <path> [base]`. Default path:
     /// `<parent of main worktree>/<repo name>-worktrees/<branch, '/' -> '-'>`.
     /// With `base` (must resolve to a commit: `git rev-parse --verify

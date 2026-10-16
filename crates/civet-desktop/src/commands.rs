@@ -189,6 +189,25 @@ pub async fn git_diff(
 }
 
 #[tauri::command]
+pub async fn git_branch(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+) -> Res<civet_proto::GitBranchInfo> {
+    state.hosts.git_branch(&host_id, worktree).await
+}
+
+#[tauri::command]
+pub async fn git_action(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    action: civet_proto::GitAction,
+) -> Res<Option<civet_proto::GitDiscardSnapshot>> {
+    state.hosts.git_action(&host_id, worktree, action).await
+}
+
+#[tauri::command]
 pub async fn create_worktree(
     state: State<'_, AppState>,
     host_id: String,
@@ -507,6 +526,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_pull_requests,
         git_status,
         git_diff,
+        git_branch,
+        git_action,
         create_worktree,
         remove_worktree,
         list_files,

@@ -96,6 +96,8 @@ export type Toast = {
   body?: string
   status?: 'done' | 'needsInput'
   target?: { hostId: string; worktree: string | null; pane: PaneId }
+  /** A button on the toast (e.g. Undo); clicking it also dismisses the toast. */
+  action?: { label: string; run: () => void }
 }
 
 export type ConfirmRequest = {
