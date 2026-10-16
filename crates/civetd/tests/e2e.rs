@@ -56,6 +56,12 @@ fn sh_pane(cwd: &Path) -> Request {
     })
 }
 
+/// See [`Mirror::count_output`].
+fn is_output(row: &str, word: &str) -> bool {
+    let row = row.trim_end();
+    row == word || row.ends_with(&format!("$ {word}"))
+}
+
 /// Strip CSI / OSC escape sequences from a VT line.
 fn strip_vt(bytes: &[u8]) -> String {
     let s = String::from_utf8_lossy(bytes);
@@ -144,8 +150,11 @@ impl Mirror {
         self.rows().iter().any(|r| r.trim_end().ends_with('$'))
     }
 
-    fn count_rows(&self, row: &str) -> usize {
-        self.rows().iter().filter(|r| r.trim_end() == row).count()
+    /// Rows showing `word` as a command's output: on its own row, or right
+    /// after a prompt (`$ word`) when the next command was typed before the
+    /// shell printed that prompt (the tty echoes it early).
+    fn count_output(&self, word: &str) -> usize {
+        self.rows().iter().filter(|r| is_output(r, word)).count()
     }
 
     /// History (as replayed into this mirror's scrollback) + screen, as text.
@@ -629,7 +638,7 @@ async fn duplicate_input_seq_not_applied_twice() {
     c.input(pane, 1, "echo dup\n").await;
     c.input(pane, 1, "echo dup\n").await;
     c.input(pane, 2, "echo two\n").await;
-    c.wait_screen(pane, |m| m.has_row("two")).await;
+    c.wait_screen(pane, |m| m.count_output("two") > 0).await;
     // Let any (wrongly) duplicated write show up.
     tokio::time::sleep(Duration::from_millis(300)).await;
     let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
@@ -637,7 +646,7 @@ async fn duplicate_input_seq_not_applied_twice() {
         .await
         .is_ok()
     {}
-    assert_eq!(c.mirrors[&pane].count_rows("dup"), 1);
+    assert_eq!(c.mirrors[&pane].count_output("dup"), 1);
     assert!(
         c.input_acks.iter().any(|(p, s)| *p == pane && *s >= 1),
         "a duplicate is answered with an InputAck"
@@ -675,9 +684,9 @@ async fn duplicate_input_seq_not_applied_twice() {
     let deadline = Instant::now() + WAIT;
     loop {
         let rows = daemon.sessions().screen_text(pane).unwrap();
-        if rows.iter().any(|r| r == "three") {
-            assert_eq!(rows.iter().filter(|r| *r == "two").count(), 1);
-            assert_eq!(rows.iter().filter(|r| *r == "dup").count(), 1);
+        if rows.iter().any(|r| is_output(r, "three")) {
+            assert_eq!(rows.iter().filter(|r| is_output(r, "two")).count(), 1);
+            assert_eq!(rows.iter().filter(|r| is_output(r, "dup")).count(), 1);
             break;
         }
         assert!(Instant::now() < deadline);
