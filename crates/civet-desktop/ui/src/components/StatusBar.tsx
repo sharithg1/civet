@@ -2,7 +2,14 @@
 // worktree's branch, the active host + latency (click for the host popover)
 // and, on the right, the focused session.
 import { ChevronDown, GitBranch, Server } from 'lucide-react'
-import { reconnectHost, requestRestartDaemon, upgradeSummary, useStore, wsKey } from '@/state/store'
+import {
+  isPaneTab,
+  reconnectHost,
+  requestRestartDaemon,
+  upgradeSummary,
+  useStore,
+  wsKey
+} from '@/state/store'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { DOT_LABEL, agentName, duration, paneDot, worktreeBranch } from '@/lib/worktree-view'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -18,7 +25,8 @@ export function StatusBar() {
   const ws = useStore((s) =>
     active ? s.workspaces[wsKey(active.hostId, active.worktree)] : undefined
   )
-  const focusedId = ws?.tabs.find((t) => t.id === ws.activeTab)?.focused
+  const activeTab = ws?.tabs.find((t) => t.id === ws.activeTab)
+  const focusedId = activeTab && isPaneTab(activeTab) ? activeTab.focused : undefined
   const pane = useStore((s) =>
     active && focusedId !== undefined ? s.panes[active.hostId]?.[focusedId] : undefined
   )

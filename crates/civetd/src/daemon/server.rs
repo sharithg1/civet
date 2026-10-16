@@ -501,6 +501,25 @@ impl Server {
                 .list_pull_requests(&repo)
                 .await
                 .map(Response::PullRequests),
+            Request::ListFiles {
+                worktree,
+                dir,
+                include_ignored,
+            } => s
+                .list_files(&worktree, &dir, include_ignored)
+                .await
+                .map(Response::Files),
+            Request::ReadFile {
+                worktree,
+                path,
+                max_bytes,
+            } => s
+                .read_file(&worktree, &path, max_bytes)
+                .await
+                .map(Response::FilePreview),
+            Request::ListAllFiles { worktree } => {
+                s.list_all_files(&worktree).await.map(Response::AllFiles)
+            }
             Request::GitStatus { worktree } => {
                 s.git_status(&worktree).await.map(Response::GitStatus)
             }

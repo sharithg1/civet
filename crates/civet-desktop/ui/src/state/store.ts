@@ -52,7 +52,16 @@ import type {
 } from '../types'
 import { termSize } from '../types'
 
-export type Tab = { id: string; root: PaneNode; focused: PaneId }
+/** A tab of panes (terminals, agents) in a split layout. */
+export type PaneTab = { kind?: undefined; id: string; root: PaneNode; focused: PaneId }
+/** A read-only view of a worktree file (`path` relative to the worktree root). */
+export type FileTab = { kind: 'file'; id: string; path: string }
+export type Tab = PaneTab | FileTab
+
+export const isPaneTab = (t: Tab): t is PaneTab => t.kind !== 'file'
+
+/** The panes of a tab (none for a file tab). */
+export const tabPanes = (t: Tab): PaneId[] => (isPaneTab(t) ? leaves(t.root) : [])
 export type Workspace = { tabs: Tab[]; activeTab: string | null }
 
 export type HostView = HostSummary & {
@@ -610,7 +619,7 @@ async function refreshPanes(hostId: string): Promise<void> {
   for (const key of Object.keys(get().workspaces)) {
     if (!key.startsWith(`${hostId}\u0000`)) continue
     for (const tab of get().workspaces[key]!.tabs) {
-      for (const pane of leaves(tab.root)) if (!map[pane]) removePaneEverywhere(hostId, pane)
+      for (const pane of tabPanes(tab)) if (!map[pane]) removePaneEverywhere(hostId, pane)
     }
   }
 }
@@ -838,10 +847,10 @@ export function selectWorktree(hostId: string, worktree: string): void {
   }
 }
 
-export function findTabOfPane(hostId: string, pane: PaneId): { key: string; tab: Tab } | null {
+export function findTabOfPane(hostId: string, pane: PaneId): { key: string; tab: PaneTab } | null {
   for (const [key, ws] of Object.entries(get().workspaces)) {
     if (!key.startsWith(`${hostId}\u0000`)) continue
-    const tab = ws.tabs.find((t) => leaves(t.root).includes(pane))
+    const tab = ws.tabs.find((t): t is PaneTab => isPaneTab(t) && leaves(t.root).includes(pane))
     if (tab) return { key, tab }
   }
   return null
@@ -865,6 +874,24 @@ export function openPaneInTab(
     tabs: [...w.tabs, tab],
     activeTab: opts.activate === false && w.activeTab ? w.activeTab : tab.id
   }))
+}
+
+/** Open a worktree file in a tab of its own, or activate the tab already showing it. */
+export function openFileTab(hostId: string, worktree: string, path: string): void {
+  updateWorkspace(wsKey(hostId, worktree), (w) => {
+    const existing = w.tabs.find((t) => t.kind === 'file' && t.path === path)
+    if (existing) return { ...w, activeTab: existing.id }
+    const tab: FileTab = { kind: 'file', id: newTabId(), path }
+    return { tabs: [...w.tabs, tab], activeTab: tab.id }
+  })
+}
+
+/** The tab to activate once `active` is gone from `before`: its left neighbour, else the first. */
+function survivingActive(before: Tab[], after: Tab[], active: string | null): string | null {
+  if (after.some((t) => t.id === active)) return active
+  return (
+    after[Math.max(0, before.findIndex((t) => t.id === active) - 1)]?.id ?? after[0]?.id ?? null
+  )
 }
 
 /** Jump to a pane from a toast / notification. */
@@ -904,7 +931,9 @@ export function focusPane(hostId: string, pane: PaneId): void {
 export function setSplitRatio(key: string, tabId: string, path: NodePath, ratio: number): void {
   updateWorkspace(key, (w) => ({
     ...w,
-    tabs: w.tabs.map((t) => (t.id === tabId ? { ...t, root: setRatio(t.root, path, ratio) } : t))
+    tabs: w.tabs.map((t) =>
+      t.id === tabId && isPaneTab(t) ? { ...t, root: setRatio(t.root, path, ratio) } : t
+    )
   }))
 }
 
@@ -920,27 +949,26 @@ function removePaneEverywhere(hostId: string, pane: PaneId): void {
       }
       const tabs: Tab[] = []
       for (const t of ws.tabs) {
+        if (!isPaneTab(t)) {
+          tabs.push(t)
+          continue
+        }
         const root = removeLeaf(t.root, pane)
         if (!root) continue
         const focused = leaves(root).includes(t.focused) ? t.focused : leaves(root)[0]!
         tabs.push(root === t.root ? t : { ...t, root, focused })
       }
-      const activeTab = tabs.some((t) => t.id === ws.activeTab)
-        ? ws.activeTab
-        : (tabs[Math.max(0, ws.tabs.findIndex((t) => t.id === ws.activeTab) - 1)]?.id ??
-          tabs[0]?.id ??
-          null)
-      workspaces[key] = { tabs, activeTab }
+      workspaces[key] = { tabs, activeTab: survivingActive(ws.tabs, tabs, ws.activeTab) }
     }
     return { panes: { ...s.panes, [hostId]: panes }, workspaces }
   })
 }
 
-async function spawnShell(hostId: string, worktree: string): Promise<PaneInfo> {
+async function spawnShell(hostId: string, worktree: string, cwd?: string): Promise<PaneInfo> {
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   const pane = await backend().spawnPane(hostId, {
     worktree,
-    cwd: wt?.path ?? null,
+    cwd: cwd ?? wt?.path ?? null,
     command: null,
     env: [],
     size: DEFAULT_SPAWN_SIZE,
@@ -951,10 +979,15 @@ async function spawnShell(hostId: string, worktree: string): Promise<PaneInfo> {
   return pane
 }
 
-export async function newTerminalTab(hostId: string, worktree: string): Promise<void> {
+/** A shell tab in the worktree (in `cwd`, an absolute path on the host, if given). */
+export async function newTerminalTab(
+  hostId: string,
+  worktree: string,
+  cwd?: string
+): Promise<void> {
   if (isRemoving(hostId, worktree)) return
   try {
-    const pane = await spawnShell(hostId, worktree)
+    const pane = await spawnShell(hostId, worktree, cwd)
     openPaneInTab(hostId, worktree, pane.id)
   } catch (err) {
     reportError('Could not open a terminal', err)
@@ -967,13 +1000,14 @@ export async function splitFocused(dir: SplitDirection): Promise<void> {
   const key = wsKey(active.hostId, active.worktree)
   const ws = get().workspaces[key]
   const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
-  if (!tab) return newTerminalTab(active.hostId, active.worktree)
+  // A file tab has nothing to split: open a terminal next to it.
+  if (!tab || !isPaneTab(tab)) return newTerminalTab(active.hostId, active.worktree)
   try {
     const pane = await spawnShell(active.hostId, active.worktree)
     updateWorkspace(key, (w) => ({
       ...w,
       tabs: w.tabs.map((t) =>
-        t.id === tab.id
+        t.id === tab.id && isPaneTab(t)
           ? { ...t, root: splitLeaf(t.root, t.focused, pane.id, dir), focused: pane.id }
           : t
       )
@@ -1017,7 +1051,12 @@ export function closePanes(hostId: string, panes: PaneId[]): void {
 export function closeTab(key: string, tabId: string): void {
   const hostId = key.slice(0, key.indexOf('\u0000'))
   const tab = get().workspaces[key]?.tabs.find((t) => t.id === tabId)
-  if (tab) closePanes(hostId, leaves(tab.root))
+  if (!tab) return
+  if (isPaneTab(tab)) return closePanes(hostId, leaves(tab.root))
+  updateWorkspace(key, (w) => {
+    const tabs = w.tabs.filter((t) => t.id !== tabId)
+    return { tabs, activeTab: survivingActive(w.tabs, tabs, w.activeTab) }
+  })
 }
 
 // ── Repos, worktrees and agents ───────────────────────────────────────────

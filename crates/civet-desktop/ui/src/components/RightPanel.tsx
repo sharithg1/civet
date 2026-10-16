@@ -1,13 +1,13 @@
 // Right panel (Files / Changes / Branch / Ports), styled after Cursor's review pane:
 // its own header row of icon pills with the panel toggle at the far right,
 // then a PR-like branch view (state badge, branch → base, title, sections).
-// civetd does not expose a worktree's files, commits or PRs yet, so Files is
-// an explanatory empty state and Branch shows what the daemon does report
-// (branch, HEAD, path, sessions) plus "Remove worktree…". Changes lists the
-// worktree's git status and per-file diffs (ChangesTab.tsx; the tab label's
-// count keeps polling while the panel is open). Ports lists listening ports
+// Files browses and previews the worktree's files (FilesTab.tsx); Changes
+// lists its git status and per-file diffs (ChangesTab.tsx; the tab label's
+// count keeps polling while the panel is open). civetd does not expose
+// commits or PRs yet, so Branch shows what the daemon does report (branch,
+// HEAD, path, sessions) plus "Remove worktree…". Ports lists listening ports
 // and port forwards (PortsTab.tsx).
-// Backend follow-up: list_files / branch_info.
+// Backend follow-up: branch_info.
 import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
 import { panesOfWorktree, pushToast, useStore, type RightTab } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
@@ -16,6 +16,7 @@ import { DOT_LABEL, paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree
 import { useWorktreeInfo } from './chrome'
 import { usePorts } from '@/state/ports'
 import { IconButton } from './IconButton'
+import { FilesTab } from './FilesTab'
 import { ChangesCount, ChangesTab } from './ChangesTab'
 import { PortsTab } from './PortsTab'
 import { StatusDot } from './StatusDot'
@@ -87,29 +88,18 @@ function Empty({ icon: Icon, children }: { icon: typeof FileText; children: Reac
   )
 }
 
-function Code({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-[4px] bg-secondary px-1 py-px font-mono text-xs text-soft">
-      {children}
-    </span>
-  )
-}
-
 function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string; tab: RightTab }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const host = useStore((s) => s.hosts[hostId])
   const paneMap = useStore((s) => s.panes[hostId])
   const labelPref = usePrefs((s) => s.worktreeLabel)
   if (!wt) return null
+  const connected = host?.state === 'connected'
   if (tab === 'files') {
     return (
-      <Empty icon={FileText}>
-        File browsing isn&apos;t available yet: civetd doesn&apos;t list a worktree&apos;s files.
-        Use a Terminal tab <Code>⌥T</Code> meanwhile.
-      </Empty>
+      <FilesTab hostId={hostId} worktree={worktree} root={wt.info.path} connected={connected} />
     )
   }
-  const connected = host?.state === 'connected'
   if (tab === 'changes') {
     return <ChangesTab key={worktree} hostId={hostId} worktree={worktree} connected={connected} />
   }

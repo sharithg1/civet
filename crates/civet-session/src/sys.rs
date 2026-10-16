@@ -1,4 +1,5 @@
-//! Tiny unsafe surface: signalling process groups, dup/poll of the PTY fd.
+//! Tiny unsafe surface: signalling process groups, dup/poll of the PTY fd,
+//! the path of an open file.
 
 use civet_proto::KillSignal;
 
@@ -57,4 +58,41 @@ pub(crate) fn poll_readable(fd: std::os::fd::BorrowedFd<'_>) -> bool {
     // nfds = 1 matches it. `fd` is borrowed, so it stays open meanwhile.
     let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
     rc > 0 && pfd.revents & libc::POLLIN != 0
+}
+
+/// Where an open file actually is (`/proc/self/fd/N` on Linux, `F_GETPATH`
+/// on macOS): its canonical path, whatever path was used to open it.
+#[cfg(target_os = "linux")]
+pub(crate) fn fd_path(file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+
+/// Where an open file actually is (`/proc/self/fd/N` on Linux, `F_GETPATH`
+/// on macOS): its canonical path, whatever path was used to open it.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub(crate) fn fd_path(file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStringExt;
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes (NUL included) into
+    // `buf`, which is that long and lives for the call; the fd is open
+    // because `file` is borrowed.
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+    if rc == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    buf.truncate(len);
+    Ok(std::ffi::OsString::from_vec(buf).into())
+}
+
+/// Where an open file actually is: not supported on this platform.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn fd_path(_file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "the path of an open file is not available on this platform",
+    ))
 }

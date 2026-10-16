@@ -59,6 +59,10 @@ export type Prefs = {
   rightTab: 'files' | 'changes' | 'branch' | 'ports'
   /** Port forwards to restore on connect, per host id. */
   pinnedForwards: Record<string, PinnedForward[]>
+  /** Files tab: expanded directories (worktree-relative) per `wsKey(hostId, worktree)`. */
+  expandedDirs: Record<string, string[]>
+  /** Files tab: also list gitignored files. */
+  showIgnoredFiles: boolean
 }
 
 /** Agent CLIs with their own tab command (⌥C / ⌥X) and on-create step kind. */
@@ -86,7 +90,8 @@ const KEPT_ON_RESET = [
   'sidebarWidth',
   'rightPanelOpen',
   'rightTab',
-  'pinnedForwards'
+  'pinnedForwards',
+  'expandedDirs'
 ] as const
 
 export const DEFAULT_PREFS: Prefs = {
@@ -107,7 +112,9 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarWidth: 260,
   rightPanelOpen: null,
   rightTab: 'branch',
-  pinnedForwards: {}
+  pinnedForwards: {},
+  expandedDirs: {},
+  showIgnoredFiles: false
 }
 
 const KEY = 'civet.prefs.v1'

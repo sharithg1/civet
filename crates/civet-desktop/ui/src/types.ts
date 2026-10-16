@@ -74,6 +74,32 @@ export type PullRequestInfo = {
   state: PullRequestState
 }
 
+export type FileKind = 'file' | 'dir' | 'symlink'
+
+export type FileEntry = {
+  name: string
+  kind: FileKind
+  /** Bytes (`lstat`); 0 for directories. */
+  size: number
+  /** Gitignored (only listed with `includeIgnored`). */
+  ignored: boolean
+}
+
+/** One directory level: directories first, then by name. */
+export type DirListing = { entries: FileEntry[]; truncated: boolean }
+
+export type FilePreview = {
+  /** Size of the whole file. */
+  size: number
+  /** NUL in the first 8 KiB: `text` is empty. */
+  binary: boolean
+  truncated: boolean
+  text: string
+}
+
+/** Worktree-relative paths (`/`-separated), sorted. */
+export type FileList = { paths: string[]; truncated: boolean }
+
 export type GitChangeKind =
   | 'modified'
   | 'added'

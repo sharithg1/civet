@@ -23,6 +23,7 @@
 
 mod changes;
 mod error;
+mod files;
 mod git;
 mod github;
 mod hooks;

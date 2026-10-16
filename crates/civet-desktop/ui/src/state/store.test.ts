@@ -58,6 +58,8 @@ function fakeBackend(over: Partial<CivetBackend> = {}): CivetBackend {
     listPanes: async () => [],
     listWorktrees: async () => [],
     listPullRequests: async () => [],
+    listFiles: async () => ({ entries: [], truncated: false }),
+    listAllFiles: async () => ({ paths: [], truncated: false }),
     gitStatus: async () => ({
       staged: [],
       unstaged: [],
@@ -513,5 +515,40 @@ describe('store', () => {
     store.moveTab(key, 'missing', 0)
     expect(order()).toEqual(['a', 'b', 'c'])
     expect(useStore.getState().workspaces[key]!.activeTab).toBe('a')
+  })
+
+  it('files open in tabs of their own, once each, next to pane tabs', async () => {
+    const key = store.wsKey('h', '/w')
+    const killPane = vi.fn(async () => {})
+    useStore.setState({
+      backend: fakeBackend({ killPane }),
+      panes: {},
+      workspaces: {
+        [key]: { tabs: [{ id: 'p', root: { type: 'leaf', pane: 1 }, focused: 1 }], activeTab: 'p' }
+      }
+    })
+    const ws = () => useStore.getState().workspaces[key]!
+    store.openFileTab('h', '/w', 'src/main.rs')
+    store.openFileTab('h', '/w', 'README.md')
+    expect(ws().tabs.map((t) => (t.kind === 'file' ? t.path : t.id))).toEqual([
+      'p',
+      'src/main.rs',
+      'README.md'
+    ])
+    const main = ws().tabs[1]!.id
+    store.openFileTab('h', '/w', 'src/main.rs')
+    expect(ws().tabs).toHaveLength(3)
+    expect(ws().activeTab).toBe(main)
+
+    // Closing the pane keeps the file tabs.
+    store.closeTab(key, 'p')
+    await vi.waitFor(() => expect(ws().tabs).toHaveLength(2))
+    expect(killPane).toHaveBeenCalledOnce()
+    // Closing a file tab kills nothing and activates its left neighbour.
+    store.activateTab(key, ws().tabs[1]!.id)
+    store.closeTab(key, ws().tabs[1]!.id)
+    expect(ws().tabs.map((t) => t.id)).toEqual([main])
+    expect(ws().activeTab).toBe(main)
+    expect(killPane).toHaveBeenCalledOnce()
   })
 })

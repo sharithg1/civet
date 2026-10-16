@@ -22,7 +22,6 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { leaves } from '@/layout/pane-tree'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
@@ -43,8 +42,10 @@ import {
   pushToast,
   splitFocused,
   useStore,
-  wsKey
+  wsKey,
+  tabPanes
 } from '@/state/store'
+import { FileIcon } from './FilesTab'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -255,7 +256,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           const id = t.id
           const isActive = id === activeTab
           const tab = wsTabs?.find((x) => x.id === id)
-          const count = tab ? leaves(tab.root).length : 1
+          const count = tab ? tabPanes(tab).length : 1
           return (
             <div
               key={id}
@@ -298,6 +299,8 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
                 <span className="grid size-3.5 shrink-0 place-items-center">
                   <StatusDot kind={paneDot(panes?.[t.agent.id], connected)} size={6} />
                 </span>
+              ) : t.file != null ? (
+                <FileIcon path={t.file} className="size-3.5 shrink-0 text-quiet" />
               ) : (
                 <Terminal className="size-3.5 shrink-0 text-quiet" />
               )}

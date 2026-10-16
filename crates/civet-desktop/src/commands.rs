@@ -214,6 +214,43 @@ pub async fn remove_worktree(
 }
 
 #[tauri::command]
+pub async fn list_files(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    dir: String,
+    include_ignored: bool,
+) -> Res<civet_proto::DirListing> {
+    state
+        .hosts
+        .list_files(&host_id, worktree, dir, include_ignored)
+        .await
+}
+
+#[tauri::command]
+pub async fn read_file(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    path: String,
+    max_bytes: u64,
+) -> Res<civet_proto::FilePreview> {
+    state
+        .hosts
+        .read_file(&host_id, worktree, path, max_bytes)
+        .await
+}
+
+#[tauri::command]
+pub async fn list_all_files(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+) -> Res<civet_proto::FileList> {
+    state.hosts.list_all_files(&host_id, worktree).await
+}
+
+#[tauri::command]
 pub async fn list_panes(state: State<'_, AppState>, host_id: String) -> Res<Vec<PaneInfo>> {
     state.hosts.list_panes(&host_id).await
 }
@@ -472,6 +509,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         git_diff,
         create_worktree,
         remove_worktree,
+        list_files,
+        read_file,
+        list_all_files,
         list_panes,
         spawn_pane,
         launch_agent,

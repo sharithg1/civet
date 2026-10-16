@@ -38,6 +38,9 @@ import type {
   WorktreeId,
   WorktreeInfo,
   PullRequestInfo,
+  DirListing,
+  FileList,
+  FilePreview,
   GitStatusInfo,
   GitDiffInfo
 } from './types'
@@ -106,7 +109,7 @@ export interface CivetBackend {
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
-  /** `git status` of a worktree with line counts (needs civetd >= 0.1.10). */
+  /** `git status` of a worktree with line counts (needs civetd >= 0.1.11). */
   gitStatus(hostId: string, worktree: WorktreeId): Promise<GitStatusInfo>
   /** One file's diff: index vs. HEAD if `staged`, else working tree vs. index. */
   gitDiff(
@@ -124,6 +127,22 @@ export interface CivetBackend {
   ): Promise<WorktreeInfo>
   removeWorktree(hostId: string, worktree: WorktreeId, force: boolean): Promise<void>
 
+  /** One directory level of a worktree (`dir` relative to its root, `''` = root; civetd >= 0.1.10). */
+  listFiles(
+    hostId: string,
+    worktree: WorktreeId,
+    dir: string,
+    includeIgnored: boolean
+  ): Promise<DirListing>
+  /** The first `maxBytes` (at most 1 MiB) of a worktree file. */
+  readFile(
+    hostId: string,
+    worktree: WorktreeId,
+    path: string,
+    maxBytes: number
+  ): Promise<FilePreview>
+  /** Every tracked and untracked, not ignored file, for quick-open. */
+  listAllFiles(hostId: string, worktree: WorktreeId): Promise<FileList>
   listPanes(hostId: string): Promise<PaneInfo[]>
   spawnPane(hostId: string, request: SpawnPaneRequest): Promise<PaneInfo>
   launchAgent(
@@ -299,6 +318,15 @@ export class TauriBackend implements CivetBackend {
   }
   removeWorktree(hostId: string, worktree: WorktreeId, force: boolean) {
     return this.callVoid('remove_worktree', { hostId, worktree, force })
+  }
+  listFiles(hostId: string, worktree: WorktreeId, dir: string, includeIgnored: boolean) {
+    return this.call<DirListing>('list_files', { hostId, worktree, dir, includeIgnored })
+  }
+  readFile(hostId: string, worktree: WorktreeId, path: string, maxBytes: number) {
+    return this.call<FilePreview>('read_file', { hostId, worktree, path, maxBytes })
+  }
+  listAllFiles(hostId: string, worktree: WorktreeId) {
+    return this.call<FileList>('list_all_files', { hostId, worktree })
   }
   listPanes(hostId: string) {
     return this.call<PaneInfo[]>('list_panes', { hostId })

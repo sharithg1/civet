@@ -1158,6 +1158,40 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::RemoveWorktree { worktree, force }).await?, Response::Ok => ())
     }
 
+    /// `list_files`: one directory level of a worktree.
+    pub async fn list_files(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        dir: String,
+        include_ignored: bool,
+    ) -> Result<civet_proto::DirListing, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::LIST_FILES_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::ListFiles { worktree, dir, include_ignored }).await?, Response::Files(l) => l)
+    }
+
+    /// `read_file`: a size-capped, read-only preview.
+    pub async fn read_file(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        path: String,
+        max_bytes: u64,
+    ) -> Result<civet_proto::FilePreview, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::LIST_FILES_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::ReadFile { worktree, path, max_bytes }).await?, Response::FilePreview(p) => p)
+    }
+
+    /// `list_all_files`: every file of a worktree, for quick-open.
+    pub async fn list_all_files(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+    ) -> Result<civet_proto::FileList, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::LIST_FILES_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::ListAllFiles { worktree }).await?, Response::AllFiles(l) => l)
+    }
+
     /// `list_panes` (also refreshes the pane cache used for notifications).
     pub async fn list_panes(&self, host_id: &str) -> Result<Vec<PaneInfo>, CmdError> {
         let host = self.host(host_id)?;

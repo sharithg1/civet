@@ -47,20 +47,46 @@ impl Git {
         dir: &Path,
         args: &[&str],
     ) -> Result<GitOutput, SessionError> {
+        self.output_with_stdin(dir, args, None).await
+    }
+
+    /// [`Self::output`], writing `stdin` to the command's standard input.
+    pub(crate) async fn output_with_stdin(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+    ) -> Result<GitOutput, SessionError> {
+        let spawn_err = |e: std::io::Error| {
+            SessionError::Git(format!("failed to run {}: {e}", self.bin.display()))
+        };
         let mut cmd = tokio::process::Command::new(&self.bin);
         cmd.arg("-C")
             .arg(dir)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
             .kill_on_drop(true);
-        let out = cmd
-            .output()
-            .await
-            .map_err(|e| SessionError::Git(format!("failed to run {}: {e}", self.bin.display())))?;
+        let mut child = cmd.spawn().map_err(spawn_err)?;
+        // Written from a task so a large input cannot deadlock against git
+        // filling its stdout pipe.
+        let writer = child.stdin.take().zip(stdin).map(|(mut pipe, data)| {
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                let _ = pipe.write_all(&data).await;
+            })
+        });
+        let out = child.wait_with_output().await.map_err(spawn_err)?;
+        if let Some(w) = writer {
+            let _ = w.await;
+        }
         Ok(GitOutput {
             success: out.status.success(),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),

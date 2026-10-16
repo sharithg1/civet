@@ -185,6 +185,15 @@ fn every_command_through_ipc() {
             "remove_worktree",
             json!({ "hostId": "x", "worktree": "/w", "force": true }),
         ),
+        (
+            "list_files",
+            json!({ "hostId": "x", "worktree": "/w", "dir": "", "includeIgnored": false }),
+        ),
+        (
+            "read_file",
+            json!({ "hostId": "x", "worktree": "/w", "path": "a", "maxBytes": 1024 }),
+        ),
+        ("list_all_files", json!({ "hostId": "x", "worktree": "/w" })),
         ("list_panes", json!({ "hostId": "x" })),
         ("spawn_pane", json!({ "hostId": "x", "request": spawn })),
         ("launch_agent", json!({ "hostId": "x", "request": launch })),
