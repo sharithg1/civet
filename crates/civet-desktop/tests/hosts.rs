@@ -547,6 +547,8 @@ async fn stream_link_repos_worktrees_and_agents() {
         .add_repo(h, repo_dir.path().display().to_string())
         .await
         .unwrap();
+    assert_eq!(repo.kind, civet_proto::ProjectKind::Git);
+    let repo = repo.repo;
     assert_eq!(m.list_repos(h).await.unwrap().len(), 1);
     let err = m
         .add_repo(h, repo_dir.path().display().to_string())
@@ -606,6 +608,40 @@ async fn stream_link_repos_worktrees_and_agents() {
     m.disconnect_host(h).await.unwrap();
 }
 
+/// A plain folder becomes a folder project (`kind: "folder"` for the UI)
+/// with one worktree whose files can be listed; sessions there are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn folder_projects_through_the_commands() {
+    let rig = Rig::new(fast()).await;
+    let m = &rig.mgr;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Ssh)
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes.md"), "# hi\n").unwrap();
+    let folder = m
+        .add_repo(h, dir.path().display().to_string())
+        .await
+        .unwrap();
+    assert_eq!(folder.kind, civet_proto::ProjectKind::Folder);
+    let json = serde_json::to_value(&folder).unwrap();
+    assert_eq!(json["kind"], "folder");
+    assert_eq!(json["defaultBranch"], serde_json::Value::Null);
+    assert_eq!(json["id"], folder.repo.id.0.as_str());
+    assert_eq!(m.list_repos(h).await.unwrap(), vec![folder.clone()]);
+    let wts = m.list_worktrees(h, folder.repo.id.clone()).await.unwrap();
+    assert_eq!(wts.len(), 1);
+    let files = m.list_all_files(h, wts[0].id.clone()).await.unwrap();
+    assert_eq!(files.paths, ["notes.md"]);
+    let mut req = shell_pane("true");
+    req.worktree = Some(wts[0].id.clone());
+    assert_eq!(m.spawn_pane(h, req).await.unwrap_err().code, "unsupported");
+    m.remove_repo(h, folder.repo.id).await.unwrap();
+    assert!(m.list_repos(h).await.unwrap().is_empty());
+    m.disconnect_host(h).await.unwrap();
+}
+
 /// File management through the commands: `file_op`, uploads of dropped
 /// files and folders into a worktree, and chunked downloads to this Mac.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -625,7 +661,11 @@ async fn file_ops_uploads_and_downloads() {
         .output()
         .unwrap();
     assert!(st.status.success());
-    let repo = m.add_repo(h, root.display().to_string()).await.unwrap();
+    let repo = m
+        .add_repo(h, root.display().to_string())
+        .await
+        .unwrap()
+        .repo;
     let wt = m.list_worktrees(h, repo.id.clone()).await.unwrap()[0]
         .id
         .clone();

@@ -486,6 +486,8 @@ impl Server {
         let r = match request {
             Request::ListRepos => s.list_repos().await.map(Response::Repos),
             Request::AddRepo { path } => s.add_repo(&path).await.map(Response::Repo),
+            Request::ListProjects => s.list_projects().await.map(Response::Projects),
+            Request::AddProject { path } => s.add_project(&path).await.map(Response::Project),
             Request::RemoveRepo { repo } => s.remove_repo(&repo).await.map(|()| Response::Ok),
             Request::UploadFile { name, data } => {
                 return super::uploads::store(&super::uploads::default_root(), &name, &data)

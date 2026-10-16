@@ -7,7 +7,7 @@
 // store.createWorktreeWithSteps.
 
 import { useState } from 'react'
-import { createWorktreeWithSteps, useStore, wtKey } from '@/state/store'
+import { createWorktreeWithSteps, isFolderRepo, useStore, wtKey } from '@/state/store'
 import {
   agentCommandFor,
   setPrefs,
@@ -63,9 +63,14 @@ function defaultSteps(hostId: string, repo: string): CreateStep[] {
 
 export function NewWorktreeDialog() {
   const req = useStore((s) => s.newWorktree)
-  const repos = useStore((s) => (req ? s.repos[req.hostId] : undefined))
+  const allRepos = useStore((s) => (req ? s.repos[req.hostId] : undefined))
+  // Folder projects have no worktrees (filtered here: a new array in the
+  // selector would re-render forever).
+  const repos = allRepos?.filter((r) => !isFolderRepo(r))
   const hostLabel = useStore((s) => (req ? (s.hosts[req.hostId]?.label ?? req.hostId) : ''))
-  const [repoId, setRepoId] = useState(req?.repo ?? repos?.[0]?.id ?? '')
+  const [repoId, setRepoId] = useState(
+    (repos?.some((r) => r.id === req?.repo) ? req?.repo : undefined) ?? repos?.[0]?.id ?? ''
+  )
   const repo = repos?.find((r) => r.id === repoId)
   const [name, setName] = useState('')
   const [base, setBase] = useState<string | null>(null)

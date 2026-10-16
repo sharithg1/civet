@@ -8,13 +8,15 @@
 // behaviour, plus drag to reorder; a tab is still a split tree of panes.
 // On macOS the window uses an overlay title bar, so every non-interactive
 // part of this row drags the window (double click zooms); see
-// lib/window-chrome.ts.
+// lib/window-chrome.ts. A folder project (not a git repository) shows its
+// file tabs only: no "+" menu, branch details or worktree removal.
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronDown,
   Copy,
   Diff,
+  Folder,
   GitBranch,
   MoreHorizontal,
   PanelRight,
@@ -36,6 +38,8 @@ import {
 import {
   activateTab,
   closeTab,
+  isFolderRepo,
+  isFolderWorktree,
   moveTab,
   newAgentTab,
   newTerminalTab,
@@ -116,21 +120,32 @@ function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string 
   const hostLabel = useStore((s) => s.hosts[hostId]?.label ?? hostId)
   if (!wt) return null
   const { repo, info } = wt
+  const folder = isFolderRepo(repo)
   const branch = worktreeBranch(info)
   const task = info.isMain ? null : worktreeTask(info, panesOfWorktree(panes, worktree))
-  const tooltip = [branch, `${repo.name} · ${hostLabel}`, task, 'Switch worktree (⌘K)']
+  const tooltip = [
+    branch,
+    `${folder ? 'Folder' : repo.name} · ${hostLabel}`,
+    task,
+    'Switch worktree (⌘K)'
+  ]
     .filter(Boolean)
     .join('\n')
+  const Icon = folder ? Folder : GitBranch
   return (
     <button
       type="button"
       title={tooltip}
-      aria-label={`Worktree ${branch} in ${repo.name}. Switch worktree`}
+      aria-label={
+        folder
+          ? `Folder ${repo.name}. Switch worktree`
+          : `Worktree ${branch} in ${repo.name}. Switch worktree`
+      }
       aria-haspopup="dialog"
       onClick={() => useStore.setState({ switcherOpen: true })}
       className="group -ml-1.5 flex h-7 max-w-[200px] min-w-0 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-quiet hover:bg-hover hover:text-foreground"
     >
-      <GitBranch className="size-3.5 shrink-0 text-dim group-hover:text-quiet" />
+      <Icon className="size-3.5 shrink-0 text-dim group-hover:text-quiet" />
       <span className="min-w-0 truncate font-mono text-sm">{compactWorktreeName(branch)}</span>
       <ChevronDown className="size-3.5 shrink-0 text-dim" />
     </button>
@@ -143,6 +158,7 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
   const host = useStore((s) => s.hosts[hostId])
   if (!wt) return null
   const { info } = wt
+  const folder = isFolderRepo(wt.repo)
   const remote = `${host?.label ?? hostId}:${info.path}`
   return (
     <DropdownMenu>
@@ -167,12 +183,14 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
           <Copy />
           Copy remote path
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => useStore.setState({ rightPanelOpen: true, rightTab: 'branch' })}
-        >
-          <GitBranch />
-          Branch details
-        </DropdownMenuItem>
+        {!folder && (
+          <DropdownMenuItem
+            onSelect={() => useStore.setState({ rightPanelOpen: true, rightTab: 'branch' })}
+          >
+            <GitBranch />
+            Branch details
+          </DropdownMenuItem>
+        )}
         {!info.isMain && (
           <>
             <DropdownMenuSeparator />
@@ -199,6 +217,7 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const panes = useStore((s) => s.panes[hostId])
   const tabs = useWorktreeTabs(hostId, worktree)
   const wsTabs = useStore((s) => s.workspaces[key]?.tabs)
+  const folder = useStore(() => isFolderWorktree(hostId, worktree))
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: string; startX: number; moved: boolean } | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -336,39 +355,42 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           )
         })}
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          title="New tab"
-          aria-label="New tab"
-          disabled={!connected || removing}
-          className="ml-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-quiet outline-none hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-hover-strong"
-        >
-          <Plus className="size-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          sideOffset={4}
-          className="w-[200px]"
-          onCloseAutoFocus={restoreTerminalFocus}
-        >
-          <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>
-            Claude Code<DropdownMenuShortcut>⌥C</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree, 'codex')}>
-            Codex<DropdownMenuShortcut>⌥X</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void newTerminalTab(hostId, worktree)}>
-            Terminal<DropdownMenuShortcut>⌥T</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => void splitFocused('row')}>
-            Split right<DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void splitFocused('column')}>
-            Split down<DropdownMenuShortcut>⇧⌘D</DropdownMenuShortcut>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* Why: a folder project has no sessions; its tabs come from Files. */}
+      {!folder && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            title="New tab"
+            aria-label="New tab"
+            disabled={!connected || removing}
+            className="ml-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-quiet outline-none hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-hover-strong"
+          >
+            <Plus className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            sideOffset={4}
+            className="w-[200px]"
+            onCloseAutoFocus={restoreTerminalFocus}
+          >
+            <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>
+              Claude Code<DropdownMenuShortcut>⌥C</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree, 'codex')}>
+              Codex<DropdownMenuShortcut>⌥X</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void newTerminalTab(hostId, worktree)}>
+              Terminal<DropdownMenuShortcut>⌥T</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => void splitFocused('row')}>
+              Split right<DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void splitFocused('column')}>
+              Split down<DropdownMenuShortcut>⇧⌘D</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </>
   )
 }

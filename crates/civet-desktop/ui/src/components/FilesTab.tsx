@@ -113,13 +113,16 @@ export function FilesTab({
   hostId,
   worktree,
   root,
-  connected
+  connected,
+  folder = false
 }: {
   hostId: string
   worktree: string
   /** The worktree's absolute path on the host. */
   root: string
   connected: boolean
+  /** A folder project's root: nothing is gitignored and there are no terminals. */
+  folder?: boolean
 }) {
   const key = wsKey(hostId, worktree)
   const expanded = usePrefs((s) => s.expandedDirs[key]) ?? NO_DIRS
@@ -374,13 +377,15 @@ export function FilesTab({
             </IconButton>
           </>
         )}
-        <IconButton
-          label={showIgnored ? 'Hide ignored files' : 'Show ignored files'}
-          onClick={() => setShowIgnored(!showIgnored, connected ? { hostId, worktree } : null)}
-          className={showIgnored ? 'text-foreground' : undefined}
-        >
-          {showIgnored ? <Eye /> : <EyeOff />}
-        </IconButton>
+        {!folder && (
+          <IconButton
+            label={showIgnored ? 'Hide ignored files' : 'Show ignored files'}
+            onClick={() => setShowIgnored(!showIgnored, connected ? { hostId, worktree } : null)}
+            className={showIgnored ? 'text-foreground' : undefined}
+          >
+            {showIgnored ? <Eye /> : <EyeOff />}
+          </IconButton>
+        )}
         <IconButton label="Collapse all" onClick={() => collapseAll(hostId, worktree)}>
           <ChevronsDownUp />
         </IconButton>
@@ -554,14 +559,18 @@ export function FilesTab({
                   <Copy />
                   Copy Relative Path
                 </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  disabled={!connected}
-                  onSelect={() => void newTerminalTab(hostId, worktree, abs(menuDir))}
-                >
-                  <FileTerminal />
-                  Open in Terminal Tab
-                </ContextMenuItem>
+                {!folder && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      disabled={!connected}
+                      onSelect={() => void newTerminalTab(hostId, worktree, abs(menuDir))}
+                    >
+                      <FileTerminal />
+                      Open in Terminal Tab
+                    </ContextMenuItem>
+                  </>
+                )}
               </>
             )}
           </ContextMenuContent>

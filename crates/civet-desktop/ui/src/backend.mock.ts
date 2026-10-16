@@ -4,7 +4,8 @@
 // channel, so the record parser, frame batching, resize and scrollback paths
 // all run for real against it.
 //
-// Fake host: repos "civet" and "orca" with a few worktrees, an agent pane
+// Fake host: repos "civet" and "orca" with a few worktrees, a folder project
+// "notes" (not a git repository: file tabs only), an agent pane
 // that finishes after a while, agents waiting for input / stopped with an
 // error (to show every v3 status dot), and an echo shell per pane. Shell commands:
 // help, seq N, status <running|needs|done|idle>, title T, drop, fail, replaced, exit.
@@ -12,7 +13,8 @@
 // "upgrade available" flow; Restart daemon starts a fresh one), "pre-git" runs
 // a civetd that reports changes but takes no git actions, "fail" never
 // connects, "udp-blocked" falls back to the SSH tunnel. Git actions in the
-// Changes tab work on per-worktree fake state (MockGit).
+// Changes tab work on per-worktree fake state (MockGit). "Add project" adds a
+// git repository for paths with a `src` directory in them, else a folder.
 
 import {
   CivetError,
@@ -64,10 +66,20 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.1.15'
+export const MOCK_VERSION = '0.1.17'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
+/** Mock daemons have folder projects from this version on (PROJECTS_MIN_DAEMON_VERSION). */
+const MOCK_PROJECTS_VERSION = '0.1.17'
+
+/** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
+function versionAtLeast(version: string, min: string): boolean {
+  const a = version.split('.').map(Number)
+  const b = min.split('.').map(Number)
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
+  return true
+}
 export const MOCK_REPLACED_MESSAGE =
   "another Civet window or client took over this host's connection; reconnect here to take it back"
 
@@ -332,8 +344,15 @@ class MockHost {
     seed = true
   ) {
     this.repos = [
-      { id: 'civet', name: 'civet', path: '/home/dev/src/civet', defaultBranch: 'main' },
-      { id: 'orca', name: 'orca', path: '/home/dev/src/orca', defaultBranch: 'main' }
+      {
+        id: 'civet',
+        name: 'civet',
+        path: '/home/dev/src/civet',
+        defaultBranch: 'main',
+        kind: 'git'
+      },
+      { id: 'orca', name: 'orca', path: '/home/dev/src/orca', defaultBranch: 'main', kind: 'git' },
+      { id: 'notes', name: 'notes', path: '/home/dev/notes', defaultBranch: null, kind: 'folder' }
     ]
     const wt = (repo: string, branch: string, isMain = false): WorktreeInfo => ({
       id: isMain ? `/home/dev/src/${repo}` : `/home/dev/src/${repo}-worktrees/${branch}`,
@@ -352,6 +371,7 @@ class MockHost {
       wt('civet', 'fix-flaky-e2e')
     ])
     this.worktrees.set('orca', [wt('orca', 'main', true), wt('orca', 'fix-wake-reconnect')])
+    this.worktrees.set('notes', [mockFolderRoot('notes', '/home/dev/notes')])
     // A freshly (re)started daemon has no panes.
     if (!seed) return
 
@@ -493,6 +513,23 @@ class MockHost {
     return [...this.worktrees.values()].flat()
   }
 
+  /** The folder project whose root is `worktree`, if any. */
+  folderOf(worktree: string | null): RepoInfo | undefined {
+    const wt = this.allWorktrees().find((w) => w.id === worktree)
+    return this.repos.find((r) => r.id === wt?.repo && r.kind === 'folder')
+  }
+
+  /** `unsupported` like civetd: a folder project has no git. */
+  checkGit(worktree: string, what = 'git'): void {
+    const folder = this.folderOf(worktree)
+    if (folder) {
+      throw new CivetError(
+        'unsupported',
+        `unsupported: ${folder.name} is a folder, not a git repository: no ${what}`
+      )
+    }
+  }
+
   pane(id: PaneId): MockPane {
     const p = this.panes.get(id)
     if (!p) throw new CivetError('notFound', `pane ${id} not found`)
@@ -531,6 +568,20 @@ const MOCK_FILES: Record<string, string> = {
   'scripts/release.sh': '#!/usr/bin/env bash\nset -euo pipefail\n',
   'debug.log': 'connected\n',
   'target/debug/civetd': '\u0000ELF'
+}
+
+/** A folder project's files (nothing is gitignored there). */
+const MOCK_FOLDER_FILES: Record<string, string> = {
+  'README.md': '# Notes\n\nPlain files, no git: open them from the Files tab.\n',
+  'meetings/2026-10-14.md': '# Standup\n\n- QUIC resume landed\n- Folder projects next\n',
+  'meetings/2026-10-15.md': '# Planning\n\n- Markdown preview\n',
+  'todo.txt': 'ship folder projects\nwrite the release notes\n',
+  'debug.log': 'not ignored here\n'
+}
+
+/** The only worktree of a folder project: its root. */
+function mockFolderRoot(repo: string, path: string): WorktreeInfo {
+  return { id: path, repo, path, branch: null, head: null, isMain: true, locked: false }
 }
 
 /** Mock daemons support file ops from this version on (like FILE_OPS_MIN_DAEMON_VERSION). */
@@ -1023,8 +1074,16 @@ export class MockBackend implements CivetBackend {
     return { rttMs: 40 + Math.round(Math.random() * 5) }
   }
 
+  /** The daemon has folder projects (ListProjects / AddProject). */
+  private hasProjects(hostId: string): boolean {
+    const v = this.host(hostId).summary.daemonVersion
+    return !v || versionAtLeast(v, MOCK_PROJECTS_VERSION)
+  }
+
   async listRepos(hostId: string) {
-    return [...this.host(hostId).repos]
+    const repos = [...this.host(hostId).repos]
+    // An older daemon only answers ListRepos, which leaves folders out.
+    return this.hasProjects(hostId) ? repos : repos.filter((r) => r.kind !== 'folder')
   }
 
   async addRepo(hostId: string, path: string) {
@@ -1033,7 +1092,21 @@ export class MockBackend implements CivetBackend {
     if (h.repos.some((r) => r.path === path)) {
       throw new CivetError('alreadyExists', `repo ${path} already added`)
     }
-    const repo: RepoInfo = { id: name, name, path, defaultBranch: 'main' }
+    if (!/(^|\/)src\//.test(path)) {
+      if (!this.hasProjects(hostId)) {
+        const v = h.summary.daemonVersion
+        throw new CivetError(
+          'invalidArgument',
+          `invalid argument: ${path} is not a git repository. civetd ${v} on ${hostId} only adds git repositories; v${MOCK_PROJECTS_VERSION} or newer also adds plain folders (restart the daemon to upgrade)`
+        )
+      }
+      const folder: RepoInfo = { id: name, name, path, defaultBranch: null, kind: 'folder' }
+      h.repos.push(folder)
+      h.worktrees.set(folder.id, [mockFolderRoot(folder.id, path)])
+      h.event('reposChanged')
+      return folder
+    }
+    const repo: RepoInfo = { id: name, name, path, defaultBranch: 'main', kind: 'git' }
     h.repos.push(repo)
     h.worktrees.set(repo.id, [
       {
@@ -1063,11 +1136,13 @@ export class MockBackend implements CivetBackend {
 
   async gitStatus(hostId: string, worktree: string): Promise<GitStatusInfo> {
     this.checkGitSupport(hostId)
+    this.host(hostId).checkGit(worktree, 'changes')
     return this.git(hostId, worktree).status(this.gitPolls++)
   }
 
   async gitBranch(hostId: string, worktree: string): Promise<GitBranchInfo> {
     this.checkGitActions(hostId)
+    this.host(hostId).checkGit(worktree, 'branch')
     return this.git(hostId, worktree).branchInfo()
   }
 
@@ -1077,6 +1152,7 @@ export class MockBackend implements CivetBackend {
     action: GitAction
   ): Promise<GitDiscardSnapshot | null> {
     this.checkGitActions(hostId)
+    this.host(hostId).checkGit(worktree, 'git actions')
     // Network actions take a moment, so the busy state shows.
     await sleep(typeof action === 'string' && ['push', 'pull', 'fetch'].includes(action) ? 600 : 80)
     return this.git(hostId, worktree).apply(action)
@@ -1106,6 +1182,7 @@ export class MockBackend implements CivetBackend {
     opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
   ): Promise<GitDiffInfo> {
     this.checkGitSupport(hostId)
+    this.host(hostId).checkGit(worktree, 'diffs')
     return mockGitDiff(worktree, path, opts.staged, this.gitPolls)
   }
 
@@ -1118,7 +1195,9 @@ export class MockBackend implements CivetBackend {
     }
   }
 
-  async listPullRequests(_hostId: string, repo: string): Promise<PullRequestInfo[]> {
+  async listPullRequests(hostId: string, repo: string): Promise<PullRequestInfo[]> {
+    const main = this.host(hostId).worktrees.get(repo)?.[0]
+    if (main) this.host(hostId).checkGit(main.id, 'pull requests')
     if (repo !== 'civet') return []
     const pr = (
       number: number,
@@ -1150,6 +1229,12 @@ export class MockBackend implements CivetBackend {
     const h = this.host(hostId)
     const r = h.repos.find((x) => x.id === repo)
     if (!r) throw new CivetError('notFound', `repo ${repo} not found`)
+    if (r.kind === 'folder') {
+      throw new CivetError(
+        'unsupported',
+        `unsupported: ${r.name} is a folder, not a git repository: no worktrees`
+      )
+    }
     const list = h.worktrees.get(repo) ?? []
     if (list.some((w) => w.branch === branch)) {
       throw new CivetError('alreadyExists', `branch ${branch} already has a worktree`)
@@ -1200,7 +1285,8 @@ export class MockBackend implements CivetBackend {
   files(hostId: string, worktree: string): MockFs {
     const key = `${hostId}\u0000${worktree}`
     let fs = this.fs.get(key)
-    if (!fs) this.fs.set(key, (fs = MockFs.seeded(MOCK_FILES)))
+    const seed = this.host(hostId).folderOf(worktree) ? MOCK_FOLDER_FILES : MOCK_FILES
+    if (!fs) this.fs.set(key, (fs = MockFs.seeded(seed)))
     return fs
   }
 
@@ -1214,6 +1300,7 @@ export class MockBackend implements CivetBackend {
     if (dir.split('/').includes('..') || dir.startsWith('/'))
       throw new CivetError('invalidArgument', `"${dir}" is outside the worktree`)
     const fs = this.files(hostId, worktree)
+    const folder = !!this.host(hostId).folderOf(worktree)
     if (dir && !fs.dirs.has(dir)) {
       if (fs.files.has(dir)) throw new CivetError('invalidArgument', `"${dir}" is not a directory`)
       throw new CivetError('notFound', `"${dir}" not found`)
@@ -1226,7 +1313,7 @@ export class MockBackend implements CivetBackend {
           name,
           kind: isDir ? 'dir' : 'file',
           size: isDir ? 0 : body.length,
-          ignored: mockIgnored(path)
+          ignored: !folder && mockIgnored(path)
         }
       })
       .filter((e) => includeIgnored || !e.ignored)
@@ -1259,8 +1346,11 @@ export class MockBackend implements CivetBackend {
 
   async listAllFiles(hostId: string, worktree: string): Promise<FileList> {
     this.checkFiles(hostId)
+    const folder = !!this.host(hostId).folderOf(worktree)
     return {
-      paths: [...this.files(hostId, worktree).files.keys()].filter((p) => !mockIgnored(p)).sort(),
+      paths: [...this.files(hostId, worktree).files.keys()]
+        .filter((p) => folder || !mockIgnored(p))
+        .sort(),
       truncated: false
     }
   }
@@ -1331,6 +1421,13 @@ export class MockBackend implements CivetBackend {
 
   async spawnPane(hostId: string, request: SpawnPaneRequest) {
     const h = this.host(hostId)
+    const folder = h.folderOf(request.worktree)
+    if (folder) {
+      throw new CivetError(
+        'unsupported',
+        `unsupported: ${folder.name} is a folder project: it has no sessions`
+      )
+    }
     const wt = h.allWorktrees().find((w) => w.id === request.worktree)
     const pane = h.addPane({
       worktree: request.worktree,

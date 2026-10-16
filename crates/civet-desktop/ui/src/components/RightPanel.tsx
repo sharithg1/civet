@@ -6,10 +6,17 @@
 // count keeps polling while the panel is open). civetd does not expose
 // commits or PRs yet, so Branch shows what the daemon does report (branch,
 // HEAD, path, sessions) plus "Remove worktree…". Ports lists listening ports
-// and port forwards (PortsTab.tsx).
+// and port forwards (PortsTab.tsx). A folder project (not a git repository)
+// has no Changes or Branch: they are hidden and Files shows instead.
 // Backend follow-up: branch_info.
 import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
-import { panesOfWorktree, pushToast, useStore, type RightTab } from '@/state/store'
+import {
+  isFolderWorktree,
+  panesOfWorktree,
+  pushToast,
+  useStore,
+  type RightTab
+} from '@/state/store'
 import { usePrefs } from '@/state/prefs'
 import { cn } from '@/lib/utils'
 import { DOT_LABEL, paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
@@ -29,9 +36,17 @@ const TABS: [RightTab, string, typeof FileText][] = [
   ['ports', 'Ports', ArrowRightLeft]
 ]
 
+/** Tabs without git: a folder project's. */
+const FOLDER_TABS: RightTab[] = ['files', 'ports']
+
 export function RightPanel() {
   const active = useStore((s) => s.active)
-  const tab = useStore((s) => s.rightTab)
+  const folder = useStore((s) => !!s.active && isFolderWorktree(s.active.hostId, s.active.worktree))
+  const picked = useStore((s) => s.rightTab)
+  // Why not reset the pref: back in a repository the panel shows what the
+  // user last picked there.
+  const tab = folder && !FOLDER_TABS.includes(picked) ? 'files' : picked
+  const tabs = folder ? TABS.filter(([id]) => FOLDER_TABS.includes(id)) : TABS
   const forwardCount = usePorts((s) => (active ? (s.forwards[active.hostId]?.length ?? 0) : 0))
   return (
     <aside className="flex min-h-0 w-[360px] shrink-0 flex-col border-l border-border bg-background">
@@ -42,7 +57,7 @@ export function RightPanel() {
         {/* Labels shrink (ellipsis) before the panel toggle is pushed out,
             e.g. once Changes / Ports show a count. */}
         <div className="flex min-w-0 items-center gap-0.5" role="tablist">
-          {TABS.map(([id, label, Icon]) => (
+          {tabs.map(([id, label, Icon]) => (
             <button
               key={id}
               type="button"
@@ -100,7 +115,13 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   const connected = host?.state === 'connected'
   if (tab === 'files') {
     return (
-      <FilesTab hostId={hostId} worktree={worktree} root={wt.info.path} connected={connected} />
+      <FilesTab
+        hostId={hostId}
+        worktree={worktree}
+        root={wt.info.path}
+        connected={connected}
+        folder={wt.repo.kind === 'folder'}
+      />
     )
   }
   if (tab === 'changes') {

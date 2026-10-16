@@ -11,7 +11,9 @@
 // pane's title (see lib/worktree-view.ts). Right-clicking a worktree row
 // archives it (into the project's collapsed "Archived" group) or removes it
 // (the Remove worktree dialog). While a removal runs the row is dimmed,
-// shows a spinner and ignores clicks and the context menu.
+// shows a spinner and ignores clicks and the context menu. A folder project
+// (not a git repository) is a single row that selects its root: it has file
+// tabs only, no worktrees or sessions.
 
 import { useState, type ReactNode } from 'react'
 import {
@@ -42,6 +44,7 @@ import {
   activateTabIndex,
   cycleWorktree,
   disconnectHost,
+  isFolderRepo,
   openPullRequest,
   panesOfWorktree,
   reconnectHost,
@@ -226,6 +229,7 @@ function newWorktreeTarget(): { hostId: string; repo?: string } | null {
   const s = useStore.getState()
   const a = s.active
   if (a && s.hosts[a.hostId]?.state === 'connected') {
+    // A folder project's root has no worktrees: the dialog picks a repo.
     return { hostId: a.hostId, repo: worktreesOf(a.hostId).find((w) => w.id === a.worktree)?.repo }
   }
   const hostId = s.hostOrder.find((h) => s.hosts[h]?.state === 'connected')
@@ -462,16 +466,27 @@ function HostSection({
       )}
       {!collapsed && (
         <div ref={repoReorder.listRef}>
-          {repoIds.map((id, i) => (
-            <ProjectGroup
-              key={id}
-              host={host}
-              repoId={id}
-              name={byId.get(id)!.name}
-              reorder={repoReorder}
-              index={i}
-            />
-          ))}
+          {repoIds.map((id, i) =>
+            isFolderRepo(byId.get(id)) ? (
+              <FolderProjectRow
+                key={id}
+                host={host}
+                repoId={id}
+                name={byId.get(id)!.name}
+                reorder={repoReorder}
+                index={i}
+              />
+            ) : (
+              <ProjectGroup
+                key={id}
+                host={host}
+                repoId={id}
+                name={byId.get(id)!.name}
+                reorder={repoReorder}
+                index={i}
+              />
+            )
+          )}
         </div>
       )}
       {!collapsed && repos && repos.length === 0 && (
@@ -485,6 +500,66 @@ function HostSection({
         </button>
       )}
     </section>
+  )
+}
+
+/**
+ * A folder project: one row (its root) that selects it, drags to reorder,
+ * and has no "+": no worktrees or sessions, only file tabs.
+ */
+function FolderProjectRow({
+  host,
+  repoId,
+  name,
+  reorder,
+  index
+}: {
+  host: HostView
+  repoId: string
+  name: string
+  reorder: Reorder
+  index: number
+}) {
+  const hostId = host.hostId
+  const wt = useStore((s) => s.worktrees[wtKey(hostId, repoId)]?.[0])
+  const selected = useStore(
+    (s) => !!wt && s.active?.hostId === hostId && s.active.worktree === wt.id
+  )
+  return (
+    <div
+      data-reorder-id={repoId}
+      className={cn(
+        'relative',
+        dropLineClass(reorder.indicator(index)),
+        reorder.dragging === repoId && 'opacity-50'
+      )}
+    >
+      <div
+        role="button"
+        tabIndex={-1}
+        data-wt={wt?.id}
+        data-folder="true"
+        data-active={selected ? 'true' : 'false'}
+        title={`${name} · folder (files only, no sessions)\n${host.label}:${wt?.path ?? ''}`}
+        onPointerDown={reorder.handle(repoId)}
+        onClick={() => wt && selectWorktree(hostId, wt.id)}
+        className={cn(
+          'mx-2 mb-1 flex h-[30px] cursor-default items-center gap-2.5 rounded-md px-2',
+          selected ? 'bg-sidebar-accent' : 'hover:bg-hover'
+        )}
+      >
+        <Folder className="size-4 shrink-0 text-quiet" />
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-base',
+            selected ? 'text-foreground' : 'text-soft'
+          )}
+        >
+          {name}
+        </span>
+        <span className="shrink-0 text-sm text-dim">folder</span>
+      </div>
+    </div>
   )
 }
 
