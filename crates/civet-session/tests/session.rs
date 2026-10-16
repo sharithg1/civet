@@ -917,6 +917,18 @@ async fn browse_worktree_files() {
         Err(SessionError::NotFound(_))
     ));
 
+    // A nested repository (like a submodule checkout) uses its own rules;
+    // checking its entries from the outer repository would fail.
+    let nested = repo_dir.join("vendor/lib");
+    std::fs::create_dir_all(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    std::fs::write(nested.join(".gitignore"), "out/\n").unwrap();
+    std::fs::create_dir(nested.join("out")).unwrap();
+    std::fs::write(nested.join("lib.rs"), "").unwrap();
+    let inner = f.mgr.list_files(&wt, "vendor/lib", false).await.unwrap();
+    assert_eq!(names(&inner), [".gitignore", "lib.rs"]);
+    std::fs::remove_dir_all(repo_dir.join("vendor")).unwrap();
+
     let files = f.mgr.list_all_files(&wt).await.unwrap();
     assert_eq!(
         files.paths,

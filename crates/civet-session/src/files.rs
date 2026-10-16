@@ -3,11 +3,12 @@
 //! Every path a client sends is relative to the worktree root and must stay
 //! inside it: [`resolve`] rejects absolute paths and `..` components, then
 //! canonicalizes (resolving symlinks) and checks the result is still under
-//! the root.
+//! the root. [`read_file`] checks again on the opened file, so a path swapped
+//! for a symlink after `resolve` cannot make it read outside the worktree.
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use civet_proto::{
@@ -81,22 +82,19 @@ pub(crate) async fn list_dir(
             "{dir:?} is not a directory"
         )));
     }
-    // Relative to the root as git sees it (a symlinked directory resolves
-    // to where it points).
-    let rel_dir = target
-        .strip_prefix(&root)
-        .unwrap_or(Path::new(""))
-        .to_owned();
-    let mut entries = blocking(move || read_entries(&target)).await?;
+    let dir_path = target.clone();
+    let mut entries = blocking(move || read_entries(&dir_path)).await?;
 
+    // Bare names, checked from the directory itself: that is also right
+    // inside a submodule or nested repository, which has its own rules.
     let mut stdin = Vec::new();
     for e in &entries {
-        stdin.extend_from_slice(rel_dir.join(&e.name).as_os_str().as_bytes());
+        stdin.extend_from_slice(e.name.as_bytes());
         stdin.push(0);
     }
-    let ignored = ignored_paths(git, &root, stdin).await;
+    let ignored = ignored_paths(git, &target, stdin).await?;
     for e in &mut entries {
-        e.ignored = ignored.contains(&*rel_dir.join(&e.name).to_string_lossy());
+        e.ignored = ignored.contains(&e.name);
     }
     if !include_ignored {
         entries.retain(|e| !e.ignored);
@@ -139,33 +137,30 @@ fn read_entries(dir: &Path) -> Result<Vec<FileEntry>, SessionError> {
     Ok(out)
 }
 
-/// Which of the NUL-separated paths in `stdin` git ignores. A failure (e.g.
-/// paths inside a submodule) counts as "none ignored": the listing is still
-/// useful.
-async fn ignored_paths(git: &Git, root: &Path, stdin: Vec<u8>) -> HashSet<String> {
+/// Which of the NUL-separated names in `stdin` (relative to `dir`) git
+/// ignores. A failed check is an error: listing ignored entries as if they
+/// were not would break the "hidden unless asked for" contract.
+async fn ignored_paths(
+    git: &Git,
+    dir: &Path,
+    stdin: Vec<u8>,
+) -> Result<HashSet<String>, SessionError> {
     if stdin.is_empty() {
-        return HashSet::new();
+        return Ok(HashSet::new());
     }
-    match git
-        .output_with_stdin(root, &["check-ignore", "-z", "--stdin"], Some(stdin))
-        .await
-    {
-        // Exit 1: nothing ignored.
-        Ok(out) if out.success || out.stderr.is_empty() => out
-            .stdout
-            .split('\0')
-            .filter(|p| !p.is_empty())
-            .map(str::to_owned)
-            .collect(),
-        Ok(out) => {
-            tracing::debug!("git check-ignore in {}: {}", root.display(), out.stderr);
-            HashSet::new()
-        }
-        Err(e) => {
-            tracing::debug!("git check-ignore in {}: {e}", root.display());
-            HashSet::new()
-        }
+    let out = git
+        .output_with_stdin(dir, &["check-ignore", "-z", "--stdin"], Some(stdin))
+        .await?;
+    // Exit 1 with nothing on stderr: nothing ignored.
+    if !out.success && !out.stderr.is_empty() {
+        return Err(SessionError::Git(out.stderr));
     }
+    Ok(out
+        .stdout
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// The first `max_bytes` (at most [`MAX_FILE_PREVIEW_BYTES`]) of a regular
@@ -178,8 +173,24 @@ pub(crate) async fn read_file(
     let root = canonical_root(root)?;
     let path = path.to_owned();
     blocking(move || {
-        let file = resolve(&root, &path)?;
-        let meta = std::fs::metadata(&file)?;
+        let outside = || SessionError::InvalidArgument(format!("{path:?} is outside the worktree"));
+        let resolved = resolve(&root, &path)?;
+        // Open once and check the handle from then on: O_NOFOLLOW refuses a
+        // final symlink (the resolved path has none), O_NONBLOCK keeps a
+        // fifo from blocking the open.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&resolved)
+            .map_err(|e| match e.raw_os_error() {
+                Some(libc::ELOOP) => outside(),
+                _ => SessionError::Io(e),
+            })?;
+        // A directory on the way swapped for a symlink since `resolve`.
+        if !crate::sys::fd_path(&file)?.starts_with(&root) {
+            return Err(outside());
+        }
+        let meta = file.metadata()?;
         // Not a fifo or device: reading one could block forever.
         if !meta.is_file() {
             return Err(SessionError::InvalidArgument(format!(
@@ -189,9 +200,7 @@ pub(crate) async fn read_file(
         let cap = max_bytes.min(MAX_FILE_PREVIEW_BYTES);
         let mut buf = Vec::new();
         // One byte past the cap tells whether there is more.
-        std::fs::File::open(&file)?
-            .take(cap + 1)
-            .read_to_end(&mut buf)?;
+        file.take(cap + 1).read_to_end(&mut buf)?;
         let truncated = buf.len() as u64 > cap;
         buf.truncate(cap as usize);
         let binary = buf[..buf.len().min(BINARY_SNIFF_BYTES)].contains(&0);
@@ -286,6 +295,17 @@ mod tests {
             resolve(&root, "missing"),
             Err(SessionError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn open_files_know_their_real_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir(base.join("real")).unwrap();
+        std::fs::write(base.join("real/f"), "x").unwrap();
+        std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+        let f = std::fs::File::open(base.join("link/f")).unwrap();
+        assert_eq!(crate::sys::fd_path(&f).unwrap(), base.join("real/f"));
     }
 
     #[test]
