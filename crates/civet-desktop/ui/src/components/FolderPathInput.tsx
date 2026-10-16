@@ -69,7 +69,9 @@ export function FolderPathInput({
   // Each directory is listed once per dialog, shortly after typing stops
   // in it. A failed one is tried again only after moving to another
   // directory and back, never in a loop.
+  const currentKey = useRef(key)
   useEffect(() => {
+    currentKey.current = key
     setListings((l) => {
       const failed = Object.keys(l).filter((k) => k !== key && l[k] === 'failed')
       if (!failed.length) return l
@@ -85,7 +87,13 @@ export function FolderPathInput({
       setListings((l) => ({ ...l, [key]: null }))
       backend.listDirs(hostId, dir).then(
         (r) => setListings((l) => ({ ...l, [key]: r.dirs })),
-        () => setListings((l) => ({ ...l, [key]: 'failed' }))
+        // Failing after the user moved on: forget it, so coming back retries.
+        () =>
+          setListings((l) => {
+            if (currentKey.current === key) return { ...l, [key]: 'failed' }
+            const { [key]: _, ...rest } = l
+            return rest
+          })
       )
     }, 80)
     return () => clearTimeout(timer)
