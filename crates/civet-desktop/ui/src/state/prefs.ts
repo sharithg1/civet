@@ -65,6 +65,8 @@ export type Prefs = {
   expandedDirs: Record<string, string[]>
   /** Files tab: also list gitignored files. */
   showIgnoredFiles: boolean
+  /** The one-time "⇧⌘V saves big pastes as a file" tip was shown. */
+  pasteAsFileTipShown: boolean
 }
 
 /** Agent CLIs with their own tab command (⌥C / ⌥X) and on-create step kind. */
@@ -118,7 +120,8 @@ export const DEFAULT_PREFS: Prefs = {
   rightTab: 'branch',
   pinnedForwards: {},
   expandedDirs: {},
-  showIgnoredFiles: false
+  showIgnoredFiles: false,
+  pasteAsFileTipShown: false
 }
 
 const KEY = 'civet.prefs.v1'

@@ -26,8 +26,14 @@ pub const EV_UPDATE: &str = "civet://update";
 /// Label of the About window (capabilities/about.json).
 pub const ABOUT_WINDOW: &str = "about";
 
+/// Edit → Paste as File (⇧⌘V): the focused terminal pane saves the
+/// clipboard text as a file on its host and pastes the path. The menu is
+/// the only trigger (its key equivalent takes ⇧⌘V before the webview).
+pub const EV_PASTE_AS_FILE: &str = "civet://paste-as-file";
+
 const MENU_ABOUT: &str = "civet-about";
 const MENU_CHECK: &str = "civet-check-updates";
+const MENU_PASTE_AS_FILE: &str = "civet-paste-as-file";
 
 /// First automatic check after launch, then the interval between checks.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
@@ -193,15 +199,38 @@ pub fn spawn_periodic_checks<R: Runtime>(app: AppHandle<R>) {
 }
 
 /// The default menu, with "About Civet" (our window instead of the native
-/// panel) and "Check for Updates…" at the top of the app menu.
+/// panel) and "Check for Updates…" at the top of the app menu, and
+/// "Paste as File" under Edit → Paste.
 pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
-    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+    let items = menu.items()?;
+    if let Some(MenuItemKind::Submenu(app_menu)) = items.first() {
         app_menu.remove_at(0)?;
         let about = MenuItem::with_id(app, MENU_ABOUT, "About Civet", true, None::<&str>)?;
         let check = MenuItem::with_id(app, MENU_CHECK, "Check for Updates…", true, None::<&str>)?;
         app_menu.insert(&about, 0)?;
         app_menu.insert(&check, 1)?;
+    }
+    for item in &items {
+        let MenuItemKind::Submenu(sub) = item else {
+            continue;
+        };
+        if sub.text()? != "Edit" {
+            continue;
+        }
+        let entries = sub.items()?;
+        let paste = entries.iter().position(|e| match e {
+            MenuItemKind::Predefined(p) => p.text().is_ok_and(|t| t == "Paste"),
+            _ => false,
+        });
+        let paste_as_file = MenuItem::with_id(
+            app,
+            MENU_PASTE_AS_FILE,
+            "Paste as File",
+            true,
+            Some("Shift+CmdOrCtrl+V"),
+        )?;
+        sub.insert(&paste_as_file, paste.map_or(entries.len(), |i| i + 1))?;
     }
     Ok(menu)
 }
@@ -210,6 +239,11 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 pub fn on_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         MENU_ABOUT => open_about(app),
+        MENU_PASTE_AS_FILE => {
+            if let Err(e) = app.emit_to("main", EV_PASTE_AS_FILE, ()) {
+                tracing::warn!(event = EV_PASTE_AS_FILE, error = %e, "emit failed");
+            }
+        }
         MENU_CHECK => {
             open_about(app);
             let app = app.clone();

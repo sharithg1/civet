@@ -44,10 +44,13 @@ async fn sleep_blackhole_resume() {
     let probe = c.spawn(sh_pane(daemon.dir.path())).await;
     c.attach(probe).await;
     c.echo_rtt(probe, "ready", WAIT).await;
+    // `set +m`: no job control, so the shell does not setpgid each `sleep`;
+    // macOS's sh (bash 3.2) can lose that race and print "child setpgid …
+    // Operation not permitted" into the run of ticks.
     c.session.send_input(
         producer,
         format!(
-            "i=0; while [ $i -lt {n} ]; do i=$((i+1)); echo \"tick $i\"; sleep 0.05; done; echo PRODUCER-DONE\n"
+            "set +m; i=0; while [ $i -lt {n} ]; do i=$((i+1)); echo \"tick $i\"; sleep 0.05; done; echo PRODUCER-DONE\n"
         )
         .into_bytes(),
     );

@@ -581,6 +581,13 @@ pub fn write_clipboard(text: String) -> Res<()> {
     }
 }
 
+/// The clipboard's plain text ("" if none), for Paste as File. Sync for
+/// the main thread, like `write_clipboard`.
+#[tauri::command]
+pub fn read_clipboard() -> String {
+    crate::clipboard::read_text().unwrap_or_default()
+}
+
 /// The invoke handler with every command.
 pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static
 {
@@ -626,6 +633,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         set_agent_status,
         set_prediction,
         write_clipboard,
+        read_clipboard,
         list_ports,
         forward_port,
         stop_forward,

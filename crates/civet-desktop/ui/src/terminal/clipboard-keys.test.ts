@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { handleClipboardKey, isMacPlatform, type ClipboardKeyEvent } from './clipboard-keys'
+import {
+  handleClipboardKey,
+  isMacPlatform,
+  isPasteAsFileKey,
+  type ClipboardKeyEvent
+} from './clipboard-keys'
 
 function key(k: string, mods: Partial<ClipboardKeyEvent> = {}, type = 'keydown') {
   return {
@@ -61,6 +66,12 @@ describe('handleClipboardKey', () => {
     expect(ev.preventDefault).not.toHaveBeenCalled()
   })
 
+  it('Shift+Cmd+V is left to the app menu (ignored by xterm, not cancelled)', () => {
+    const ev = key('V', { metaKey: true, shiftKey: true })
+    expect(handleClipboardKey(ev, term('x'), { isMac: true, copy: vi.fn() })).toBe(false)
+    expect(ev.preventDefault).not.toHaveBeenCalled()
+  })
+
   it('Cmd+A selects all in the terminal', () => {
     const t = term()
     const ev = key('a', { metaKey: true })
@@ -87,6 +98,17 @@ describe('handleClipboardKey', () => {
       })
     ).toBe(true)
     expect(copy).not.toHaveBeenCalled()
+  })
+})
+
+describe('isPasteAsFileKey', () => {
+  it('matches Shift+Cmd+V only', () => {
+    expect(isPasteAsFileKey(key('V', { metaKey: true, shiftKey: true }))).toBe(true)
+    expect(isPasteAsFileKey(key('v', { metaKey: true, shiftKey: true }))).toBe(true)
+    expect(isPasteAsFileKey(key('v', { metaKey: true }))).toBe(false)
+    expect(isPasteAsFileKey(key('v', { ctrlKey: true, shiftKey: true }))).toBe(false)
+    expect(isPasteAsFileKey(key('v', { metaKey: true, shiftKey: true, altKey: true }))).toBe(false)
+    expect(isPasteAsFileKey(key('c', { metaKey: true, shiftKey: true }))).toBe(false)
   })
 })
 
