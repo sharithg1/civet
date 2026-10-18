@@ -5,7 +5,10 @@
 // explicitly and written through the Rust side. Cmd+V is left alone: the app
 // menu's Paste fires a real paste event on xterm's textarea, and xterm.js
 // applies bracketed paste mode itself (an image-only paste is handled in
-// PaneController: uploaded to the pane's host, its path pasted). Ctrl+C still goes to the pty.
+// PaneController: uploaded to the pane's host, its path pasted). Shift+Cmd+V
+// (Paste as File) belongs to the app menu, which emits civet://paste-as-file:
+// xterm ignores the key without cancelling it, so the menu fires exactly once.
+// Ctrl+C still goes to the pty.
 
 export type ClipboardKeyEvent = Pick<
   KeyboardEvent,
@@ -31,6 +34,13 @@ export function isMacPlatform(
   return /Mac|iPhone|iPad/.test(nav.platform || '') || /Macintosh/.test(nav.userAgent || '')
 }
 
+/** Shift+Cmd+V: Edit → Paste as File. */
+export function isPasteAsFileKey(
+  ev: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>
+): boolean {
+  return ev.metaKey && ev.shiftKey && !ev.ctrlKey && !ev.altKey && ev.key.toLowerCase() === 'v'
+}
+
 /**
  * xterm custom key handler: returns false when the event was consumed (xterm
  * then ignores it), true to let xterm and the browser handle it as usual.
@@ -40,6 +50,8 @@ export function handleClipboardKey(
   term: ClipboardKeyTerminal,
   opts: ClipboardKeyOptions
 ): boolean {
+  // Not consumed (no preventDefault): WebKit hands it on to the menu.
+  if (opts.isMac && isPasteAsFileKey(ev)) return false
   if (!opts.isMac || !ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return true
   const key = ev.key.toLowerCase()
   if (key === 'c') {

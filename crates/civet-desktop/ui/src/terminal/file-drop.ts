@@ -86,10 +86,32 @@ export function clipboardImage(data: ClipboardData | null): File | null {
   return null
 }
 
+/** `20250102-030405` (UTC) for file names. */
+function fileTime(now: Date): string {
+  return now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-')
+}
+
 /** File name for a pasted image: `clipboard-<time>.<ext>`. */
 export function clipboardImageName(type: string, now = new Date()): string {
   const ext =
     (type.split('/')[1] ?? 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '') || 'png'
-  const t = now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-')
-  return `clipboard-${t}.${ext}`
+  return `clipboard-${fileTime(now)}.${ext}`
+}
+
+/** File name for Paste as File (⇧⌘V): `paste-<time>.txt`. */
+export function pasteFileName(now = new Date()): string {
+  return `paste-${fileTime(now)}.txt`
+}
+
+export const LARGE_PASTE_LINES = 200
+export const LARGE_PASTE_CHARS = 20 * 1024
+
+/** A text paste big enough to suggest Paste as File instead (≈200 lines or ≈20 KB). */
+export function isLargePaste(text: string): boolean {
+  if (text.length >= LARGE_PASTE_CHARS) return true
+  let lines = 1
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) {
+    if (++lines >= LARGE_PASTE_LINES) return true
+  }
+  return false
 }

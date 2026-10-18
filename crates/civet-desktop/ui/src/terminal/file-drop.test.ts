@@ -4,6 +4,9 @@ import {
   clipboardImageName,
   dropChunks,
   isImagePath,
+  isLargePaste,
+  LARGE_PASTE_CHARS,
+  pasteFileName,
   shellEscapePath
 } from './file-drop'
 
@@ -60,5 +63,18 @@ describe('file drop', () => {
     const at = new Date('2026-10-15T11:02:03.456Z')
     expect(clipboardImageName('image/png', at)).toBe('clipboard-20261015-110203.png')
     expect(clipboardImageName('image/jpeg', at)).toBe('clipboard-20261015-110203.jpg')
+  })
+
+  it('names Paste as File files by time', () => {
+    expect(pasteFileName(new Date('2026-10-15T11:02:03.456Z'))).toBe('paste-20261015-110203.txt')
+  })
+
+  it('flags pastes of about 200+ lines or 20+ KB as large', () => {
+    expect(isLargePaste('')).toBe(false)
+    expect(isLargePaste('one line')).toBe(false)
+    expect(isLargePaste('x\n'.repeat(198))).toBe(false) // 199 lines
+    expect(isLargePaste('x\n'.repeat(199))).toBe(true) // 200 lines
+    expect(isLargePaste('x'.repeat(LARGE_PASTE_CHARS - 1))).toBe(false)
+    expect(isLargePaste('x'.repeat(LARGE_PASTE_CHARS))).toBe(true)
   })
 })

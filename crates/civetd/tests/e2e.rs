@@ -56,10 +56,13 @@ fn sh_pane(cwd: &Path) -> Request {
     })
 }
 
-/// See [`Mirror::count_output`].
-fn is_output(row: &str, word: &str) -> bool {
-    let row = row.trim_end();
-    row == word || row.ends_with(&format!("$ {word}"))
+/// How often a command printed `word`: its occurrences in the screen text.
+/// Why not whole rows: input typed ahead is echoed by the tty, on Linux in
+/// pieces and asynchronously, so an echo can share a row with the output
+/// (`echo t''wdup`). Commands quote their word (`echo d''up`) so that only
+/// the output spells it.
+fn count_output(rows: &[String], word: &str) -> usize {
+    rows.join("\n").matches(word).count()
 }
 
 /// Strip CSI / OSC escape sequences from a VT line.
@@ -150,11 +153,9 @@ impl Mirror {
         self.rows().iter().any(|r| r.trim_end().ends_with('$'))
     }
 
-    /// Rows showing `word` as a command's output: on its own row, or right
-    /// after a prompt (`$ word`) when the next command was typed before the
-    /// shell printed that prompt (the tty echoes it early).
+    /// See [`count_output`].
     fn count_output(&self, word: &str) -> usize {
-        self.rows().iter().filter(|r| is_output(r, word)).count()
+        count_output(&self.rows(), word)
     }
 
     /// History (as replayed into this mirror's scrollback) + screen, as text.
@@ -635,9 +636,9 @@ async fn duplicate_input_seq_not_applied_twice() {
     .await
     .unwrap();
     c.wait_screen(pane, Mirror::has_prompt).await;
-    c.input(pane, 1, "echo dup\n").await;
-    c.input(pane, 1, "echo dup\n").await;
-    c.input(pane, 2, "echo two\n").await;
+    c.input(pane, 1, "echo d''up\n").await;
+    c.input(pane, 1, "echo d''up\n").await;
+    c.input(pane, 2, "echo t''wo\n").await;
     c.wait_screen(pane, |m| m.count_output("two") > 0).await;
     // Let any (wrongly) duplicated write show up.
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -646,7 +647,8 @@ async fn duplicate_input_seq_not_applied_twice() {
         .await
         .is_ok()
     {}
-    assert_eq!(c.mirrors[&pane].count_output("dup"), 1);
+    let m = &c.mirrors[&pane];
+    assert_eq!(m.count_output("dup"), 1, "{:#?}", m.rows());
     assert!(
         c.input_acks.iter().any(|(p, s)| *p == pane && *s >= 1),
         "a duplicate is answered with an InputAck"
@@ -678,15 +680,15 @@ async fn duplicate_input_seq_not_applied_twice() {
     let mut c2 = Raw::new(connected);
     assert!(c2.hello.resumed);
     assert_eq!(c2.hello.resumed_subscriptions[0].last_input_seq, 2);
-    c2.input(pane, 2, "echo two\n").await;
-    c2.input(pane, 3, "echo three\n").await;
+    c2.input(pane, 2, "echo t''wo\n").await;
+    c2.input(pane, 3, "echo th''ree\n").await;
     c2.wait_response(1).await.unwrap();
     let deadline = Instant::now() + WAIT;
     loop {
         let rows = daemon.sessions().screen_text(pane).unwrap();
-        if rows.iter().any(|r| is_output(r, "three")) {
-            assert_eq!(rows.iter().filter(|r| is_output(r, "two")).count(), 1);
-            assert_eq!(rows.iter().filter(|r| is_output(r, "dup")).count(), 1);
+        if count_output(&rows, "three") > 0 {
+            assert_eq!(count_output(&rows, "two"), 1, "{rows:#?}");
+            assert_eq!(count_output(&rows, "dup"), 1, "{rows:#?}");
             break;
         }
         assert!(Instant::now() < deadline);
