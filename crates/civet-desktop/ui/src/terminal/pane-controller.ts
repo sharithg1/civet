@@ -20,7 +20,13 @@ import { handleShiftEnter } from './newline-keys'
 import { handleFindKey, type FindAction, type FindOptions } from './find-keys'
 import { InputQueue } from './input-queue'
 import { FIND_DECORATIONS, buildDefaultTerminalOptions } from './terminal-options'
-import { clipboardImage, clipboardImageName, dropChunks } from './file-drop'
+import {
+  clipboardImage,
+  clipboardImageName,
+  dropChunks,
+  isLargePaste,
+  pasteFileName
+} from './file-drop'
 import { attachWebgl, type WebglHandle } from './webgl'
 
 export const RESIZE_DEBOUNCE_MS = 100
@@ -36,6 +42,8 @@ export type PaneControllerCallbacks = {
   onError: (message: string) => void
   /** Cmd+F / Cmd+G / Shift+Cmd+G in the terminal (see find-keys). */
   onFind?: (action: FindAction) => void
+  /** A plain text paste (Cmd+V) was large: a hint toward Paste as File. */
+  onLargePaste?: () => void
   /** False while the host is not connected: input errors are expected then (no toast). */
   canReportInputError?: () => boolean
 }
@@ -150,9 +158,16 @@ export class PaneController {
     // Cmd+V with only an image on the clipboard (a screenshot): store it on
     // the pane's host and paste its path, which agents attach as an image.
     // Capture phase, ahead of xterm's own paste handler on its textarea.
+    // A large text paste still goes to xterm unchanged; it only raises the
+    // Paste as File tip.
     const onPaste = (e: ClipboardEvent) => {
       const image = clipboardImage(e.clipboardData)
-      if (!image || this.stream.closed) return
+      if (!image) {
+        const text = e.clipboardData?.getData('text/plain') ?? ''
+        if (!this.stream.closed && isLargePaste(text)) this.cb.onLargePaste?.()
+        return
+      }
+      if (this.stream.closed) return
       e.preventDefault()
       e.stopImmediatePropagation()
       void this.pasteImage(image)
@@ -326,6 +341,27 @@ export class PaneController {
       if (!this.disposed) this.dropPaths([path])
     } catch (err) {
       this.cb.onError(`paste image: ${String((err as Error).message ?? err)}`)
+    }
+  }
+
+  /**
+   * Paste as File (⇧⌘V): store the clipboard text as a file on the pane's
+   * host and type its path, so an agent reads the file instead of taking
+   * the whole text into its context.
+   */
+  async pasteAsFile(): Promise<void> {
+    if (this.stream.closed) return
+    try {
+      const text = await this.backend.readClipboard()
+      if (!text) {
+        this.cb.onError('paste as file: the clipboard has no text')
+        return
+      }
+      const data = new TextEncoder().encode(text)
+      const path = await this.backend.uploadFile(this.hostId, pasteFileName(), data)
+      if (!this.disposed) this.dropPaths([path])
+    } catch (err) {
+      this.cb.onError(`paste as file: ${String((err as Error).message ?? err)}`)
     }
   }
 

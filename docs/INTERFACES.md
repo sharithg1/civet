@@ -1734,6 +1734,7 @@ JSON forms unless shown. Errors reject the promise with
 | `set_agent_status` | `{ hostId, pane, status: AgentStatus }` | `null` |
 | `set_prediction` | `{ enabled: boolean }` | `null` (Settings → "Local echo prediction": Auto = true, Off = false; persisted by the UI and sent at startup) |
 | `write_clipboard` | `{ text: string }` | `null` (Cmd+C on an xterm selection; sync command, runs on the main thread for NSPasteboard) |
+| `read_clipboard` | `{}` | `string`: the clipboard's plain text, `""` if none (Edit → Paste as File; sync, main thread, like `write_clipboard`; a webview read would prompt) |
 | `list_ports` | `{ hostId }` | `PortsEvent` (last report; also pushed as `civet://ports`) |
 | `forward_port` | `{ hostId, remotePort, localPort?: number \| null }` | `ForwardView`. Listens on `127.0.0.1:localPort` (null: `remotePort` if free, else any free port; on This Mac never `remotePort`) and tunnels each connection over a `Forward` stream of the host's current session, so forwards survive reconnects and re-bootstraps; `disconnect_host` drops them. Idempotent per remote port (`alreadyExists` if a different `localPort` is asked for, or if `localPort` is taken) |
 | `stop_forward` | `{ hostId, remotePort }` | `null` (`notFound` if not forwarded); closes the listener and its connections |
@@ -1829,6 +1830,7 @@ visible latency for keystroke echoes).
 | `civet://ports` | `PortsEvent`, when a host's listening ports or their status change |
 | `civet://forwards` | `{ hostId, forwards: ForwardView[] }` after any change (added, stopped, connection count, `lastError`) |
 | `civet://clipboard` | `{ hostId, pane, chars: number, ok: boolean }`: a pane's program set the clipboard (OSC 52). Rust already wrote the system clipboard (NSPasteboard, no user gesture needed); success is silent, the UI shows an error toast when `ok` is false. Applied only while a Civet window is focused and the pane is attached in the UI, at most once per second per pane; otherwise dropped (debug log, no event). `Event::Clipboard` is not forwarded as a `civet://daemon-event` |
+| `civet://paste-as-file` | `null`, to the main window: Edit → Paste as File (⇧⌘V, the menu item's key equivalent; the webview never handles the key itself). The focused terminal pane reads `read_clipboard`, uploads the text with `upload_file` as `paste-<time>.txt` and types the path; with no terminal focused the UI shows a short notice |
 
 ```ts
 type HostState = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";

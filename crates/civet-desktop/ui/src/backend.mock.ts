@@ -25,6 +25,7 @@ import {
   type Unlisten
 } from './backend'
 import { RecordFlag, RecordKind, encodeRecords, type RecordInit } from './terminal/records'
+import { isPasteAsFileKey } from './terminal/clipboard-keys'
 import type {
   AgentAttentionEvent,
   AgentStatus,
@@ -799,13 +800,24 @@ export class MockBackend implements CivetBackend {
   /** hostId → remote port → forward */
   private forwards = new Map<string, Map<number, ForwardView>>()
   private lastPorts = new Map<string, string>()
+  /**
+   * Last text copied (or set with `__civetMockSetClipboard`), read back when
+   * the browser denies or empties clipboard reads (headless Chrome).
+   */
+  private clipboard = ''
+  /** Uploaded files by returned path (`__civetMockUploads`, for the UI driver). */
+  readonly uploads = new Map<string, Uint8Array>()
 
   constructor() {
     this.emitter.on<DaemonEventEnvelope>('civet://daemon-event', ({ hostId }) =>
       this.refreshPorts(hostId)
     )
     Object.assign(globalThis, {
-      __civetMockFileDrop: (e: FileDropEvent) => this.simulateFileDrop(e)
+      __civetMockFileDrop: (e: FileDropEvent) => this.simulateFileDrop(e),
+      __civetMockUploads: this.uploads,
+      __civetMockSetClipboard: (text: string) => {
+        this.clipboard = text
+      }
     })
   }
   /** What each host was connected with (reconnect_host / restart_daemon reuse it). */
@@ -1643,7 +1655,12 @@ export class MockBackend implements CivetBackend {
   async setPrediction(_enabled: boolean) {}
 
   async writeClipboard(text: string) {
+    this.clipboard = text
     await navigator.clipboard?.writeText(text)
+  }
+  async readClipboard() {
+    const text = await navigator.clipboard?.readText().catch(() => '')
+    return text || this.clipboard
   }
 
   async onHostState(cb: (e: HostStateEvent) => void) {
@@ -1661,6 +1678,17 @@ export class MockBackend implements CivetBackend {
   async onClipboard(cb: (e: ClipboardEvent) => void) {
     return this.emitter.on('civet://clipboard', cb)
   }
+  // No native menu in a browser: ⇧⌘V on the window stands in for
+  // Edit → Paste as File.
+  async onPasteAsFile(cb: () => void) {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPasteAsFileKey(e)) return
+      e.preventDefault()
+      cb()
+    }
+    window.addEventListener('keydown', onKey, { capture: true })
+    return () => window.removeEventListener('keydown', onKey, { capture: true })
+  }
   async onPorts(cb: (e: PortsEvent) => void) {
     return this.emitter.on('civet://ports', cb)
   }
@@ -1671,8 +1699,10 @@ export class MockBackend implements CivetBackend {
   async prepareFileDrop(_hostId: string, paths: string[]): Promise<DroppedFile[]> {
     return paths.map((source) => ({ source, path: source, error: null }))
   }
-  async uploadFile(_hostId: string, name: string, _data: Uint8Array) {
-    return `/tmp/civet-drops/mock/${name}`
+  async uploadFile(_hostId: string, name: string, data: Uint8Array) {
+    const path = `/tmp/civet-drops/mock/${name}`
+    this.uploads.set(path, data)
+    return path
   }
   // A browser has no native file paths to drop: `simulateFileDrop` (also
   // `globalThis.__civetMockFileDrop`, for the UI driver) stands in for Finder.

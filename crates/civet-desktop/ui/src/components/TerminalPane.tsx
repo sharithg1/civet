@@ -5,7 +5,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Columns2, History, Rows2, X } from 'lucide-react'
-import { useStore, closePanes, focusPane, splitFocused, reportError } from '@/state/store'
+import {
+  useStore,
+  closePanes,
+  focusPane,
+  splitFocused,
+  pushToast,
+  reportError
+} from '@/state/store'
+import { setPrefs, usePrefs } from '@/state/prefs'
 import { PaneController } from '@/terminal/pane-controller'
 import { registerPane } from '@/terminal/pane-registry'
 import type { LineRange } from '@/terminal/pane-stream'
@@ -58,6 +66,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
         // Settings (shown over the workspace) has its own Cmd+F.
         if (!useStore.getState().settings) findShortcut.current(action)
       },
+      onLargePaste: showPasteAsFileTip,
       canReportInputError: () => useStore.getState().hosts[hostId]?.state === 'connected'
     })
     c.mount(el)
@@ -191,5 +200,15 @@ function PaneButton({
     >
       {children}
     </IconButton>
+  )
+}
+
+/** Once ever, on the first large plain paste: point at Paste as File. */
+function showPasteAsFileTip(): void {
+  if (usePrefs.getState().pasteAsFileTipShown) return
+  setPrefs({ pasteAsFileTipShown: true })
+  pushToast(
+    { kind: 'info', title: 'Tip: ⇧⌘V saves big pastes as a file on the host and pastes its path.' },
+    9000
   )
 }
