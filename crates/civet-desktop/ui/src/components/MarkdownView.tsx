@@ -3,14 +3,17 @@
 // raw HTML is not rendered. Links: `http(s)` opens in the browser, other
 // worktree files open in a tab, `#heading` scrolls. Images other than
 // `data:` show as a placeholder (the CSP blocks remote ones, and worktree
-// files are not served to the webview).
+// files are not served to the webview). Fenced code is highlighted by its
+// info string (```ts).
 import { useEffect, useRef } from 'react'
 import { ImageIcon } from 'lucide-react'
 import Markdown, { type Components, type UrlTransform, defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { languageForFence } from '@/lib/highlight'
 import { Slugger, isDataImage, isMarkdownPath, resolveLink } from '@/lib/markdown'
 import { fileKey, setPendingAnchor, useFiles } from '@/state/files'
 import { openFileTab, pushToast, useStore } from '@/state/store'
+import { HighlightedText } from './HighlightedText'
 
 export function MarkdownView({
   hostId,
@@ -88,6 +91,22 @@ export function MarkdownView({
             <span>{alt || src || 'image'}</span>
           )}
         </span>
+      )
+    },
+    // Fenced code (`language-x` from the info string); inline code has no class.
+    code: ({ className, children, node: _, ...rest }) => {
+      const fence = /\blanguage-(\S+)/.exec(className ?? '')?.[1]
+      if (!fence || typeof children !== 'string') {
+        return (
+          <code {...rest} className={className}>
+            {children}
+          </code>
+        )
+      }
+      return (
+        <code {...rest} className={`${className} shiki-tokens`}>
+          <HighlightedText text={children} lang={languageForFence(fence)} />
+        </code>
       )
     },
     // Task-list checkboxes are read-only.

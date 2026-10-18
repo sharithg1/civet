@@ -595,3 +595,18 @@
   color: var(--link);
   cursor: pointer;
 }
+
+/* Syntax highlighting (lib/highlight.ts, HighlightedText.tsx): each token
+   carries both themes' colours as variables; the background stays ours. */
+.shiki-tokens span {
+  color: var(--shiki-light);
+  font-style: var(--shiki-light-font-style);
+  font-weight: var(--shiki-light-font-weight);
+  text-decoration: var(--shiki-light-text-decoration);
+}
+.dark .shiki-tokens span {
+  color: var(--shiki-dark);
+  font-style: var(--shiki-dark-font-style);
+  font-weight: var(--shiki-dark-font-weight);
+  text-decoration: var(--shiki-dark-text-decoration);
+}
