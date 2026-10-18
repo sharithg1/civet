@@ -23,6 +23,7 @@ import { paneDot } from '@/lib/worktree-view'
 import { HistoryView } from './HistoryView'
 import { IconButton } from './IconButton'
 import { StatusDot } from './StatusDot'
+import { TerminalFindBar, useTerminalFind } from './TerminalFindBar'
 
 type Props = {
   hostId: string
@@ -41,6 +42,10 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
   const [renderer, setRenderer] = useState<{ kind: 'webgl' | 'dom'; reason?: string } | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [gaps, setGaps] = useState<LineRange[]>([])
+  const find = useTerminalFind(controller)
+  // The controller outlives renders; route its find shortcuts to the latest hook.
+  const findShortcut = useRef(find.shortcut)
+  findShortcut.current = find.shortcut
 
   useEffect(() => {
     const el = containerRef.current
@@ -57,6 +62,10 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
       },
       onGap: (gap) => setGaps((g) => [...g.slice(-9), gap]),
       onError: (message) => reportError(`Pane ${pane}`, message),
+      onFind: (action) => {
+        // Settings (shown over the workspace) has its own Cmd+F.
+        if (!useStore.getState().settings) findShortcut.current(action)
+      },
       onLargePaste: showPasteAsFileTip,
       canReportInputError: () => useStore.getState().hosts[hostId]?.state === 'connected'
     })
@@ -131,7 +140,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
             historyOpen && controller ? 'top-[calc(45%+6px)]' : 'top-1.5'
           )}
         >
-          {renderer?.kind === 'dom' && (
+          {renderer?.kind === 'dom' && !find.open && (
             <span
               className="mr-1 font-mono text-2xs text-dim opacity-0 group-hover/pane:opacity-100"
               title={renderer.reason}
@@ -139,8 +148,19 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
               DOM renderer
             </span>
           )}
+          {find.open && <TerminalFindBar find={find} className="mr-1" />}
           {actions}
         </div>
+      )}
+      {multiPane && find.open && (
+        // Under the title strip (and the history view, like the lone-pane actions).
+        <TerminalFindBar
+          find={find}
+          className={cn(
+            'absolute right-3 z-10 max-w-[calc(100%-24px)]',
+            historyOpen && controller ? 'top-[calc(45%+28px)]' : 'top-[28px]'
+          )}
+        />
       )}
       {historyOpen && controller && (
         <HistoryView controller={controller} gaps={gaps} onClose={() => setHistoryOpen(false)} />

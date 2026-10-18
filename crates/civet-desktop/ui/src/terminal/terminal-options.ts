@@ -3,6 +3,7 @@
 // ("Ghostty Default Style Dark"). Settings plumbing, contrast correction and
 // the scrollback policy module were dropped; Civet has one fixed theme
 // (Ghostty's palette with softer text, font from the Civet Workspace v3 design).
+import type { ISearchOptions } from '@xterm/addon-search'
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
 
 export const TERMINAL_THEME_DARK: ITheme = {
@@ -32,6 +33,19 @@ export const TERMINAL_THEME_DARK: ITheme = {
   brightMagenta: '#c397d8',
   brightCyan: '#70c0b1',
   brightWhite: '#eaeaea'
+}
+
+/**
+ * Find-bar highlights over TERMINAL_THEME_DARK (the terminal stays dark in
+ * both app themes): a muted amber for every match, a brighter outlined one
+ * for the selected match. Backgrounds must be #RRGGBB.
+ */
+export const FIND_DECORATIONS: NonNullable<ISearchOptions['decorations']> = {
+  matchBackground: '#5a4d2a',
+  matchOverviewRuler: '#a68b4a',
+  activeMatchBackground: '#9c7a2e',
+  activeMatchBorder: '#f0c674',
+  activeMatchColorOverviewRuler: '#f0c674'
 }
 
 /** Bundled Geist Mono first (see main.tsx: loaded before any terminal opens). */

@@ -8,6 +8,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { SearchAddon, type ISearchResultChangeEvent } from '@xterm/addon-search'
 import type { CivetBackend, PaneAttachment } from '../backend'
 import { termSize, type PaneId } from '../types'
 import { FrameBatcher } from './frame-batcher'
@@ -16,8 +17,9 @@ import { RecordParseError, parseRecords, type TermRecord } from './records'
 import { ScrollbackPager } from './scrollback-pager'
 import { handleClipboardKey, isMacPlatform } from './clipboard-keys'
 import { handleShiftEnter } from './newline-keys'
+import { handleFindKey, type FindAction, type FindOptions } from './find-keys'
 import { InputQueue } from './input-queue'
-import { buildDefaultTerminalOptions } from './terminal-options'
+import { FIND_DECORATIONS, buildDefaultTerminalOptions } from './terminal-options'
 import {
   clipboardImage,
   clipboardImageName,
@@ -29,12 +31,17 @@ import { attachWebgl, type WebglHandle } from './webgl'
 
 export const RESIZE_DEBOUNCE_MS = 100
 
+/** Matches highlighted by the find bar; past this the counter shows "1000+". */
+export const FIND_HIGHLIGHT_LIMIT = 1000
+
 export type PaneControllerCallbacks = {
   onClosed: () => void
   onRenderer: (renderer: 'webgl' | 'dom', reason?: string) => void
   onScrollTop: () => void
   onGap: (gap: LineRange) => void
   onError: (message: string) => void
+  /** Cmd+F / Cmd+G / Shift+Cmd+G in the terminal (see find-keys). */
+  onFind?: (action: FindAction) => void
   /** A plain text paste (Cmd+V) was large: a hint toward Paste as File. */
   onLargePaste?: () => void
   /** False while the host is not connected: input errors are expected then (no toast). */
@@ -46,6 +53,7 @@ export class PaneController {
   readonly stream: PaneStream
   readonly pager: ScrollbackPager
   private readonly fit = new FitAddon()
+  private readonly search = new SearchAddon({ highlightLimit: FIND_HIGHLIGHT_LIMIT })
   private readonly batcher: FrameBatcher<TermRecord>
   private webgl: WebglHandle | null = null
   private attachment: PaneAttachment | null = null
@@ -55,6 +63,8 @@ export class PaneController {
   private lastRequested: { cols: number; rows: number } | null = null
   private container: HTMLElement | null = null
   private sawRecord = false
+  /** Set while a find scrolls to its match: that is not the user scrolling to the top. */
+  private findScrolling = false
   private readonly cleanups: (() => void)[] = []
   /** Keeps this pane's keystrokes in order (one input invoke in flight). */
   private readonly input: InputQueue
@@ -97,6 +107,7 @@ export class PaneController {
     // other wide chars take two cells, so diffs from the server line up.
     this.term.loadAddon(new Unicode11Addon())
     this.term.unicode.activeVersion = '11'
+    this.term.loadAddon(this.search)
     this.term.open(container)
     this.webgl = attachWebgl(this.term, (reason) => this.cb.onRenderer('dom', reason))
     if (this.webgl.active) this.cb.onRenderer('webgl')
@@ -111,7 +122,9 @@ export class PaneController {
     })
     const d3 = this.term.onScroll((y) => {
       const buf = this.term.buffer.active
-      if (y === 0 && buf.type === 'normal' && buf.baseY > 0) this.cb.onScrollTop()
+      if (y === 0 && buf.type === 'normal' && buf.baseY > 0 && !this.findScrolling) {
+        this.cb.onScrollTop()
+      }
     })
     this.cleanups.push(
       () => d1.dispose(),
@@ -119,8 +132,9 @@ export class PaneController {
       () => d3.dispose()
     )
 
-    // Shift+Enter inserts a newline (see newline-keys); Cmd+C copies xterm's
-    // selection, Cmd+A selects all (see clipboard-keys).
+    // Shift+Enter inserts a newline (see newline-keys); Cmd+F finds (see
+    // find-keys); Cmd+C copies xterm's selection, Cmd+A selects all (see
+    // clipboard-keys).
     const isMac = isMacPlatform()
     const sendNewline = (data: string) => {
       if (!this.stream.closed) this.input.push('text', data)
@@ -128,6 +142,7 @@ export class PaneController {
     this.term.attachCustomKeyEventHandler(
       (ev) =>
         handleShiftEnter(ev, sendNewline) &&
+        handleFindKey(ev, { isMac, onFind: (action) => this.cb.onFind?.(action) }) &&
         handleClipboardKey(ev, this.term, {
           isMac,
           copy: (text) => {
@@ -258,6 +273,51 @@ export class PaneController {
 
   focus(): void {
     this.term.focus()
+  }
+
+  /**
+   * Select the next / previous match of `query` in the loaded buffer (older
+   * history still on the host is not searched) and highlight all of them.
+   * `incremental` keeps the current match while it still matches (typing).
+   */
+  find(
+    query: string,
+    opts: FindOptions,
+    direction: 'next' | 'previous',
+    incremental = false
+  ): boolean {
+    if (!query) {
+      this.clearFind()
+      return false
+    }
+    const searchOpts = { ...opts, decorations: FIND_DECORATIONS }
+    this.findScrolling = true
+    try {
+      return direction === 'next'
+        ? this.search.findNext(query, { ...searchOpts, incremental })
+        : this.search.findPrevious(query, searchOpts)
+    } finally {
+      this.findScrolling = false
+      this.repaintAfterFind()
+    }
+  }
+
+  /** Drop the find highlights; the selected match stays selected (Cmd+C). */
+  clearFind(): void {
+    this.search.clearDecorations()
+    this.repaintAfterFind()
+  }
+
+  // The DOM renderer keeps painting a disposed highlight's background until
+  // its row is redrawn (each search replaces all highlights).
+  private repaintAfterFind(): void {
+    this.term.refresh(0, this.term.rows - 1)
+  }
+
+  /** Match index / count after each search (and as new output arrives). */
+  onFindResults(listener: (results: ISearchResultChangeEvent) => void): () => void {
+    const d = this.search.onDidChangeResults(listener)
+    return () => d.dispose()
   }
 
   /**
