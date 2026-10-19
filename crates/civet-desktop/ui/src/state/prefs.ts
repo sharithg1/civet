@@ -3,6 +3,7 @@
 // rest of the v3 Settings design is listed as a backend follow-up.
 
 import { create } from 'zustand'
+import type { ClearedLabel } from '../lib/worktree-view'
 
 export type WorktreeLabel = 'task' | 'branch'
 export type SidebarTabs = 'selected' | 'all' | 'none'
@@ -42,6 +43,8 @@ export type Prefs = {
   prediction: Prediction
   /** Worktrees hidden from the sidebar's main list, by `wsKey(hostId, worktree)`. */
   archivedWorktrees: Record<string, true>
+  /** Sidebar labels cleared from a row's menu, by `wsKey(hostId, worktree)`. */
+  clearedLabels: Record<string, ClearedLabel>
   /** Sidebar layout (drag to reorder): host ids; hosts not listed follow. */
   hostOrder: string[]
   /** Sidebar layout: repo ids per host; repos not listed follow. */
@@ -86,6 +89,7 @@ export function stepAgent(kind: StepKind): AgentKind | null {
 const KEPT_ON_RESET = [
   'createSteps',
   'archivedWorktrees',
+  'clearedLabels',
   'hostOrder',
   'repoOrder',
   'collapsedHosts',
@@ -109,6 +113,7 @@ export const DEFAULT_PREFS: Prefs = {
   createSteps: {},
   prediction: 'auto',
   archivedWorktrees: {},
+  clearedLabels: {},
   hostOrder: [],
   repoOrder: {},
   collapsedHosts: {},
