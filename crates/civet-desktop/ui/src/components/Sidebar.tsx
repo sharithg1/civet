@@ -9,6 +9,7 @@
 // by dragging it (lib/reorder.ts); the layout is saved in the prefs. Data is
 // the daemon's (repos, worktrees, panes); the "task" label is the agent
 // pane's title (see lib/worktree-view.ts). Right-clicking a worktree row
+// clears its label (branch / task name and PR badge, until they change),
 // archives it (into the project's collapsed "Archived" group) or removes it
 // (the Remove worktree dialog). While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
@@ -23,6 +24,7 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronRight,
+  Eraser,
   Folder,
   FolderPlus,
   GitMerge,
@@ -51,6 +53,7 @@ import {
   requestRestartDaemon,
   selectWorktree,
   setWorktreeArchived,
+  setWorktreeLabelCleared,
   toggleHostCollapsed,
   toggleRepoCollapsed,
   useStore,
@@ -62,9 +65,16 @@ import type { HostView } from '@/state/store'
 import { applyOrder, clampSidebarWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
 import { dropLineClass, useReorder, type Reorder } from '@/lib/reorder'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
-import { cn } from '@/lib/utils'
+import { basename, cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
-import { ago, worktreeBranch, worktreeDot, worktreeTask } from '@/lib/worktree-view'
+import {
+  ago,
+  clearedParts,
+  worktreeBranch,
+  worktreeDot,
+  worktreeTask,
+  type ClearedLabel
+} from '@/lib/worktree-view'
 import type { PullRequestInfo, WorktreeInfo } from '@/types'
 import {
   DropdownMenu,
@@ -635,18 +645,21 @@ function ProjectGroup({
   )
 }
 
-/** Right-click menu of a worktree row: archive / unarchive, remove. */
+/** Right-click menu of a worktree row: clear label, archive / unarchive, remove. */
 function WorktreeMenu({
   hostId,
   wt,
   archived,
   removing,
+  label,
   children
 }: {
   hostId: string
   wt: WorktreeInfo
   archived: boolean
   removing: boolean
+  /** What the row shows now, for "Clear label"; null when it shows nothing to clear. */
+  label: ClearedLabel | null
   children: ReactNode
 }) {
   return (
@@ -657,6 +670,13 @@ function WorktreeMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48" onCloseAutoFocus={restoreTerminalFocus}>
+        <ContextMenuItem
+          disabled={!label}
+          onSelect={() => label && setWorktreeLabelCleared(hostId, wt.id, label)}
+        >
+          <Eraser />
+          Clear label
+        </ContextMenuItem>
         <ContextMenuItem
           disabled={wt.isMain}
           onSelect={() => setWorktreeArchived(hostId, wt.id, !archived)}
@@ -733,10 +753,25 @@ function WorktreeRow({
   const tabs = useWorktreeTabs(hostId, wt.id).filter((t) => t.file == null)
   const panes = panesOfWorktree(paneMap, wt.id)
   const dot = worktreeDot(panes, host.state === 'connected', unread)
-  const branch = worktreeBranch(wt)
   const task = wt.isMain ? null : worktreeTask(wt, panes)
-  const useTask = labelPref === 'task' && !!task
-  const title = wt.isMain ? branch : useTask ? task! : branch
+  const current: ClearedLabel = {
+    branch: wt.branch,
+    task,
+    pr: pr ? `${pr.number}:${pr.state}` : null
+  }
+  const cleared = usePrefs((s) => s.clearedLabels[key])
+  const hidden = clearedParts(cleared, current)
+  useEffect(() => {
+    if (hidden.stale) setWorktreeLabelCleared(hostId, wt.id, null)
+  }, [hidden.stale, hostId, wt.id])
+  // A cleared branch falls back to the worktree's folder name.
+  const branch = hidden.branch ? basename(wt.path) : worktreeBranch(wt)
+  const useTask = labelPref === 'task' && !!task && !hidden.task
+  const title = useTask ? task! : branch
+  const clearable =
+    (current.branch != null && !hidden.branch) ||
+    (task != null && !hidden.task) ||
+    (pr != null && !hidden.pr)
   const newest = panes.reduce<number | null>(
     (m, p) => (m == null || p.createdAtMs > m ? p.createdAtMs : m),
     null
@@ -749,7 +784,13 @@ function WorktreeRow({
     if (selectedAt != null) rowRef.current?.scrollIntoView({ block: 'nearest' })
   }, [selectedAt])
   return (
-    <WorktreeMenu hostId={hostId} wt={wt} archived={archived} removing={removing}>
+    <WorktreeMenu
+      hostId={hostId}
+      wt={wt}
+      archived={archived}
+      removing={removing}
+      label={clearable ? current : null}
+    >
       <div
         ref={rowRef}
         role="button"
@@ -797,7 +838,7 @@ function WorktreeRow({
             {title}
           </span>
           {wt.locked && <Lock aria-label="locked" className="size-3.5 shrink-0 text-dim" />}
-          {pr && !removing && <PullRequestIcon pr={pr} />}
+          {pr && !hidden.pr && !removing && <PullRequestIcon pr={pr} />}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
           ) : wt.isMain ? (

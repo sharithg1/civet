@@ -3,6 +3,7 @@ import type { PaneInfo, WorktreeInfo } from '../types'
 import {
   ago,
   cleanTitle,
+  clearedParts,
   compactWorktreeName,
   duration,
   fuzzy,
@@ -151,5 +152,30 @@ describe('session label from the first prompt', () => {
       'Fix copay'
     )
     expect(worktreeTask(wt, [claude({ title: '✳ Claude Code' })])).toBeNull()
+  })
+})
+
+describe('cleared labels', () => {
+  const cur = { branch: 'feat', task: 'Fix it', pr: '29:merged' }
+
+  it('hides each part only while it still matches', () => {
+    expect(clearedParts(undefined, cur)).toEqual({
+      branch: false,
+      task: false,
+      pr: false,
+      stale: false
+    })
+    expect(clearedParts(cur, cur)).toEqual({ branch: true, task: true, pr: true, stale: false })
+    // A new task and a reopened PR come back; the branch stays hidden.
+    expect(clearedParts(cur, { branch: 'feat', task: 'Next', pr: '29:open' })).toEqual({
+      branch: true,
+      task: false,
+      pr: false,
+      stale: false
+    })
+  })
+
+  it('is stale once nothing matches', () => {
+    expect(clearedParts(cur, { branch: 'other', task: null, pr: null }).stale).toBe(true)
   })
 })

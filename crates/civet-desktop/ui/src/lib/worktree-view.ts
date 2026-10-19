@@ -131,6 +131,26 @@ export function worktreeTask(wt: WorktreeInfo, panes: readonly PaneInfo[]): stri
   return null
 }
 
+/**
+ * What "Clear label" hid on a worktree row: the branch name, the task title
+ * and the PR badge (`number:state`) as they were when cleared.
+ */
+export type ClearedLabel = { branch: string | null; task: string | null; pr: string | null }
+
+/**
+ * Which parts of a row stay hidden: each one only while it still equals what
+ * was cleared, so a new task, PR (or PR state) or branch shows again. `stale`
+ * when nothing matches any more and the record can be dropped.
+ */
+export function clearedParts(
+  cleared: ClearedLabel | undefined,
+  cur: ClearedLabel
+): { branch: boolean; task: boolean; pr: boolean; stale: boolean } {
+  const hit = (k: keyof ClearedLabel) => !!cleared && cur[k] != null && cleared[k] === cur[k]
+  const parts = { branch: hit('branch'), task: hit('task'), pr: hit('pr') }
+  return { ...parts, stale: !!cleared && !parts.branch && !parts.task && !parts.pr }
+}
+
 const capitalize = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s)
 
 /** "claude" → "Claude"; custom commands use their program name. */

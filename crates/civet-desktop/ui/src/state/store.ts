@@ -16,7 +16,7 @@ import {
   setRatio
 } from '../layout/pane-tree'
 import { aggregateStatus } from '../lib/agent-status'
-import { promptLabel, worktreeBranch } from '../lib/worktree-view'
+import { promptLabel, worktreeBranch, type ClearedLabel } from '../lib/worktree-view'
 import { splitShellWords } from '../lib/shell-words'
 import {
   agentCommandFor,
@@ -1508,6 +1508,23 @@ export function allWorktrees(
         .flatMap((r) => (s.worktrees[wtKey(hostId, r.id)] ?? []).map((wt) => ({ hostId, wt })))
         .filter((x) => !opts.visibleOnly || !archived[wsKey(hostId, x.wt.id)])
     )
+}
+
+/**
+ * "Clear label": hide a worktree row's current branch name, task title and PR
+ * badge (null: show them again). Each part reappears once it changes; see
+ * `clearedParts`. A client pref, like archiving.
+ */
+export function setWorktreeLabelCleared(
+  hostId: string,
+  worktree: string,
+  cleared: ClearedLabel | null
+): void {
+  const key = wsKey(hostId, worktree)
+  const clearedLabels = { ...usePrefs.getState().clearedLabels }
+  if (cleared) clearedLabels[key] = cleared
+  else delete clearedLabels[key]
+  setPrefs({ clearedLabels })
 }
 
 /**
