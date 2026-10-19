@@ -1,9 +1,12 @@
-// Settings (Civet Settings design, linked from the v3 sidebar / ⌘,). Covers
-// the workspace (which stays mounted, so panes stay attached) until "Back to
-// workspace" / Esc. Only settings the UI can honour today are shown; startup
+// Settings (linked from the v3 sidebar / ⌘,), laid out like Cursor's: a
+// full-height nav column (Back, search, pages with icons) beside a centred
+// column of titled cards whose rows carry a label, a description and a
+// right-aligned control (dropdown, switch or field). Covers the workspace
+// (which stays mounted, so panes stay attached) until Back / Esc. Only settings the UI can honour today are shown; startup
 // restore, auto-reconnect, worktree location, idle-stop, permission mode and
 // updates need backend support (see the follow-up list in the report).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, Folder, Keyboard, Search, Server, Settings } from 'lucide-react'
 import {
   disconnectHost,
   reconnectHost,
@@ -15,7 +18,6 @@ import {
 import { resetPrefs, setPrefs, usePrefs, type Prefs } from '@/state/prefs'
 import { focusActiveTerminal } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
-import { useTitleBarInset } from '@/lib/window-chrome'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -26,20 +28,20 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { HostStateDot, hostMeta } from './Sidebar'
-import { ProjectTile, RingGlyph } from './chrome'
+import { ProjectTile } from './chrome'
 
-const NAV: [SettingsPage, string][] = [
-  ['general', 'General'],
-  ['hosts', 'Hosts'],
-  ['projects', 'Projects'],
-  ['keyboard', 'Keyboard']
+const NAV: [SettingsPage, string, ReactNode][] = [
+  ['general', 'General', <Settings key="general" />],
+  ['hosts', 'Hosts', <Server key="hosts" />],
+  ['projects', 'Projects', <Folder key="projects" />],
+  ['keyboard', 'Keyboard', <Keyboard key="keyboard" />]
 ]
 
 type Row = {
   id: keyof Prefs
   label: string
   desc?: string
-  kind: 'seg' | 'switch' | 'select' | 'input'
+  kind: 'choice' | 'switch' | 'select' | 'input'
   options?: [string, string][]
   ph?: string
 }
@@ -49,7 +51,7 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
     rows: [
       {
         id: 'worktreeLabel',
-        kind: 'seg',
+        kind: 'choice',
         label: 'Worktree names',
         desc: "Task title is the agent's terminal title. The other one is shown as secondary text on the selected worktree.",
         options: [
@@ -59,7 +61,7 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
       },
       {
         id: 'sidebarTabs',
-        kind: 'seg',
+        kind: 'choice',
         label: 'Show tabs under',
         options: [
           ['selected', 'Selected worktree'],
@@ -105,7 +107,7 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
     rows: [
       {
         id: 'prediction',
-        kind: 'seg',
+        kind: 'choice',
         label: 'Local echo prediction',
         desc: 'Auto shows what you type right away (underlined until the host confirms it) on connections slower than ~30 ms, like mosh. Off always waits for the host to echo.',
         options: [
@@ -141,7 +143,6 @@ export function SettingsView() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prefs = usePrefs()
   const searchRef = useRef<HTMLInputElement>(null)
-  const inset = useTitleBarInset()
   const close = () => {
     useStore.setState({ settings: null })
     setTimeout(focusActiveTerminal, 0)
@@ -180,36 +181,23 @@ export function SettingsView() {
     )
   })).filter((s) => s.rows.length)
   const showGeneral = page === 'general' || !!query
+  const title = showGeneral ? 'General' : NAV.find((n) => n[0] === page)![1]
   return (
-    <div
-      className="absolute inset-0 z-40 flex flex-col bg-chrome"
-      role="region"
-      aria-label="Settings"
-    >
-      <div
-        data-tauri-drag-region="deep"
-        className="flex h-10 shrink-0 items-center gap-3 border-b border-border px-3.5 select-none"
-        style={inset ? { paddingLeft: inset } : undefined}
-      >
-        <span className="text-sm font-semibold text-foreground">Civet</span>
-        <span className="text-dim">/</span>
-        <span className="text-sm text-muted-foreground">Settings</span>
-        <span className="flex-1" />
-        <span className="text-xs text-faint">{saved ? 'Saved' : 'Changes save automatically'}</span>
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <nav className="flex w-[220px] shrink-0 flex-col gap-0.5 border-r border-border p-2.5">
+    <div className="absolute inset-0 z-40 flex bg-background" role="region" aria-label="Settings">
+      <nav className="flex w-[260px] shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
+        <div data-tauri-drag-region="deep" className="h-10 shrink-0 select-none" />
+        <div className="flex min-h-0 flex-1 flex-col gap-px px-2">
           <button
             type="button"
             onClick={close}
-            className="mb-1 flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground hover:bg-hover hover:text-foreground"
+            title="Back (esc)"
+            className={cn(navItem, 'text-quiet')}
           >
-            ← Back to workspace
-            <span className="flex-1" />
-            <span className="font-mono text-2xs text-dim">esc</span>
+            <ArrowLeft />
+            Back
           </button>
-          <div className="mb-2 flex h-8 items-center gap-2 rounded-lg border border-border bg-field px-2.5">
-            <RingGlyph />
+          <div className="my-2 flex h-[30px] items-center gap-2 rounded-md border border-border bg-field px-2 focus-within:border-border-strong">
+            <Search className="size-4 shrink-0 text-faint" />
             <input
               ref={searchRef}
               value={q}
@@ -217,46 +205,42 @@ export function SettingsView() {
                 setQ(e.target.value)
                 if (e.target.value) useStore.setState({ settings: 'general' })
               }}
-              placeholder="Search settings"
+              placeholder="Search Settings"
               aria-label="Search settings"
-              className="min-w-0 flex-1 border-none bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 border-none bg-transparent text-base text-foreground outline-none placeholder:text-faint"
             />
           </div>
-          {NAV.map(([id, label]) => (
+          {NAV.map(([id, label, icon]) => (
             <button
               key={id}
               type="button"
+              aria-current={page === id && !query ? 'page' : undefined}
               onClick={() => {
                 setQ('')
                 useStore.setState({ settings: id })
               }}
               className={cn(
-                'flex h-7 cursor-pointer items-center rounded-md px-2.5 text-sm',
-                page === id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-hover'
+                navItem,
+                page === id && !query && 'bg-sidebar-accent text-foreground hover:bg-sidebar-accent'
               )}
             >
+              {icon}
               {label}
             </button>
           ))}
-        </nav>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-background px-10 py-8">
-          <div className="max-w-[640px]">
-            <h1 className="text-xl font-semibold text-foreground">
-              {showGeneral ? 'General' : NAV.find((n) => n[0] === page)![1]}
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {showGeneral
-                ? 'Switching, sidebar and defaults for new sessions.'
-                : page === 'hosts'
-                  ? 'Machines running civetd. Closing Civet detaches; sessions keep running.'
-                  : page === 'projects'
-                    ? 'Repositories on each host, and their saved on-create steps.'
-                    : 'Shortcuts work everywhere, including inside terminals.'}
-            </p>
+        </div>
+        <div className="flex h-12 shrink-0 items-center px-4 text-xs text-faint">
+          {saved ? 'Saved' : 'Changes save automatically'}
+        </div>
+      </nav>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div data-tauri-drag-region="deep" className="h-10 shrink-0 select-none" />
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-16">
+          <div className="mx-auto max-w-[780px] pt-4">
+            <h1 className="px-2 text-lg font-medium text-foreground">{title}</h1>
             {showGeneral &&
               sections.map((sec) => (
-                <section key={sec.title} className="mt-7">
-                  <h2 className="mb-2.5 text-sm font-semibold text-foreground">{sec.title}</h2>
+                <Section key={sec.title} title={sec.title}>
                   <Card>
                     {sec.rows.map((r) => (
                       <SettingRow
@@ -267,10 +251,10 @@ export function SettingsView() {
                       />
                     ))}
                   </Card>
-                </section>
+                </Section>
               ))}
             {showGeneral && !sections.length && (
-              <p className="mt-7 text-sm text-faint">No settings match.</p>
+              <p className="mt-6 px-2 text-sm text-faint">No settings match.</p>
             )}
             {showGeneral && !query && (
               <button
@@ -279,7 +263,7 @@ export function SettingsView() {
                   resetPrefs()
                   setSaved(true)
                 }}
-                className="mt-5 h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover"
+                className={cn(btn, 'mt-6')}
               >
                 Reset to defaults
               </button>
@@ -287,15 +271,17 @@ export function SettingsView() {
             {!showGeneral && page === 'hosts' && <HostsPage />}
             {!showGeneral && page === 'projects' && <ProjectsPage />}
             {!showGeneral && page === 'keyboard' && (
-              <Card className="mt-7">
-                {KEYS.map(([k, label]) => (
-                  <div key={k} className="flex items-center px-4 py-2.5 text-sm text-body">
-                    {label}
-                    <span className="flex-1" />
-                    <span className="font-mono text-xs text-muted-foreground">{k}</span>
-                  </div>
-                ))}
-              </Card>
+              <Section title="Shortcuts work everywhere, including inside terminals">
+                <Card>
+                  {KEYS.map(([k, label]) => (
+                    <div key={k} className="flex items-center px-1 py-2.5 text-sm text-body">
+                      {label}
+                      <span className="flex-1" />
+                      <span className="font-mono text-xs text-muted-foreground">{k}</span>
+                    </div>
+                  ))}
+                </Card>
+              </Section>
             )}
           </div>
         </div>
@@ -304,14 +290,25 @@ export function SettingsView() {
   )
 }
 
-function Card({ children, className }: { children: React.ReactNode; className?: string }) {
+const navItem =
+  'flex h-[30px] cursor-pointer items-center gap-2.5 rounded-md px-2 text-left text-base text-soft hover:bg-hover hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-quiet'
+
+const btn =
+  'h-7 cursor-pointer rounded-md border border-border px-2.5 text-sm text-soft hover:bg-hover hover:text-foreground'
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div
-      className={cn(
-        'divide-y divide-white/[0.08] rounded-xl border border-border bg-chrome',
-        className
-      )}
-    >
+    <section className="mt-6">
+      <h2 className="mb-2 px-2 text-sm text-muted-foreground">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+/** Rows inset from the card edge, split by hairlines that stop at the inset (as in Cursor). */
+function Card({ children }: { children: ReactNode }) {
+  return (
+    <div className="divide-y divide-foreground/[0.07] rounded-lg bg-chrome px-3 dark:bg-card">
       {children}
     </div>
   )
@@ -327,51 +324,23 @@ function SettingRow({
   onChange: (v: unknown) => void
 }) {
   return (
-    <div className="flex items-center gap-6 px-4 py-3.5">
+    <div className="flex min-h-[60px] items-center gap-6 px-1 py-2.5">
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium text-foreground">{row.label}</div>
-        {row.desc && (
-          <div className="mt-1 text-xs leading-normal text-muted-foreground">{row.desc}</div>
-        )}
+        <div className="text-sm text-foreground">{row.label}</div>
+        {row.desc && <div className="mt-0.5 text-sm text-muted-foreground">{row.desc}</div>}
       </div>
-      {row.kind === 'seg' && (
-        <div
-          className="flex shrink-0 gap-0.5 rounded-md bg-muted p-0.5"
-          role="radiogroup"
-          aria-label={row.label}
+      {(row.kind === 'select' || row.kind === 'choice') && (
+        <Select
+          value={String(value)}
+          onValueChange={(v) => onChange(row.kind === 'select' ? Number(v) : v)}
         >
-          {row.options!.map(([k, l]) => (
-            <button
-              key={k}
-              type="button"
-              role="radio"
-              aria-checked={value === k}
-              onClick={() => onChange(k)}
-              className={cn(
-                'h-6 cursor-pointer rounded-sm px-2.5 text-sm',
-                value === k
-                  ? 'bg-field text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.4)]'
-                  : 'text-muted-foreground'
-              )}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
-      )}
-      {row.kind === 'switch' && (
-        <Switch
-          checked={value === true}
-          onCheckedChange={(v) => onChange(v)}
-          aria-label={row.label}
-        />
-      )}
-      {row.kind === 'select' && (
-        <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>
-          <SelectTrigger aria-label={row.label} className="h-8 w-[170px] text-sm">
+          <SelectTrigger
+            aria-label={row.label}
+            className="h-7 gap-1 rounded-md border-border bg-transparent px-2 text-sm text-foreground shadow-none dark:bg-transparent dark:hover:bg-hover [&_svg]:size-3.5"
+          >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper" align="end">
             {row.options!.map(([k, l]) => (
               <SelectItem key={k} value={k}>
                 {l}
@@ -380,6 +349,14 @@ function SettingRow({
           </SelectContent>
         </Select>
       )}
+      {row.kind === 'switch' && (
+        <Switch
+          checked={value === true}
+          onCheckedChange={(v) => onChange(v)}
+          aria-label={row.label}
+          className="h-5 w-9 data-[state=checked]:bg-status-ok dark:data-[state=unchecked]:bg-input [&>span]:size-4 [&>span]:bg-white [&>span]:data-[state=checked]:translate-x-[17px] [&>span]:data-[state=unchecked]:translate-x-px dark:[&>span]:data-[state=checked]:bg-white dark:[&>span]:data-[state=unchecked]:bg-white"
+        />
+      )}
       {row.kind === 'input' && (
         <Input
           aria-label={row.label}
@@ -387,7 +364,7 @@ function SettingRow({
           placeholder={row.ph}
           spellCheck={false}
           onChange={(e) => onChange(e.target.value)}
-          className="h-8 w-[240px] rounded-[5px] border-border bg-field font-mono text-sm shadow-none dark:bg-field"
+          className="h-7 w-[220px] rounded-md border-border bg-transparent px-2 font-mono text-sm shadow-none dark:bg-transparent"
         />
       )}
     </div>
@@ -397,16 +374,14 @@ function SettingRow({
 function HostsPage() {
   const hostOrder = useStore((s) => s.hostOrder)
   const hosts = useStore((s) => s.hosts)
-  const btn =
-    'h-[26px] cursor-pointer rounded-[5px] border border-border px-2.5 text-xs text-soft hover:bg-hover'
   return (
-    <>
-      <Card className="mt-7">
+    <Section title="Machines running civetd. Closing Civet detaches; sessions keep running">
+      <Card>
         {hostOrder.map((id) => {
           const h = hosts[id]
           if (!h) return null
           return (
-            <div key={id} className="flex items-center gap-3 px-4 py-3">
+            <div key={id} className="flex items-center gap-3 px-1 py-3">
               <HostStateDot host={h} />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium text-foreground">{h.label}</div>
@@ -444,16 +419,16 @@ function HostsPage() {
             </div>
           )
         })}
-        {hostOrder.length === 0 && <div className="px-4 py-3 text-sm text-faint">No hosts.</div>}
+        {hostOrder.length === 0 && <div className="px-1 py-3 text-sm text-faint">No hosts.</div>}
       </Card>
       <button
         type="button"
-        className={cn(btn, 'mt-4')}
+        className={cn(btn, 'mt-3')}
         onClick={() => useStore.setState({ showConnect: true })}
       >
         Connect a host…
       </button>
-    </>
+    </Section>
   )
 }
 
@@ -463,38 +438,41 @@ function ProjectsPage() {
   const repos = useStore((s) => s.repos)
   const steps = usePrefs((s) => s.createSteps)
   return (
-    <Card className="mt-7">
-      {hostOrder.flatMap((h) =>
-        (repos[h] ?? []).map((r) => {
-          const saved = steps[`${h}\u0000${r.id}`]
-          return (
-            <div key={`${h}:${r.id}`} className="flex items-center gap-3 px-4 py-3">
-              <ProjectTile name={r.name} />
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-foreground">
-                  {r.name} <span className="font-normal text-faint">· {hosts[h]?.label ?? h}</span>
+    <Section title="Repositories and folders on each host, and their saved on-create steps">
+      <Card>
+        {hostOrder.flatMap((h) =>
+          (repos[h] ?? []).map((r) => {
+            const saved = steps[`${h}\u0000${r.id}`]
+            return (
+              <div key={`${h}:${r.id}`} className="flex items-center gap-3 px-1 py-3">
+                <ProjectTile name={r.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-foreground">
+                    {r.name}{' '}
+                    <span className="font-normal text-faint">· {hosts[h]?.label ?? h}</span>
+                  </div>
+                  <div className="truncate font-mono text-xs text-faint">
+                    {r.path} ·{' '}
+                    {r.kind === 'folder' ? 'folder' : `default ${r.defaultBranch ?? 'HEAD'}`}
+                  </div>
                 </div>
-                <div className="truncate font-mono text-xs text-faint">
-                  {r.path} ·{' '}
-                  {r.kind === 'folder' ? 'folder' : `default ${r.defaultBranch ?? 'HEAD'}`}
-                </div>
+                {r.kind === 'folder' ? (
+                  <div className="text-xs text-muted-foreground">files only</div>
+                ) : (
+                  <div
+                    className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                    title="Saved on-create steps"
+                  >
+                    {saved
+                      ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
+                      : 'default steps'}
+                  </div>
+                )}
               </div>
-              {r.kind === 'folder' ? (
-                <div className="text-xs text-muted-foreground">files only</div>
-              ) : (
-                <div
-                  className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
-                  title="Saved on-create steps"
-                >
-                  {saved
-                    ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
-                    : 'default steps'}
-                </div>
-              )}
-            </div>
-          )
-        })
-      )}
-    </Card>
+            )
+          })
+        )}
+      </Card>
+    </Section>
   )
 }
