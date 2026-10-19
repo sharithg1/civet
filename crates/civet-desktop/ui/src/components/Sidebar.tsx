@@ -15,7 +15,7 @@
 // (not a git repository) is a single row that selects its root: it has file
 // tabs only, no worktrees or sessions.
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Archive,
   ArchiveRestore,
@@ -545,6 +545,16 @@ function ProjectGroup({
   const list = worktrees ?? []
   const live = list.filter((wt) => !archivedKeys[wsKey(hostId, wt.id)])
   const archived = list.filter((wt) => archivedKeys[wsKey(hostId, wt.id)])
+  // Selecting an archived worktree (from the switcher, say) opens the group,
+  // again on every re-selection: `seen` is stamped by each selectWorktree.
+  const archivedSelectedAt = useStore((s) =>
+    s.active?.hostId === hostId && archived.some((wt) => wt.id === s.active!.worktree)
+      ? s.seen[wsKey(hostId, s.active.worktree)]
+      : undefined
+  )
+  useEffect(() => {
+    if (archivedSelectedAt != null) setShowArchived(true)
+  }, [archivedSelectedAt])
   return (
     <div
       data-reorder-id={repoId}
@@ -732,9 +742,16 @@ function WorktreeRow({
     null
   )
   const showTabs = tabs.length > 0 && (tabsPref === 'all' || (tabsPref === 'selected' && selected))
+  // Scroll into view on every selection, re-selecting this row included.
+  const selectedAt = useStore((s) => (selected ? s.seen[key] : undefined))
+  const rowRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (selectedAt != null) rowRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [selectedAt])
   return (
     <WorktreeMenu hostId={hostId} wt={wt} archived={archived} removing={removing}>
       <div
+        ref={rowRef}
         role="button"
         tabIndex={-1}
         data-wt={wt.id}

@@ -403,6 +403,33 @@ describe('store', () => {
     })
   })
 
+  it('selecting a worktree expands its collapsed host and project', async () => {
+    const { usePrefs } = await import('./prefs')
+    const wt: WorktreeInfo = {
+      id: '/feat',
+      repo: 'r',
+      path: '/feat',
+      branch: 'feat',
+      head: null,
+      isMain: false,
+      locked: false
+    }
+    useStore.setState({
+      repos: { h: [{ id: 'r', name: 'r', path: '/r', defaultBranch: 'main' }] },
+      worktrees: { [store.wtKey('h', 'r')]: [wt] },
+      workspaces: {},
+      mru: []
+    })
+    setPrefs({
+      collapsedHosts: { h: true },
+      collapsedRepos: { [store.wtKey('h', 'r')]: true, [store.wtKey('h', 'other')]: true }
+    })
+    store.selectWorktree('h', '/feat')
+    expect(usePrefs.getState().collapsedHosts).toEqual({})
+    expect(usePrefs.getState().collapsedRepos).toEqual({ [store.wtKey('h', 'other')]: true })
+    setPrefs({ collapsedHosts: {}, collapsedRepos: {} })
+  })
+
   describe('worktree list sync', () => {
     const repo: RepoInfo = { id: 'r', name: 'r', path: '/r', defaultBranch: 'main' }
     const wt = (id: string, patch: Partial<WorktreeInfo> = {}): WorktreeInfo => ({
