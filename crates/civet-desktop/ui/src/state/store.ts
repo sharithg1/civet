@@ -860,6 +860,7 @@ function updateWorkspace(key: string, fn: (ws: Workspace) => Workspace): void {
 
 export function selectWorktree(hostId: string, worktree: string): void {
   const key = wsKey(hostId, worktree)
+  revealWorktree(hostId, worktree)
   set((s) => {
     const unread = { ...s.unread }
     delete unread[key]
@@ -883,6 +884,16 @@ export function selectWorktree(hostId: string, worktree: string): void {
     const first = get().workspaces[key]?.tabs[0]
     if (first) updateWorkspace(key, (w) => ({ ...w, activeTab: first.id }))
   }
+}
+
+/** Expand the sidebar host and project holding a worktree, so the selected row is visible. */
+function revealWorktree(hostId: string, worktree: string): void {
+  const { collapsedHosts, collapsedRepos } = usePrefs.getState()
+  if (collapsedHosts[hostId]) toggleHostCollapsed(hostId)
+  const repo = (get().repos[hostId] ?? []).find((r) =>
+    get().worktrees[wtKey(hostId, r.id)]?.some((w) => w.id === worktree)
+  )
+  if (repo && collapsedRepos[wtKey(hostId, repo.id)]) toggleRepoCollapsed(hostId, repo.id)
 }
 
 export function findTabOfPane(hostId: string, pane: PaneId): { key: string; tab: PaneTab } | null {
