@@ -1,8 +1,8 @@
 // Host stats of the active worktree's host (title bar indicator, StatsView).
 //
 // Polled from the daemon (`host_stats`) every sample interval while the
-// host is connected and its daemon has stats; with processes while the stats
-// view is open. Each host keeps its history here when another one becomes
+// host is connected, its daemon has stats and Settings shows them
+// (`showHostStats`); with processes while the stats view is open. Each host keeps its history here when another one becomes
 // active, and the daemon fills in what was missed on the way back.
 
 import { create } from 'zustand'
@@ -10,6 +10,7 @@ import { CivetError, type CivetBackend } from '@/backend'
 import { mergeStats, newestSeq } from '@/lib/stats'
 import type { HostStats } from '@/types'
 import { versionAtLeast } from './fileops'
+import { onPrefsChange, usePrefs } from './prefs'
 import { useStore, type HostView } from './store'
 
 /** Oldest civetd with `HostStats` (civet_proto::HOST_STATS_MIN_DAEMON_VERSION). */
@@ -101,7 +102,8 @@ export function initStats(be: CivetBackend): () => void {
   const sync = () => {
     const s = useStore.getState()
     const hostId = s.active?.hostId ?? null
-    const want = hostId && hasHostStats(s.hosts[hostId]) ? hostId : null
+    const on = usePrefs.getState().showHostStats
+    const want = on && hostId && hasHostStats(s.hosts[hostId]) ? hostId : null
     if (want === current) return
     if (want) start(want)
     else stop()
@@ -111,8 +113,14 @@ export function initStats(be: CivetBackend): () => void {
     if (s.active?.hostId !== prev.active?.hostId || s.hosts !== prev.hosts) sync()
     if (s.statsOpen && !prev.statsOpen) pollNow()
   })
+  const unsubPrefs = onPrefsChange((next, prev) => {
+    if (next.showHostStats === prev.showHostStats) return
+    if (!next.showHostStats) useStore.setState({ statsOpen: false })
+    sync()
+  })
   return () => {
     unsub()
+    unsubPrefs()
     stop()
   }
 }

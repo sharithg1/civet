@@ -103,6 +103,23 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
     ]
   },
   {
+    title: 'Host stats',
+    rows: [
+      {
+        id: 'showHostStats',
+        kind: 'switch',
+        label: 'Show host stats in the title bar',
+        desc: "CPU and memory of the selected worktree's host; click it for the full stats view. Off also stops asking the host for them."
+      },
+      {
+        id: 'hostStatsSparkline',
+        kind: 'switch',
+        label: 'CPU graph in the title bar',
+        desc: 'The last minute of CPU use next to the numbers.'
+      }
+    ]
+  },
+  {
     title: 'Terminal',
     rows: [
       {

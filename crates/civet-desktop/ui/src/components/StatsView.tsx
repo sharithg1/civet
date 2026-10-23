@@ -21,6 +21,7 @@ import {
   type UsageGroup
 } from '@/lib/stats'
 import { agentName, compactWorktreeName, paneWhat, worktreeBranch } from '@/lib/worktree-view'
+import { usePrefs } from '@/state/prefs'
 import { hasHostStats, useHostStats } from '@/state/stats'
 import { useStore, wtKey } from '@/state/store'
 import type { HostStats, PaneInfo, ProcessUsage, StatsSample, WorktreeInfo } from '@/types'
@@ -32,14 +33,19 @@ const INDICATOR_SAMPLES = 30
 // Title bar indicator
 // ---------------------------------------------------------------------------
 
-/** Right end of the title bar; toggles the stats view. Hidden until stats arrive. */
+/**
+ * Right end of the title bar; toggles the stats view. Hidden until stats
+ * arrive, and when Settings turns it off (`showHostStats`).
+ */
 export function StatsIndicator() {
   const hostId = useStore((s) => s.active?.hostId ?? null)
   const supported = useStore((s) => (hostId ? hasHostStats(s.hosts[hostId]) : false))
   const open = useStore((s) => s.statsOpen)
+  const show = usePrefs((p) => p.showHostStats)
+  const sparkline = usePrefs((p) => p.hostStatsSparkline)
   const stats = useHostStats((s) => (hostId ? s.hosts[hostId]?.stats : null))
   const latest = stats?.samples.at(-1)
-  if (!hostId || !supported || !stats || !latest) return null
+  if (!show || !hostId || !supported || !stats || !latest) return null
   const warn = warnings(stats)
   const cpu = stats.samples.slice(-INDICATOR_SAMPLES).map((s) => s.cpu)
   const tooltip = [
@@ -60,7 +66,9 @@ export function StatsIndicator() {
         open ? 'bg-card text-foreground' : 'text-quiet hover:bg-hover hover:text-soft'
       )}
     >
-      <Sparkline values={cpu} slots={INDICATOR_SAMPLES} max={1000} className="h-3.5 w-9" />
+      {sparkline && (
+        <Sparkline values={cpu} slots={INDICATOR_SAMPLES} max={1000} className="h-3.5 w-9" />
+      )}
       <span className="w-8 text-right">{formatPermille(latest.cpu)}</span>
       <span className="text-dim">·</span>
       <span>{formatBytes(latest.memUsed)}</span>
