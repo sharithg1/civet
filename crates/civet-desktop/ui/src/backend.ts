@@ -48,7 +48,8 @@ import type {
   GitDiffInfo,
   GitBranchInfo,
   GitAction,
-  GitDiscardSnapshot
+  GitDiscardSnapshot,
+  HostStats
 } from './types'
 
 export type Unlisten = () => void
@@ -118,6 +119,12 @@ export interface CivetBackend {
    * repositories flagged, for completing a folder path (civetd >= 0.1.18).
    */
   listDirs(hostId: string, path: string): Promise<HostDirListing>
+  /**
+   * The host's CPU / memory / disk / network / GPU use: samples newer than
+   * `since` (all kept without it), plus processes by pane if `processes`
+   * (civetd >= 0.2.1).
+   */
+  hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
@@ -325,6 +332,9 @@ export class TauriBackend implements CivetBackend {
   }
   listDirs(hostId: string, path: string) {
     return this.call<HostDirListing>('list_dirs', { hostId, path })
+  }
+  hostStats(hostId: string, since: number | null, processes: boolean) {
+    return this.call<HostStats>('host_stats', { hostId, since, processes })
   }
   listWorktrees(hostId: string, repo: RepoId) {
     return this.call<WorktreeInfo[]>('list_worktrees', { hostId, repo })

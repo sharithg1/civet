@@ -18,6 +18,8 @@
 //!   [`Event`]s.
 //! * [`ports`]: listening-port updates and TCP port forwarding, each on
 //!   their own QUIC streams.
+//! * [`stats`]: host resource stats ([`HostStats`]), polled by the
+//!   stats view.
 //! * [`term`]: terminal traffic: [`InputMessage`] (client keystrokes with
 //!   sequence numbers), [`ScreenUpdate`] (server screen diffs as VT bytes),
 //!   [`ScreenAck`], and scrollback paging.
@@ -54,6 +56,7 @@ pub mod ids;
 pub mod keys;
 pub mod messages;
 pub mod ports;
+pub mod stats;
 pub mod term;
 
 pub use agent::{
@@ -78,6 +81,10 @@ pub use ids::{ClientId, PaneId, RepoId, RequestId, WorktreeId};
 pub use keys::{CertFingerprint, ResumeToken, SessionKey};
 pub use messages::{ClientMessage, ServerMessage, StreamOpen};
 pub use ports::{ForwardReply, ListeningPort, MAX_PORT_COMMAND_CHARS, PortsUpdate};
+pub use stats::{
+    DiskSpace, GpuInfo, HostStats, MAX_STATS_COMMAND_CHARS, MAX_STATS_PROCESSES, MAX_STATS_SAMPLES,
+    ProcessUsage, StatsSample,
+};
 pub use term::{
     ECHO_ACK_DELAY_MS, FULL_REPLAY_LINES, InputMessage, MAX_INFLIGHT_UPDATES, MAX_REPLAY_LINES,
     MAX_TERM_COLS, MAX_TERM_ROWS, ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage,
@@ -156,6 +163,10 @@ pub const PROJECTS_MIN_DAEMON_VERSION: &str = "0.1.17";
 /// Oldest daemon that understands [`Request::ListDirs`] (appended within
 /// protocol 1 after the project requests).
 pub const LIST_DIRS_MIN_DAEMON_VERSION: &str = "0.1.18";
+
+/// Oldest daemon that understands [`Request::HostStats`] (appended within
+/// protocol 1 after [`Request::ListDirs`]).
+pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

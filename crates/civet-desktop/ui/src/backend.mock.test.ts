@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MockBackend } from './backend.mock'
+import { MOCK_VERSION, MockBackend } from './backend.mock'
 import { PaneStream, type TerminalSink } from './terminal/pane-stream'
 import { RecordKind, isFull, parseRecords, type TermRecord } from './terminal/records'
 import type { HostStateEvent } from './types'
@@ -176,7 +176,11 @@ describe('MockBackend', () => {
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box', port: 2222 }, 'ssh')
     await vi.runAllTimersAsync()
     const s = await p
-    expect(s.upgrade).toEqual({ runningVersion: '0.1.1', availableVersion: '0.1.18', livePanes: 7 })
+    expect(s.upgrade).toEqual({
+      runningVersion: '0.1.1',
+      availableVersion: MOCK_VERSION,
+      livePanes: 7
+    })
     expect(states.at(-1)!.upgrade).toEqual(s.upgrade)
     // Reconnect keeps the stored target and transport.
     b.simulateFailure('old-box', 'lost')
@@ -190,7 +194,7 @@ describe('MockBackend', () => {
     await vi.runAllTimersAsync()
     const after = await restarted
     expect(after.upgrade).toBeNull()
-    expect(after.daemonVersion).toBe('0.1.18')
+    expect(after.daemonVersion).toBe(MOCK_VERSION)
     expect(after.instanceId).not.toBe(s.instanceId)
     expect(await b.listPanes('old-box')).toEqual([])
     await expect(b.reconnectHost('nope')).rejects.toMatchObject({ code: 'noSuchHost' })
@@ -281,6 +285,34 @@ describe('MockBackend folders', () => {
     await vi.runAllTimersAsync()
     await p
     await expect(b.listDirs('pre-git', '~')).rejects.toMatchObject({ code: 'unsupported' })
+  })
+})
+
+describe('MockBackend host stats', () => {
+  it('serves a history, then only newer samples, and processes on request', async () => {
+    const { b } = await connected()
+    const stats = async (since: number | null, processes: boolean) => {
+      const p = b.hostStats('devbox', since, processes)
+      await vi.advanceTimersByTimeAsync(50)
+      return p
+    }
+    const first = await stats(null, false)
+    expect(first.samples.length).toBeGreaterThan(100)
+    expect(first.processes).toEqual([])
+    const newest = first.samples.at(-1)!.seq
+    await vi.advanceTimersByTimeAsync(3950)
+    const next = await stats(newest, true)
+    expect(next.samples.map((s) => s.seq)).toEqual([newest + 1, newest + 2])
+    expect(next.processes.some((p) => p.pane != null && p.worktree != null)).toBe(true)
+    expect(next.processes.at(-1)!.pane).toBeNull()
+  })
+
+  it('is unsupported before civetd 0.2.1', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.hostStats('pre-git', null, false)).rejects.toMatchObject({ code: 'unsupported' })
   })
 })
 

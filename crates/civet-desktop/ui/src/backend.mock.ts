@@ -64,11 +64,14 @@ import type {
   GitDiffInfo,
   GitDiscardSnapshot,
   GitFileChange,
-  GitStatusInfo
+  GitStatusInfo,
+  HostStats,
+  ProcessUsage,
+  StatsSample
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.1.18'
+export const MOCK_VERSION = '0.2.1'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -76,6 +79,8 @@ export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
 const MOCK_PROJECTS_VERSION = '0.1.17'
 /** Mock daemons list host directories from this version on (like LIST_DIRS_MIN_DAEMON_VERSION). */
 const MOCK_LIST_DIRS_VERSION = '0.1.18'
+/** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
+const MOCK_HOST_STATS_VERSION = '0.2.1'
 
 /** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
 function versionAtLeast(version: string, min: string): boolean {
@@ -841,6 +846,8 @@ export class MockBackend implements CivetBackend {
   /** hostId → remote port → forward */
   private forwards = new Map<string, Map<number, ForwardView>>()
   private lastPorts = new Map<string, string>()
+  /** hostId → fake stats history (`hostStats`) */
+  private stats = new Map<string, { samples: StatsSample[]; next: number; t0: number }>()
   /**
    * Last text copied (or set with `__civetMockSetClipboard`), read back when
    * the browser denies or empties clipboard reads (headless Chrome).
@@ -1241,6 +1248,119 @@ export class MockBackend implements CivetBackend {
     ])
     h.event('reposChanged')
     return repo
+  }
+
+  async hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats> {
+    const h = this.host(hostId)
+    const v = h.summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_HOST_STATS_VERSION))
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; this needs v${MOCK_HOST_STATS_VERSION} or newer (restart the daemon to upgrade)`
+      )
+    if (h.summary.state !== 'connected')
+      throw new CivetError('notConnected', `${hostId} is not connected`)
+    await sleep(20)
+    const intervalMs = 2000
+    const GiB = 2 ** 30
+    const memTotal = 64 * GiB
+    const now = Date.now()
+    let st = this.stats.get(hostId)
+    if (!st) {
+      // Ten minutes of history, so graphs open full (like the daemon's ring).
+      st = { samples: [], next: 0, t0: now - 300 * intervalMs }
+      this.stats.set(hostId, st)
+    }
+    // A wave per metric plus a busy spell, deterministic in time.
+    const sample = (seq: number): StatsSample => {
+      const t = seq / 15
+      const wave = (phase: number, amp: number) => Math.sin(t + phase) * amp
+      const busy = seq % 120 > 90 ? 0.35 : 0
+      const cpu = Math.round(Math.min(1, 0.3 + busy + wave(0, 0.18) + wave(2.1, 0.07)) * 1000)
+      return {
+        seq,
+        atMs: st!.t0 + seq * intervalMs,
+        cpu: Math.max(20, cpu),
+        memUsed: Math.round((0.62 + wave(0.7, 0.05) + busy / 4) * memTotal),
+        swapUsed: Math.round(0.4 * GiB),
+        netRx: Math.round(Math.max(0, 6e6 + wave(1.3, 5e6) + busy * 2e7)),
+        netTx: Math.round(Math.max(0, 1.2e6 + wave(2.6, 1e6))),
+        diskRead: Math.round(Math.max(0, 3e7 + wave(0.2, 2.5e7) + busy * 1e8)),
+        diskWrite: Math.round(Math.max(0, 1.5e7 + wave(3.3, 1.2e7))),
+        gpus: [Math.round(Math.min(1, 0.55 + busy + wave(1.9, 0.3)) * 1000)]
+      }
+    }
+    const due = Math.floor((now - st.t0) / intervalMs)
+    while (st.next <= due) {
+      st.samples.push(sample(st.next++))
+      if (st.samples.length > 300) st.samples.shift()
+    }
+    const newest = st.samples.at(-1)!
+    const samples =
+      since != null && since <= newest.seq
+        ? st.samples.filter((x) => x.seq > since)
+        : [...st.samples]
+    const cores = Array.from({ length: 16 }, (_, i) =>
+      Math.round(Math.max(0, Math.min(1000, newest.cpu + Math.sin(newest.seq / 4 + i * 1.7) * 350)))
+    )
+    return {
+      intervalMs,
+      samples,
+      cores,
+      memTotal,
+      swapTotal: 8 * GiB,
+      load: [Math.round(newest.cpu * 1.6), 610, 402],
+      uptimeSecs: Math.round((now - st.t0) / 1000) + 12 * 86400,
+      disks: [
+        { mount: '/', total: 1000 * GiB, available: 214 * GiB },
+        { mount: '/data', total: 2000 * GiB, available: 90 * GiB },
+        { mount: '/boot', total: 1 * GiB, available: 0.7 * GiB }
+      ],
+      gpus: [{ name: 'NVIDIA A10G', memUsed: 19.6 * GiB, memTotal: 24 * GiB }],
+      processes: processes ? this.mockProcesses(h, newest.seq) : []
+    }
+  }
+
+  /** A few processes per live pane (agents build things), then some host daemons. */
+  private mockProcesses(h: MockHost, seq: number): ProcessUsage[] {
+    const MiB = 2 ** 20
+    const out: ProcessUsage[] = []
+    const jitter = (n: number, i: number) => Math.round(n * (1 + Math.sin(seq / 3 + i) * 0.25))
+    const live = [...h.panes.values()].map((p) => p.info).filter((p) => !p.exited)
+    live.forEach((p, i) => {
+      const base = 5000 + p.id * 10
+      const own = (pid: number, name: string, command: string, cpu: number, mem: number) =>
+        out.push({ pid, name, command, cpu, mem, pane: p.id, worktree: p.worktree })
+      if (p.agent) {
+        own(base, p.agent, p.command.join(' ') || p.agent, jitter(80, i), 420 * MiB)
+        if (i % 2 === 0) {
+          own(base + 1, 'cargo', 'cargo test --workspace', jitter(1400, i), 900 * MiB)
+          own(
+            base + 2,
+            'rustc',
+            'rustc --crate-name civet_session --edition=2024',
+            jitter(980, i + 1),
+            1300 * MiB
+          )
+        } else {
+          own(base + 1, 'node', 'node node_modules/.bin/vite --port 5173', jitter(60, i), 310 * MiB)
+        }
+      } else {
+        own(base, 'zsh', '-zsh', 0, 9 * MiB)
+      }
+    })
+    const host = (pid: number, name: string, command: string, cpu: number, mem: number) =>
+      out.push({ pid, name, command, cpu, mem, pane: null, worktree: null })
+    host(
+      812,
+      'postgres',
+      '/usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main',
+      jitter(120, 7),
+      2100 * MiB
+    )
+    host(1024, 'dockerd', '/usr/bin/dockerd -H fd://', jitter(40, 3), 180 * MiB)
+    host(733, 'sshd', 'sshd: /usr/sbin/sshd -D', 0, 7 * MiB)
+    return out.sort((a, b) => Number(b.pane != null) - Number(a.pane != null) || b.cpu - a.cpu)
   }
 
   async listDirs(hostId: string, path: string): Promise<HostDirListing> {

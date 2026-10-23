@@ -70,6 +70,10 @@ export type Prefs = {
   showIgnoredFiles: boolean
   /** The one-time "⇧⌘V saves big pastes as a file" tip was shown. */
   pasteAsFileTipShown: boolean
+  /** The title bar's host stats indicator (and polling the host for it). */
+  showHostStats: boolean
+  /** The indicator's CPU sparkline. */
+  hostStatsSparkline: boolean
 }
 
 /** Agent CLIs with their own tab command (⌥C / ⌥X) and on-create step kind. */
@@ -126,7 +130,9 @@ export const DEFAULT_PREFS: Prefs = {
   pinnedForwards: {},
   expandedDirs: {},
   showIgnoredFiles: false,
-  pasteAsFileTipShown: false
+  pasteAsFileTipShown: false,
+  showHostStats: true,
+  hostStatsSparkline: true
 }
 
 const KEY = 'civet.prefs.v1'

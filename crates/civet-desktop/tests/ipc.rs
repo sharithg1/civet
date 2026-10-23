@@ -171,6 +171,10 @@ fn every_command_through_ipc() {
         ("add_repo", json!({ "hostId": "x", "path": "/r" })),
         ("remove_repo", json!({ "hostId": "x", "repo": "r" })),
         ("list_dirs", json!({ "hostId": "x", "path": "~/src" })),
+        (
+            "host_stats",
+            json!({ "hostId": "x", "since": null, "processes": true }),
+        ),
         ("list_worktrees", json!({ "hostId": "x", "repo": "r" })),
         ("list_pull_requests", json!({ "hostId": "x", "repo": "r" })),
         ("git_status", json!({ "hostId": "x", "worktree": "/w" })),

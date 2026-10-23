@@ -1,5 +1,6 @@
 // Main area for the selected worktree: connection banner and the active
-// tab's split layout, or a file or diff tab's contents (tabs live in the TitleBar). Only the active tab is
+// tab's split layout, or a file or diff tab's contents (tabs live in the TitleBar),
+// or the host stats view while it is open (StatsView.tsx). Only the active tab is
 // mounted; switching tabs detaches the hidden panes and re-attaching replays
 // a Full (cheap in the mosh model, and it keeps WebGL contexts bounded).
 // While the worktree is being removed its panes are inert under a
@@ -12,6 +13,7 @@ import { ConnectionBanner } from './ConnectionBanner'
 import { DiffView } from './DiffView'
 import { FileView } from './FileView'
 import { SplitLayout } from './SplitLayout'
+import { StatsView } from './StatsView'
 
 export function Workspace() {
   const active = useStore((s) => s.active)
@@ -19,6 +21,7 @@ export function Workspace() {
   const ws = useStore((s) => (key ? s.workspaces[key] : undefined))
   const removing = useStore((s) => !!key && !!s.removing[key])
   const folder = useStore((s) => !!s.active && isFolderWorktree(s.active.hostId, s.active.worktree))
+  const statsOpen = useStore((s) => s.statsOpen)
 
   if (!active) {
     return (
@@ -43,7 +46,9 @@ export function Workspace() {
         inert={removing}
         data-removing={removing ? 'true' : undefined}
       >
-        {tab?.kind === 'file' && tab.diff ? (
+        {statsOpen ? (
+          <StatsView hostId={active.hostId} worktree={active.worktree} />
+        ) : tab?.kind === 'file' && tab.diff ? (
           <DiffView
             key={tab.id}
             hostId={active.hostId}

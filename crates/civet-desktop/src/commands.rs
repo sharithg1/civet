@@ -241,6 +241,18 @@ pub async fn list_dirs(
     state.hosts.list_dirs(&host_id, path).await
 }
 
+/// CPU, memory, disk, network and GPU use of the host; `processes` also
+/// lists processes by pane (the stats view).
+#[tauri::command]
+pub async fn host_stats(
+    state: State<'_, AppState>,
+    host_id: String,
+    since: Option<u64>,
+    processes: bool,
+) -> Res<civet_proto::HostStats> {
+    state.hosts.host_stats(&host_id, since, processes).await
+}
+
 #[tauri::command]
 pub async fn list_files(
     state: State<'_, AppState>,
@@ -604,6 +616,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         add_repo,
         remove_repo,
         list_dirs,
+        host_stats,
         prepare_file_drop,
         upload_file,
         list_worktrees,

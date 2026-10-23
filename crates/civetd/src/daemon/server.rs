@@ -40,6 +40,7 @@ pub(crate) struct Server {
     pub resume_ttl: Duration,
     clients: Mutex<HashMap<ClientId, ClientState>>,
     ports: Arc<super::ports::PortWatcher>,
+    stats: Arc<super::stats::StatsSampler>,
     shutting_down: AtomicBool,
     next_conn: AtomicU64,
 }
@@ -96,6 +97,7 @@ impl Server {
     ) -> Self {
         Self {
             ports: super::ports::PortWatcher::new(sessions.clone()),
+            stats: super::stats::StatsSampler::new(sessions.clone()),
             sessions,
             key,
             instance_id,
@@ -555,6 +557,11 @@ impl Server {
                 .await
                 .map(Response::FileChunk),
             Request::ListDirs { path } => s.list_dirs(&path).await.map(Response::Dirs),
+            Request::HostStats { since, processes } => {
+                return Ok(Response::HostStats(
+                    self.stats.request(since, processes).await,
+                ));
+            }
             Request::CreateWorktree {
                 repo,
                 branch,

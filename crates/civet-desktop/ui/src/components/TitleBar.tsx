@@ -2,7 +2,8 @@
 // each have their own header row, so this one only spans the work area). It
 // holds a compact worktree selector (opens the switcher), the worktree's
 // tabs as pills, a "+" menu (Claude Code / Codex / Terminal / splits), a "…" menu of
-// worktree actions and, when the right panel is closed, its toggle. With the
+// worktree actions and, when the right panel is closed, its toggle. Right
+// before the "…" menu sits the host stats indicator (StatsView.tsx). With the
 // sidebar closed it also takes the traffic-light inset and the sidebar
 // toggle. Tabs keep the old TabBar's activate / close / middle-click-close
 // behaviour, plus drag to reorder; a tab is still a split tree of panes.
@@ -63,6 +64,7 @@ import {
 import { useWorktreeInfo, useWorktreeTabs } from './chrome'
 import { IconButton } from './IconButton'
 import { SidebarToggle } from './Sidebar'
+import { StatsIndicator } from './StatsView'
 import { StatusDot } from './StatusDot'
 import { AgentLogo, hasAgentLogo } from './AgentLogo'
 
@@ -88,6 +90,7 @@ export function TitleBar() {
       {active && <WorktreeTitle hostId={active.hostId} worktree={active.worktree} />}
       {active && <Tabs hostId={active.hostId} worktree={active.worktree} />}
       <div className="min-w-4 flex-1 self-stretch" />
+      <StatsIndicator />
       {active && <WorktreeActions hostId={active.hostId} worktree={active.worktree} />}
       {!rightPanelOpen && <RightPanelToggle />}
     </header>
@@ -211,7 +214,8 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
 
 function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const key = wsKey(hostId, worktree)
-  const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
+  // The stats view covers the work area: no tab shows as active under it.
+  const activeTab = useStore((s) => (s.statsOpen ? null : (s.workspaces[key]?.activeTab ?? null)))
   const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
   const removing = useStore((s) => !!s.removing[key])
   const panes = useStore((s) => s.panes[hostId])

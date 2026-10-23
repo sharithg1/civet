@@ -16,6 +16,7 @@ const COMMANDS: &[&str] = &[
     "add_repo",
     "remove_repo",
     "list_dirs",
+    "host_stats",
     "prepare_file_drop",
     "upload_file",
     "list_worktrees",

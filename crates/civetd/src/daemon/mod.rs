@@ -37,6 +37,7 @@
 mod bootstrap;
 mod ports;
 mod server;
+mod stats;
 mod sys;
 mod uploads;
 

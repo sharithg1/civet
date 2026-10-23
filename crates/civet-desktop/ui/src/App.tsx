@@ -32,6 +32,7 @@ import {
   isPaneTab
 } from './state/store'
 import { initPorts } from './state/ports'
+import { initStats } from './state/stats'
 
 export function App() {
   const [ready, setReady] = useState(false)
@@ -48,7 +49,9 @@ export function App() {
       .then(async (b) => {
         const app = await initApp(b)
         const ports = await initPorts(b)
+        const stats = initStats(b)
         return () => {
+          stats()
           ports()
           app()
         }
