@@ -26,7 +26,7 @@ path = "src/bin/civet-cli.rs"
 # `bootstrap` module and `civet-cli` only need civet-proto + civet-transport,
 # so civet-desktop depends on this crate with `default-features = false`.
 default = ["server"]
-server = ["dep:civet-session", "dep:civet-term"]
+server = ["dep:civet-session", "dep:civet-term", "dep:sysinfo"]
 
 [dependencies]
 civet-proto.workspace = true
@@ -44,6 +44,7 @@ serde_json.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
 libc.workspace = true
+sysinfo = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

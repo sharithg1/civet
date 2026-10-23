@@ -879,6 +879,17 @@ pub enum Request {
         /// home directory.
         path: String,
     },
+    /// CPU, memory, disk, network and GPU use of the host (see
+    /// [`crate::stats`]). -> [`Response::HostStats`]. Clients send it only
+    /// to daemons of at least [`crate::HOST_STATS_MIN_DAEMON_VERSION`].
+    HostStats {
+        /// Newest [`crate::StatsSample::seq`] the client has; only newer
+        /// samples come back. None: the whole history.
+        since: Option<u64>,
+        /// Also list processes and the panes they belong to (costlier:
+        /// the daemon samples processes only while someone asks for them).
+        processes: bool,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -951,6 +962,8 @@ pub enum Response {
     Project(ProjectInfo),
     /// Reply to [`Request::ListDirs`].
     Dirs(HostDirListing),
+    /// Reply to [`Request::HostStats`].
+    HostStats(crate::stats::HostStats),
 }
 
 /// Error category for a failed request.

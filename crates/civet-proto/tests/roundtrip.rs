@@ -276,6 +276,14 @@ fn all_requests() -> Vec<Request> {
         Request::ListDirs {
             path: "~/src".into(),
         },
+        Request::HostStats {
+            since: None,
+            processes: false,
+        },
+        Request::HostStats {
+            since: Some(41),
+            processes: true,
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -508,6 +516,7 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             ],
             truncated: false,
         })),
+        Ok(Response::HostStats(host_stats())),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -865,6 +874,65 @@ fn project_requests_are_appended() {
     .unwrap();
     assert_eq!(v["project"]["kind"], "folder");
     assert_eq!(v["project"]["repo"]["defaultBranch"], "main");
+}
+
+fn host_stats() -> HostStats {
+    HostStats {
+        interval_ms: 2000,
+        samples: vec![StatsSample {
+            seq: 42,
+            at_ms: 1_700_000_000_000,
+            cpu: 625,
+            mem_used: 41 << 30,
+            swap_used: 0,
+            net_rx: 12_000_000,
+            net_tx: 2_000_000,
+            disk_read: 120_000_000,
+            disk_write: 40_000_000,
+            gpus: vec![880],
+        }],
+        cores: vec![1000, 250],
+        mem_total: 64 << 30,
+        swap_total: 8 << 30,
+        load: [820, 610, 400],
+        uptime_secs: 86_400,
+        disks: vec![DiskSpace {
+            mount: "/".into(),
+            total: 1 << 40,
+            available: 300 << 30,
+        }],
+        gpus: vec![GpuInfo {
+            name: "NVIDIA A10G".into(),
+            mem_used: 20 << 30,
+            mem_total: 24 << 30,
+        }],
+        processes: vec![ProcessUsage {
+            pid: 4242,
+            name: "cargo".into(),
+            command: "cargo test".into(),
+            cpu: 3400,
+            mem: 3 << 30,
+            pane: Some(PaneId(7)),
+            worktree: Some(WorktreeId::from("/w")),
+        }],
+    }
+}
+
+#[test]
+fn host_stats_is_appended() {
+    // Appended within protocol 1 after ListDirs (30) / Dirs (25).
+    let req = encode(&Request::HostStats {
+        since: None,
+        processes: true,
+    })
+    .unwrap();
+    assert_eq!(req, vec![31, 0, 1]);
+    let resp = encode(&Response::HostStats(host_stats())).unwrap();
+    assert_eq!(resp[0], 26);
+    let v = serde_json::to_value(Response::HostStats(host_stats())).unwrap();
+    assert_eq!(v["hostStats"]["samples"][0]["memUsed"], 41u64 << 30);
+    assert_eq!(v["hostStats"]["load"], serde_json::json!([820, 610, 400]));
+    assert_eq!(v["hostStats"]["processes"][0]["worktree"], "/w");
 }
 
 #[test]

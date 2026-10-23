@@ -407,3 +407,62 @@ export type CivetErrorPayload = { code: string; message: string }
 export function termSize(cols: number, rows: number): TermSize {
   return { cols, rows, pixelWidth: 0, pixelHeight: 0 }
 }
+
+/**
+ * One host-wide stats sample (`host_stats`, civetd >= 0.2.1). CPU and GPU
+ * busy are permille; memory in bytes; rates in bytes per second.
+ */
+export type StatsSample = {
+  /** Increases by one per sample (per daemon run). */
+  seq: number
+  atMs: number
+  /** All CPUs together, 0..1000. */
+  cpu: number
+  memUsed: number
+  swapUsed: number
+  netRx: number
+  netTx: number
+  diskRead: number
+  diskWrite: number
+  /** Each GPU's utilization, in `HostStats.gpus` order. */
+  gpus: number[]
+}
+
+/** A mounted filesystem (bytes). */
+export type DiskSpace = { mount: string; total: number; available: number }
+
+/** An NVIDIA GPU. */
+export type GpuInfo = { name: string; memUsed: number; memTotal: number }
+
+/** A process and what it uses (`host_stats` with `processes`). */
+export type ProcessUsage = {
+  pid: number
+  name: string
+  command: string
+  /** Permille of one core (above 1000 on several). */
+  cpu: number
+  /** Resident memory, bytes. */
+  mem: number
+  /** Pane whose process tree it is in. */
+  pane: PaneId | null
+  worktree: WorktreeId | null
+}
+
+/** Reply to `host_stats`. */
+export type HostStats = {
+  intervalMs: number
+  /** Samples newer than `since` (all without it), oldest first. */
+  samples: StatsSample[]
+  /** Each CPU's busy permille, now. */
+  cores: number[]
+  memTotal: number
+  swapTotal: number
+  /** 1 / 5 / 15 minute load averages, in hundredths. */
+  load: [number, number, number]
+  uptimeSecs: number
+  /** Largest first. */
+  disks: DiskSpace[]
+  gpus: GpuInfo[]
+  /** Pane processes first, then the busiest others; empty unless asked for. */
+  processes: ProcessUsage[]
+}

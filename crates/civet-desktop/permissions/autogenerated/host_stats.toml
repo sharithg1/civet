@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-stats"
+description = "Enables the host_stats command without any pre-configured scope."
+commands.allow = ["host_stats"]
+
+[[permission]]
+identifier = "deny-host-stats"
+description = "Denies the host_stats command without any pre-configured scope."
+commands.deny = ["host_stats"]

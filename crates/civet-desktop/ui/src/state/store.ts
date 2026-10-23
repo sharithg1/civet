@@ -142,6 +142,11 @@ type State = {
   rightPanelOpen: boolean
   rightTab: RightTab
   switcherOpen: boolean
+  /**
+   * The stats view of the active worktree's host fills the work area (the
+   * title bar's stats indicator). Selecting a worktree or a tab closes it.
+   */
+  statsOpen: boolean
   settings: SettingsPage | null
   removeWorktree: { hostId: string; worktree: string } | null
   /** wsKeys of worktrees whose removal is in flight (see removeWorktree) */
@@ -181,6 +186,7 @@ export const useStore = create<State>(() => ({
     (typeof window === 'undefined' || window.innerWidth >= 1100),
   rightTab: usePrefs.getState().rightTab,
   switcherOpen: false,
+  statsOpen: false,
   settings: null,
   removeWorktree: null,
   removing: {},
@@ -199,6 +205,14 @@ useStore.subscribe((s, prev) => {
   ) {
     setPrefs({ sidebarOpen: s.sidebarOpen, rightPanelOpen: s.rightPanelOpen, rightTab: s.rightTab })
   }
+})
+
+// A tab becoming active (a new tab, one opened from a toast...) takes the
+// work area back from the stats view.
+useStore.subscribe((s, prev) => {
+  if (!s.statsOpen || !s.active) return
+  const k = wsKey(s.active.hostId, s.active.worktree)
+  if (s.workspaces[k]?.activeTab !== prev.workspaces[k]?.activeTab) set({ statsOpen: false })
 })
 
 const set = useStore.setState
@@ -873,7 +887,8 @@ export function selectWorktree(hostId: string, worktree: string): void {
       unread,
       seen,
       mru: [key, ...s.mru.filter((k) => k !== key)].slice(0, 50),
-      switcherOpen: false
+      switcherOpen: false,
+      statsOpen: false
     }
   })
   // First visit: open a tab for every live pane already running there.
@@ -1048,6 +1063,7 @@ export function revealPane(hostId: string, worktree: string | null, pane: PaneId
 }
 
 export function activateTab(key: string, tabId: string): void {
+  if (get().statsOpen) set({ statsOpen: false })
   updateWorkspace(key, (w) => ({ ...w, activeTab: tabId }))
 }
 

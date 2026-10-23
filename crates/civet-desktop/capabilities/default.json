@@ -21,6 +21,7 @@
     "allow-add-repo",
     "allow-remove-repo",
     "allow-list-dirs",
+    "allow-host-stats",
     "allow-prepare-file-drop",
     "allow-upload-file",
     "allow-list-worktrees",

@@ -1230,6 +1230,17 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::ListDirs { path }).await?, Response::Dirs(l) => l)
     }
 
+    /// `host_stats`: the host's resource use and its recent history.
+    pub async fn host_stats(
+        &self,
+        host_id: &str,
+        since: Option<u64>,
+        processes: bool,
+    ) -> Result<civet_proto::HostStats, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::HOST_STATS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::HostStats { since, processes }).await?, Response::HostStats(s) => s)
+    }
+
     /// `list_files`: one directory level of a worktree.
     pub async fn list_files(
         &self,
