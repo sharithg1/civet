@@ -298,13 +298,15 @@ impl Probe {
         sys.refresh_cpu_usage();
         let networks = Networks::new_with_refreshed_list();
         let disks = Disks::new_with_refreshed_list_specifics(disk_refresh());
+        // Network and disk rates are deltas since these baselines.
+        let last = Instant::now();
         // CPU use is a delta: give the first sample something to compare.
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         Self {
             sys,
             networks,
             disks,
-            last: Instant::now(),
+            last,
             processes_warm: false,
             gpus: true,
         }
