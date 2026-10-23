@@ -45,6 +45,8 @@ let generation = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 /** Generation of the poll awaiting its answer. */
 let inFlight: number | null = null
+/** The stats view opened during a poll without processes: poll again right after it. */
+let processPollPending = false
 
 function setView(hostId: string, f: (v: HostStatsView) => HostStatsView): void {
   useHostStats.setState((s) => ({
@@ -69,8 +71,10 @@ async function poll(hostId: string, gen: number): Promise<void> {
     if (inFlight === gen) inFlight = null
   }
   if (gen === generation) {
+    const now = processPollPending && useStore.getState().statsOpen
+    processPollPending = false
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void poll(hostId, gen), interval)
+    timer = setTimeout(() => void poll(hostId, gen), now ? 0 : interval)
   }
 }
 
@@ -78,6 +82,7 @@ function stop(): void {
   generation++
   current = null
   inFlight = null
+  processPollPending = false
   if (timer) clearTimeout(timer)
   timer = null
 }
@@ -90,7 +95,11 @@ function start(hostId: string): void {
 
 /** Poll the active host now (the stats view just opened and wants processes). */
 function pollNow(): void {
-  if (!current || inFlight === generation) return
+  if (!current) return
+  if (inFlight === generation) {
+    processPollPending = true
+    return
+  }
   if (timer) clearTimeout(timer)
   timer = null
   void poll(current, generation)
