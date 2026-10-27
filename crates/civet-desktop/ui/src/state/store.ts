@@ -827,7 +827,7 @@ export async function disconnectHost(hostId: string): Promise<void> {
   })
 }
 
-/** A plain folder project: file tabs only, no sessions, worktrees or git. */
+/** A plain folder project: files and sessions in its root, no worktrees or git. */
 export const isFolderRepo = (repo: RepoInfo | undefined): boolean => repo?.kind === 'folder'
 
 /** The worktree is a folder project's root (see isFolderRepo). */
@@ -836,13 +836,6 @@ export function isFolderWorktree(hostId: string, worktree: string): boolean {
   return (s.repos[hostId] ?? []).some(
     (r) => isFolderRepo(r) && s.worktrees[wtKey(hostId, r.id)]?.some((w) => w.id === worktree)
   )
-}
-
-/** Refuse sessions in a folder project (the daemon would too). */
-function checkSessions(hostId: string, worktree: string): void {
-  if (isFolderWorktree(hostId, worktree)) {
-    throw new CivetError('unsupported', 'Folder projects have no sessions: open files instead')
-  }
 }
 
 export function worktreesOf(hostId: string): WorktreeInfo[] {
@@ -1126,7 +1119,6 @@ function removePaneEverywhere(hostId: string, pane: PaneId): void {
 }
 
 async function spawnShell(hostId: string, worktree: string, cwd?: string): Promise<PaneInfo> {
-  checkSessions(hostId, worktree)
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   const pane = await backend().spawnPane(hostId, {
     worktree,
@@ -1147,7 +1139,7 @@ export async function newTerminalTab(
   worktree: string,
   cwd?: string
 ): Promise<void> {
-  if (isRemoving(hostId, worktree) || isFolderWorktree(hostId, worktree)) return
+  if (isRemoving(hostId, worktree)) return
   try {
     const pane = await spawnShell(hostId, worktree, cwd)
     openPaneInTab(hostId, worktree, pane.id)
@@ -1159,7 +1151,6 @@ export async function newTerminalTab(
 export async function splitFocused(dir: SplitDirection): Promise<void> {
   const active = get().active
   if (!active || isRemoving(active.hostId, active.worktree)) return
-  if (isFolderWorktree(active.hostId, active.worktree)) return
   const key = wsKey(active.hostId, active.worktree)
   const ws = get().workspaces[key]
   const tab = ws?.tabs.find((t) => t.id === ws.activeTab)
@@ -1250,7 +1241,7 @@ export type AgentChoice = 'claude' | 'codex' | 'custom'
 
 function checkGitRepo(hostId: string, repo: string): void {
   if (isFolderRepo(get().repos[hostId]?.find((r) => r.id === repo))) {
-    throw new CivetError('unsupported', 'Folder projects have no worktrees or sessions')
+    throw new CivetError('unsupported', 'Folder projects have no worktrees')
   }
 }
 
@@ -1305,7 +1296,7 @@ export async function newAgentTab(
   worktree: string,
   kind: AgentKind = 'claude'
 ): Promise<void> {
-  if (isRemoving(hostId, worktree) || isFolderWorktree(hostId, worktree)) return
+  if (isRemoving(hostId, worktree)) return
   try {
     const command = parseCommand(agentCommandFor(kind))
     if (!command) throw new Error('No agent command configured')

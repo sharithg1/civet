@@ -197,7 +197,8 @@ function AddProjectForm({
           )}
         </div>
         <p className="text-2xs text-muted-foreground">
-          A folder that is not a git repository opens with file tabs only (no sessions).
+          A folder that is not a git repository has no worktrees or git; it becomes a repository
+          once you run git init in it.
         </p>
       </div>
       {busy && (

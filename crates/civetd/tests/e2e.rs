@@ -942,9 +942,9 @@ async fn folder_projects_over_the_control_stream() {
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::Unsupported);
-    let err = c
+    let Response::PaneSpawned(pane) = c
         .request(Request::SpawnPane(SpawnPaneRequest {
-            worktree: Some(worktree),
+            worktree: Some(worktree.clone()),
             cwd: None,
             command: None,
             env: vec![],
@@ -953,8 +953,11 @@ async fn folder_projects_over_the_control_stream() {
             agent: None,
         }))
         .await
-        .unwrap_err();
-    assert_eq!(err.code, ErrorCode::Unsupported);
+        .unwrap()
+    else {
+        panic!("SpawnPane")
+    };
+    assert_eq!(pane.worktree, Some(worktree));
     c.conn.close().await;
     daemon.shutdown("test done").await;
 }

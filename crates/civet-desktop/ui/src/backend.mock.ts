@@ -1696,13 +1696,6 @@ export class MockBackend implements CivetBackend {
 
   async spawnPane(hostId: string, request: SpawnPaneRequest) {
     const h = this.host(hostId)
-    const folder = h.folderOf(request.worktree)
-    if (folder) {
-      throw new CivetError(
-        'unsupported',
-        `unsupported: ${folder.name} is a folder project: it has no sessions`
-      )
-    }
     const wt = h.allWorktrees().find((w) => w.id === request.worktree)
     const pane = h.addPane({
       worktree: request.worktree,

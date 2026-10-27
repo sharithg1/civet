@@ -13,8 +13,8 @@
 // archives it (into the project's collapsed "Archived" group) or removes it
 // (the Remove worktree dialog). While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
-// (not a git repository) is a single row that selects its root: it has file
-// tabs only, no worktrees or sessions.
+// (not a git repository) is a single row that selects its root: it has no
+// worktrees.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
@@ -511,7 +511,7 @@ function FolderProjectRow({
         data-wt={wt?.id}
         data-folder="true"
         data-active={selected ? 'true' : 'false'}
-        title={`${name} · folder (files only, no sessions)\n${host.label}:${wt?.path ?? ''}`}
+        title={`${name} · folder (no git)\n${host.label}:${wt?.path ?? ''}`}
         onPointerDown={reorder.handle(repoId)}
         onClick={() => wt && selectWorktree(hostId, wt.id)}
         className={cn(

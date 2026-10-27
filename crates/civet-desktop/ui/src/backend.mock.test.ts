@@ -121,7 +121,7 @@ describe('MockBackend', () => {
     expect(kinds).toContain(RecordKind.PaneClosed)
   })
 
-  it('has folder projects: files without ignores, no git or sessions', async () => {
+  it('has folder projects: files without ignores and sessions, no git', async () => {
     const { b } = await connected()
     const notes = (await b.listRepos('devbox')).find((r) => r.id === 'notes')!
     expect(notes).toMatchObject({ kind: 'folder', defaultBranch: null })
@@ -136,8 +136,8 @@ describe('MockBackend', () => {
     await expect(b.createWorktree('devbox', 'notes', 'x')).rejects.toMatchObject({
       code: 'unsupported'
     })
-    await expect(
-      b.spawnPane('devbox', {
+    expect(
+      await b.spawnPane('devbox', {
         worktree: root!.id,
         cwd: null,
         command: null,
@@ -146,7 +146,7 @@ describe('MockBackend', () => {
         title: null,
         agent: null
       })
-    ).rejects.toMatchObject({ code: 'unsupported' })
+    ).toMatchObject({ worktree: root!.id, cwd: root!.path })
 
     // Add project: a path with a src directory is a repository, else a folder.
     expect(await b.addRepo('devbox', '/home/dev/src/web')).toMatchObject({ kind: 'git' })
