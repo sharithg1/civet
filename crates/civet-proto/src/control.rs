@@ -31,8 +31,10 @@ pub enum ProjectKind {
     Git,
     /// A plain directory (not in a git repository). It has exactly one
     /// [`WorktreeInfo`], its root (`is_main`, no branch or head), whose
-    /// files can be browsed and changed; git requests, new worktrees and
-    /// panes in it are `Unsupported`.
+    /// files can be browsed and changed and which panes can run in; git
+    /// requests and new worktrees in it are `Unsupported`. Once the
+    /// directory holds a `.git` of its own, listing projects re-registers
+    /// it as a [`ProjectKind::Git`] (a new RepoId, the same worktree id).
     Folder,
 }
 

@@ -668,7 +668,8 @@ async fn folder_projects_through_the_commands() {
     assert_eq!(files.paths, ["notes.md"]);
     let mut req = shell_pane("true");
     req.worktree = Some(wts[0].id.clone());
-    assert_eq!(m.spawn_pane(h, req).await.unwrap_err().code, "unsupported");
+    let pane = m.spawn_pane(h, req).await.unwrap();
+    assert_eq!(pane.worktree, Some(wts[0].id.clone()));
     m.remove_repo(h, folder.repo.id).await.unwrap();
     assert!(m.list_repos(h).await.unwrap().is_empty());
     m.disconnect_host(h).await.unwrap();

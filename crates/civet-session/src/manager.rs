@@ -21,7 +21,7 @@ use crate::git::{
 use crate::hooks::{self, HookFiles, ShellKind, basename};
 use crate::pane::{Pane, SpawnParams, lock};
 use crate::subscription::Subscription;
-use crate::watch::WorktreeWatch;
+use crate::watch::{WorktreeWatch, common_dir};
 use crate::{ENV_WORKTREE, InputOutcome, KNOWN_AGENTS, SessionConfig, SessionError};
 
 /// Event broadcast capacity.
@@ -264,7 +264,7 @@ impl SessionManager {
     /// Registered repositories (folder projects left out: see
     /// [`Self::list_projects`]).
     pub async fn list_repos(&self) -> Result<Vec<RepoInfo>, SessionError> {
-        let repos = self.inner.repos.lock().await.clone();
+        let repos = self.promote_folders().await;
         let mut out = Vec::with_capacity(repos.len());
         for r in repos.iter().filter(|r| !r.is_folder()) {
             out.push(self.repo_info(r).await);
@@ -274,7 +274,7 @@ impl SessionManager {
 
     /// Registered projects: repositories and folders, in the order added.
     pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>, SessionError> {
-        let repos = self.inner.repos.lock().await.clone();
+        let repos = self.promote_folders().await;
         let mut out = Vec::with_capacity(repos.len());
         for r in &repos {
             out.push(ProjectInfo {
@@ -283,6 +283,60 @@ impl SessionManager {
             });
         }
         Ok(out)
+    }
+
+    /// Re-register folder projects that became git repositories (`git init`,
+    /// `git clone` into them) as repositories, in place, and return the
+    /// registered projects. A folder whose repository is already registered
+    /// is dropped. Emits ReposChanged if anything changed.
+    ///
+    /// Why only folders holding a `.git` of their own: it is a `stat` per
+    /// folder, so git only runs for the one that changed, and a repository
+    /// created around a folder does not swallow it.
+    async fn promote_folders(&self) -> Vec<StoredRepo> {
+        let candidates: Vec<(String, String)> = self
+            .inner
+            .repos
+            .lock()
+            .await
+            .iter()
+            .filter(|r| r.is_folder() && common_dir(Path::new(&r.path)).is_some())
+            .map(|r| (r.id.clone(), r.path.clone()))
+            .collect();
+        // Why git runs without the lock: it has no timeout, and a stalled
+        // one must not hold up every other repository request.
+        let mut found = Vec::new();
+        for (id, path) in candidates {
+            match self.git_repo_at(Path::new(&path)).await {
+                Ok(Some(stored)) => found.push((id, stored)),
+                Ok(None) => {}
+                Err(e) => tracing::debug!(%path, "folder not promoted: {e}"),
+            }
+        }
+        let mut repos = self.inner.repos.lock().await;
+        let mut changed = false;
+        for (id, stored) in found {
+            // Removed (or already promoted) while git ran: nothing to do.
+            let Some(i) = repos.iter().position(|r| r.id == id && r.is_folder()) else {
+                continue;
+            };
+            tracing::info!(folder = %id, repo = %stored.id, path = %stored.path, "folder is now a git repository");
+            if repos.iter().any(|o| o.id == stored.id) {
+                repos.remove(i);
+            } else {
+                repos[i] = stored;
+            }
+            changed = true;
+        }
+        let out = repos.clone();
+        if changed {
+            if let Err(e) = self.save_repos(&repos).await {
+                tracing::warn!("saving {REPOS_FILE}: {e}");
+            }
+            drop(repos);
+            self.emit(Event::ReposChanged);
+        }
+        out
     }
 
     /// Register the repository containing `path`. RepoId = hex of the first
@@ -709,18 +763,6 @@ impl SessionManager {
         Ok((PathBuf::from(w.path), git))
     }
 
-    /// The folder project whose root is `worktree`, if any (no git runs).
-    async fn folder_of(&self, worktree: &WorktreeId) -> Option<StoredRepo> {
-        let wanted = path_string(&canonical_lenient(Path::new(&worktree.0)));
-        self.inner
-            .repos
-            .lock()
-            .await
-            .iter()
-            .find(|r| r.is_folder() && r.folder_root().path == wanted)
-            .cloned()
-    }
-
     /// One directory level of a worktree (`dir` relative to its root),
     /// gitignored entries left out unless `include_ignored`. Paths that
     /// leave the worktree are InvalidArgument (see [`crate::files`]).
@@ -916,14 +958,6 @@ impl SessionManager {
                 "invalid size {}x{}",
                 req.size.cols, req.size.rows
             )));
-        }
-        if let Some(w) = &req.worktree {
-            if let Some(r) = self.folder_of(w).await {
-                return Err(SessionError::Unsupported(format!(
-                    "{} is a folder project: it has no sessions",
-                    r.name
-                )));
-            }
         }
         let cwd = match (&req.cwd, &req.worktree) {
             (Some(c), _) => expand_home(c),
@@ -1220,6 +1254,8 @@ impl SessionManager {
 /// dropped or shut down.
 fn worktree_watcher(weak: Weak<Inner>) {
     let mut watch = WorktreeWatch::default();
+    // Folder projects that held a `.git` last round.
+    let mut folders_with_git: Vec<String> = Vec::new();
     loop {
         let Some(inner) = weak.upgrade() else { return };
         if inner.shutdown.load(Ordering::SeqCst) {
@@ -1228,13 +1264,25 @@ fn worktree_watcher(weak: Weak<Inner>) {
         let period = inner.config.worktree_poll;
         // Why: blocking_lock is fine on this plain thread; a repo being
         // added right now is simply picked up on the next round.
-        let repos: Vec<(String, PathBuf)> = inner
+        let (folders, repos): (Vec<_>, Vec<_>) = inner
             .repos
             .blocking_lock()
             .iter()
-            .filter(|r| !r.is_folder())
-            .map(|r| (r.id.clone(), PathBuf::from(&r.path)))
+            .map(|r| (r.is_folder(), r.id.clone(), PathBuf::from(&r.path)))
+            .partition(|(folder, _, _)| *folder);
+        let repos: Vec<(String, PathBuf)> = repos.into_iter().map(|(_, id, p)| (id, p)).collect();
+        // A folder that became a repository: clients re-list projects, and
+        // listing promotes it (see `promote_folders`).
+        let with_git: Vec<String> = folders
+            .into_iter()
+            .filter(|(_, _, p)| common_dir(p).is_some())
+            .map(|(_, id, _)| id)
             .collect();
+        if with_git.iter().any(|id| !folders_with_git.contains(id)) {
+            tracing::debug!("a folder project became a git repository");
+            let _ = inner.events.send(Event::ReposChanged);
+        }
+        folders_with_git = with_git;
         for repo in watch.changed(&repos) {
             tracing::debug!(%repo, "worktrees changed on disk");
             let _ = inner

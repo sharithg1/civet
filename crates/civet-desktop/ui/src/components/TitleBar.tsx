@@ -9,8 +9,8 @@
 // behaviour, plus drag to reorder; a tab is still a split tree of panes.
 // On macOS the window uses an overlay title bar, so every non-interactive
 // part of this row drags the window (double click zooms); see
-// lib/window-chrome.ts. A folder project (not a git repository) shows its
-// file tabs only: no "+" menu, branch details or worktree removal.
+// lib/window-chrome.ts. A folder project (not a git repository) has no
+// branch details or worktree removal.
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
@@ -40,7 +40,6 @@ import {
   activateTab,
   closeTab,
   isFolderRepo,
-  isFolderWorktree,
   moveTab,
   newAgentTab,
   newTerminalTab,
@@ -221,7 +220,6 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const panes = useStore((s) => s.panes[hostId])
   const tabs = useWorktreeTabs(hostId, worktree)
   const wsTabs = useStore((s) => s.workspaces[key]?.tabs)
-  const folder = useStore(() => isFolderWorktree(hostId, worktree))
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: string; startX: number; moved: boolean } | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -359,42 +357,39 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
           )
         })}
       </div>
-      {/* Why: a folder project has no sessions; its tabs come from Files. */}
-      {!folder && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            title="New tab"
-            aria-label="New tab"
-            disabled={!connected || removing}
-            className="ml-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-quiet outline-none hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-hover-strong"
-          >
-            <Plus className="size-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            sideOffset={4}
-            className="w-[200px]"
-            onCloseAutoFocus={restoreTerminalFocus}
-          >
-            <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>
-              Claude Code<DropdownMenuShortcut>⌥C</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree, 'codex')}>
-              Codex<DropdownMenuShortcut>⌥X</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => void newTerminalTab(hostId, worktree)}>
-              Terminal<DropdownMenuShortcut>⌥T</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => void splitFocused('row')}>
-              Split right<DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => void splitFocused('column')}>
-              Split down<DropdownMenuShortcut>⇧⌘D</DropdownMenuShortcut>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          title="New tab"
+          aria-label="New tab"
+          disabled={!connected || removing}
+          className="ml-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-quiet outline-none hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-hover-strong"
+        >
+          <Plus className="size-4" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          sideOffset={4}
+          className="w-[200px]"
+          onCloseAutoFocus={restoreTerminalFocus}
+        >
+          <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree)}>
+            Claude Code<DropdownMenuShortcut>⌥C</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void newAgentTab(hostId, worktree, 'codex')}>
+            Codex<DropdownMenuShortcut>⌥X</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void newTerminalTab(hostId, worktree)}>
+            Terminal<DropdownMenuShortcut>⌥T</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => void splitFocused('row')}>
+            Split right<DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void splitFocused('column')}>
+            Split down<DropdownMenuShortcut>⇧⌘D</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   )
 }

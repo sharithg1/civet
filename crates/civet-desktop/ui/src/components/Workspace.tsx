@@ -73,19 +73,6 @@ export function Workspace() {
             focused={tab.focused}
             multiPane={leaves(tab.root).length > 1}
           />
-        ) : folder ? (
-          <div className="grid h-full place-items-center text-sm text-quiet">
-            <div className="flex flex-col items-center gap-2">
-              No files open
-              <button
-                type="button"
-                onClick={() => useStore.setState({ rightPanelOpen: true, rightTab: 'files' })}
-                className="cursor-pointer text-dim hover:text-soft"
-              >
-                Open one from the Files panel
-              </button>
-            </div>
-          </div>
         ) : (
           <div className="grid h-full place-items-center text-sm text-quiet">
             <div className="flex flex-col items-center gap-2">
@@ -93,6 +80,16 @@ export function Workspace() {
               <span className="flex items-center gap-1.5 text-dim">
                 <Kbd>⌥C</Kbd> Claude Code · <Kbd>⌥X</Kbd> Codex · <Kbd>⌥T</Kbd> Terminal
               </span>
+              {/* Why: a folder has no Changes tab; its files are the way in. */}
+              {folder && (
+                <button
+                  type="button"
+                  onClick={() => useStore.setState({ rightPanelOpen: true, rightTab: 'files' })}
+                  className="cursor-pointer text-dim hover:text-soft"
+                >
+                  Open a file from the Files panel
+                </button>
+              )}
             </div>
           </div>
         )}

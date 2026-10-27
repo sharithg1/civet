@@ -474,7 +474,7 @@ function ProjectsPage() {
                   </div>
                 </div>
                 {r.kind === 'folder' ? (
-                  <div className="text-xs text-muted-foreground">files only</div>
+                  <div className="text-xs text-muted-foreground">no git</div>
                 ) : (
                   <div
                     className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"

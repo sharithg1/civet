@@ -2720,7 +2720,7 @@ async fn folder_projects() {
         Err(SessionError::InvalidArgument(_))
     ));
 
-    // No git, worktrees or sessions.
+    // No git or worktrees.
     assert!(matches!(
         f.mgr.git_status(&wt).await,
         Err(SessionError::Unsupported(_))
@@ -2759,18 +2759,19 @@ async fn folder_projects() {
             .await,
         Err(SessionError::Unsupported(_))
     ));
-    let mut spawn = sh("sleep 5");
-    spawn.worktree = Some(wt.clone());
-    assert!(matches!(
-        f.mgr.spawn_pane(spawn).await,
-        Err(SessionError::Unsupported(_))
-    ));
     assert!(matches!(
         f.mgr.remove_worktree(&wt, true).await,
         Err(SessionError::InvalidArgument(_))
     ));
-    assert!(f.mgr.list_panes().is_empty());
     assert!(notes.join("docs/readme.md").exists());
+
+    // Sessions run in its root.
+    let mut spawn = sh("pwd; sleep 5");
+    spawn.worktree = Some(wt.clone());
+    let pane = f.mgr.spawn_pane(spawn).await.unwrap();
+    assert_eq!(pane.worktree, Some(wt.clone()));
+    wait_screen(&f.mgr, pane.id, &notes.to_string_lossy()).await;
+    f.mgr.kill_pane(pane.id, KillSignal::Kill).unwrap();
 
     // The kind survives a restart.
     drop(f.mgr);
@@ -2778,6 +2779,58 @@ async fn folder_projects() {
     cfg.shell = Some("/bin/sh".into());
     let mgr = SessionManager::new(cfg).unwrap();
     assert_eq!(mgr.list_projects().await.unwrap(), vec![folder, repo]);
+}
+
+/// `git init` in a folder project: the watcher says so, and listing
+/// re-registers it as a repository with the same worktree id.
+#[tokio::test(flavor = "multi_thread")]
+async fn folder_project_that_becomes_a_repository() {
+    use civet_proto::ProjectKind;
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let mut cfg = SessionConfig::new(root.join("state"));
+    cfg.shell = Some("/bin/sh".into());
+    cfg.worktree_poll = Duration::from_millis(100);
+    let mgr = SessionManager::new(cfg).unwrap();
+    let notes = root.join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let folder = mgr.add_project(&notes.to_string_lossy()).await.unwrap();
+    assert_eq!(folder.kind, ProjectKind::Folder);
+    let wt = mgr.list_worktrees(&folder.repo.id).await.unwrap()[0]
+        .id
+        .clone();
+    // A second folder that stays one.
+    let other = root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let other = mgr.add_project(&other.to_string_lossy()).await.unwrap();
+
+    let mut events = mgr.subscribe_events();
+    git(&notes, &["init", "-q", "-b", "main"]);
+    next_event(&mut events, |e| matches!(e, Event::ReposChanged)).await;
+
+    let projects = mgr.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 2);
+    let repo = &projects[0];
+    assert_eq!(repo.kind, ProjectKind::Git);
+    assert_ne!(repo.repo.id, folder.repo.id);
+    assert_eq!(repo.repo.path, folder.repo.path);
+    assert_eq!(projects[1], other);
+    assert_eq!(mgr.list_repos().await.unwrap(), vec![repo.repo.clone()]);
+    let wts = mgr.list_worktrees(&repo.repo.id).await.unwrap();
+    assert_eq!(wts.len(), 1);
+    assert_eq!(wts[0].id, wt);
+    assert_eq!(wts[0].branch.as_deref(), Some("main"));
+    assert!(matches!(
+        mgr.list_worktrees(&folder.repo.id).await,
+        Err(SessionError::NotFound(_))
+    ));
+
+    // Persisted.
+    drop(mgr);
+    let mut cfg = SessionConfig::new(root.join("state"));
+    cfg.shell = Some("/bin/sh".into());
+    let mgr = SessionManager::new(cfg).unwrap();
+    assert_eq!(mgr.list_projects().await.unwrap(), projects);
 }
 
 #[tokio::test(flavor = "multi_thread")]
