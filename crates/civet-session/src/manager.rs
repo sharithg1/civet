@@ -294,22 +294,33 @@ impl SessionManager {
     /// folder, so git only runs for the one that changed, and a repository
     /// created around a folder does not swallow it.
     async fn promote_folders(&self) -> Vec<StoredRepo> {
+        let candidates: Vec<(String, String)> = self
+            .inner
+            .repos
+            .lock()
+            .await
+            .iter()
+            .filter(|r| r.is_folder() && common_dir(Path::new(&r.path)).is_some())
+            .map(|r| (r.id.clone(), r.path.clone()))
+            .collect();
+        // Why git runs without the lock: it has no timeout, and a stalled
+        // one must not hold up every other repository request.
+        let mut found = Vec::new();
+        for (id, path) in candidates {
+            match self.git_repo_at(Path::new(&path)).await {
+                Ok(Some(stored)) => found.push((id, stored)),
+                Ok(None) => {}
+                Err(e) => tracing::debug!(%path, "folder not promoted: {e}"),
+            }
+        }
         let mut repos = self.inner.repos.lock().await;
         let mut changed = false;
-        for i in (0..repos.len()).rev() {
-            let r = &repos[i];
-            if !r.is_folder() || common_dir(Path::new(&r.path)).is_none() {
+        for (id, stored) in found {
+            // Removed (or already promoted) while git ran: nothing to do.
+            let Some(i) = repos.iter().position(|r| r.id == id && r.is_folder()) else {
                 continue;
-            }
-            let stored = match self.git_repo_at(Path::new(&r.path)).await {
-                Ok(Some(stored)) => stored,
-                Ok(None) => continue,
-                Err(e) => {
-                    tracing::debug!(path = %r.path, "folder not promoted: {e}");
-                    continue;
-                }
             };
-            tracing::info!(folder = %r.id, repo = %stored.id, path = %stored.path, "folder is now a git repository");
+            tracing::info!(folder = %id, repo = %stored.id, path = %stored.path, "folder is now a git repository");
             if repos.iter().any(|o| o.id == stored.id) {
                 repos.remove(i);
             } else {
