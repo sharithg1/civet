@@ -244,6 +244,22 @@ pub(crate) fn expand_copy(main: &Path, patterns: &[String]) -> (Vec<String>, Vec
 /// (directories are merged). Returns whether anything was copied.
 pub(crate) fn copy_missing(main: &Path, wt: &Path, rel: &str) -> std::io::Result<bool> {
     let dst = wt.join(rel);
+    // Why: a symlinked directory in the worktree (tracked, say) would send
+    // the copy outside it; the last component is checked by copy_entry.
+    let mut cur = wt.to_path_buf();
+    for comp in Path::new(rel)
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+    {
+        cur.push(comp);
+        if std::fs::symlink_metadata(&cur).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(std::io::Error::other(format!(
+                "{} is a symlink; not copying through it",
+                cur.display()
+            )));
+        }
+    }
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -446,6 +462,12 @@ future-key = 1
         );
         // A second run copies nothing new.
         assert!(!copy_missing(&main, &wt, "conf").unwrap());
+        // Never through a symlinked directory of the worktree.
+        let wt2 = dir.path().join("wt2");
+        std::fs::create_dir_all(&wt2).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("outside"), wt2.join("apps")).unwrap();
+        assert!(copy_missing(&main, &wt2, "apps/a/.env").is_err());
+        assert!(!dir.path().join("outside/a").exists());
     }
 
     #[test]

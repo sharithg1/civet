@@ -7,7 +7,7 @@ A template has four optional fields:
 | Field | What it does |
 |---|---|
 | `setup` | A script run in a **Setup** tab of the new worktree. Plain scripts run with `sh -e` (stop at the first failing command, so the tab's exit code says whether setup worked); a script starting with `#!` runs with that interpreter. |
-| `copy` | Paths, relative to the main checkout, copied into the new worktree before anything starts: files or directories, `*` and `?` match within one path component (`apps/*/.env`; `*` skips dotfiles unless the pattern starts with `.`). Files the worktree already has are kept; `..`, absolute paths and `.git` are refused, and a pattern never descends through a symlinked directory (a symlink itself is copied as a link). |
+| `copy` | Paths, relative to the main checkout, copied into the new worktree before anything starts: files or directories, `*` and `?` match within one path component (`apps/*/.env`; `*` skips dotfiles unless the pattern starts with `.`). Files the worktree already has are kept; `..`, absolute paths and `.git` are refused, and nothing is read or written through a symlinked directory of either checkout (a symlink itself is copied as a link). |
 | `agent` | Command line of the first agent, e.g. `claude --model opus` or `codex --full-auto`. |
 | `prompt` | Default first prompt: prefills the New worktree dialog's first task, and is put (plus a blank line) before a handoff's brief. |
 
