@@ -505,6 +505,14 @@ impl Server {
                 .list_pull_requests(&repo)
                 .await
                 .map(Response::PullRequests),
+            Request::PullRequestDetail { worktree, threads } => s
+                .pull_request_detail(&worktree, threads)
+                .await
+                .map(Response::PullRequestDetail),
+            Request::CreatePullRequest(req) => s
+                .create_pull_request(req)
+                .await
+                .map(Response::PullRequestCreated),
             Request::ListFiles {
                 worktree,
                 dir,

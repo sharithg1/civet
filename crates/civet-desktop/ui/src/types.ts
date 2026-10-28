@@ -124,6 +124,54 @@ export type PullRequestInfo = {
   state: PullRequestState
 }
 
+/** One CI check, or all of them (`checksState`). */
+export type CheckState = 'pending' | 'passed' | 'failed' | 'skipped' | 'cancelled'
+
+export type PullRequestCheck = { name: string; state: CheckState; url: string | null }
+
+export type ReviewDecision = 'approved' | 'changesRequested' | 'reviewRequired'
+
+/** An unresolved review thread: its first comment as plain text. */
+export type ReviewThread = {
+  path: string
+  /** null: outdated, or on the whole file. */
+  line: number | null
+  outdated: boolean
+  author: string
+  body: string
+  url: string
+  /** Comments in the thread. */
+  comments: number
+}
+
+/** A worktree branch's pull request with CI and reviews (`pull_request_detail`, civetd >= 0.4.3). */
+export type PullRequestDetail = {
+  pr: PullRequestInfo
+  base: string
+  /** Any failed → failed, else any pending → pending, else passed; null without checks. */
+  checksState: CheckState | null
+  checks: PullRequestCheck[]
+  reviewDecision: ReviewDecision | null
+  /** Reviewers whose latest review approves / requests changes. */
+  approvals: number
+  changesRequested: number
+  /** Conversation comments. */
+  comments: number
+  unresolvedThreads: number
+  /** Empty unless asked for (`threads`). */
+  threads: ReviewThread[]
+}
+
+/** `create_pull_request`. An empty title fills title and body from the commits. */
+export type CreatePullRequest = {
+  worktree: WorktreeId
+  title: string
+  body: string
+  /** null: the repository's default branch. */
+  base: string | null
+  draft: boolean
+}
+
 export type FileKind = 'file' | 'dir' | 'symlink'
 
 export type FileEntry = {

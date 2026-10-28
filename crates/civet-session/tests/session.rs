@@ -2904,6 +2904,22 @@ async fn folder_projects() {
         Err(SessionError::Unsupported(_))
     ));
     assert!(matches!(
+        f.mgr.pull_request_detail(&wt, true).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .create_pull_request(civet_proto::CreatePullRequest {
+                worktree: wt.clone(),
+                title: "t".into(),
+                body: String::new(),
+                base: None,
+                draft: false,
+            })
+            .await,
+        Err(SessionError::Unsupported(_))
+    ));
+    assert!(matches!(
         f.mgr
             .create_worktree(&folder.repo.id, "feat", None, None)
             .await,

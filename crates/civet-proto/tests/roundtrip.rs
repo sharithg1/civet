@@ -308,6 +308,17 @@ fn all_requests() -> Vec<Request> {
             worktree: WorktreeId::from("/w"),
             size: TermSize::new(120, 36),
         },
+        Request::PullRequestDetail {
+            worktree: WorktreeId::from("/w"),
+            threads: true,
+        },
+        Request::CreatePullRequest(CreatePullRequest {
+            worktree: WorktreeId::from("/w"),
+            title: "Add x".into(),
+            body: "Why:\n- y".into(),
+            base: Some("main".into()),
+            draft: true,
+        }),
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -315,6 +326,49 @@ fn all_requests() -> Vec<Request> {
         action,
     }))
     .collect()
+}
+
+fn pull_request_detail() -> PullRequestDetail {
+    PullRequestDetail {
+        pr: PullRequestInfo {
+            number: 42,
+            branch: "feat/x".into(),
+            title: "Add x".into(),
+            url: "https://github.com/o/r/pull/42".into(),
+            state: PullRequestState::Open,
+        },
+        base: "main".into(),
+        checks_state: Some(CheckState::Failed),
+        checks: [
+            CheckState::Pending,
+            CheckState::Passed,
+            CheckState::Failed,
+            CheckState::Skipped,
+            CheckState::Cancelled,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, state)| PullRequestCheck {
+            name: format!("check {i}"),
+            state,
+            url: (i % 2 == 0).then(|| format!("https://ci/{i}")),
+        })
+        .collect(),
+        review_decision: Some(ReviewDecision::ChangesRequested),
+        approvals: 1,
+        changes_requested: 2,
+        comments: 3,
+        unresolved_threads: 1,
+        threads: vec![ReviewThread {
+            path: "src/a.rs".into(),
+            line: Some(12),
+            outdated: false,
+            author: "rev".into(),
+            body: "Use foo here".into(),
+            url: "https://github.com/o/r/pull/42#discussion_r1".into(),
+            comments: 2,
+        }],
+    }
 }
 
 fn discard_snapshot() -> GitDiscardSnapshot {
@@ -559,6 +613,15 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             warnings: vec![".env.local: not in the main checkout".into()],
             port: Some(41_010),
             setup_pane: Some(pane_info()),
+        })),
+        Ok(Response::PullRequestDetail(None)),
+        Ok(Response::PullRequestDetail(Some(pull_request_detail()))),
+        Ok(Response::PullRequestCreated(PullRequestInfo {
+            number: 43,
+            branch: "feat/y".into(),
+            title: "Add y".into(),
+            url: "https://github.com/o/r/pull/43".into(),
+            state: PullRequestState::Draft,
         })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),

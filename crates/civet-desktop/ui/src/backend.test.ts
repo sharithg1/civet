@@ -38,6 +38,14 @@ describe('TauriBackend commands', () => {
     await backend.removeRepo('h', 'x')
     await backend.listWorktrees('h', 'x')
     await backend.listPullRequests('h', 'x')
+    await backend.pullRequestDetail('h', '/w', true)
+    await backend.createPullRequest('h', {
+      worktree: '/w',
+      title: 'T',
+      body: '',
+      base: null,
+      draft: true
+    })
     await backend.gitStatus('h', '/w')
     await backend.gitDiff('h', '/w', 'b.rs', { oldPath: 'a.rs', staged: true })
     await backend.gitBranch('h', '/w')
@@ -73,6 +81,14 @@ describe('TauriBackend commands', () => {
       ['remove_repo', { hostId: 'h', repo: 'x' }],
       ['list_worktrees', { hostId: 'h', repo: 'x' }],
       ['list_pull_requests', { hostId: 'h', repo: 'x' }],
+      ['pull_request_detail', { hostId: 'h', worktree: '/w', threads: true }],
+      [
+        'create_pull_request',
+        {
+          hostId: 'h',
+          request: { worktree: '/w', title: 'T', body: '', base: null, draft: true }
+        }
+      ],
       ['git_status', { hostId: 'h', worktree: '/w' }],
       [
         'git_diff',

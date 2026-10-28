@@ -212,6 +212,116 @@ pub struct WorktreeUpdate {
     pub conflicts: Vec<String>,
 }
 
+/// State of one CI check of a pull request, or of all of them
+/// ([`PullRequestDetail::checks_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckState {
+    /// Queued, running or waiting.
+    Pending,
+    /// Succeeded.
+    Passed,
+    /// Failed, errored, timed out or needs action.
+    Failed,
+    /// Skipped or neutral.
+    Skipped,
+    /// Cancelled (counts as neither passed nor failed).
+    Cancelled,
+}
+
+/// One CI check (a GitHub check run or commit status) on a pull request's
+/// head commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestCheck {
+    /// Check run name or status context.
+    pub name: String,
+    /// State.
+    pub state: CheckState,
+    /// Details page, if any.
+    pub url: Option<String>,
+}
+
+/// A pull request's overall review state (GitHub's `reviewDecision`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewDecision {
+    /// Approved by the required reviewers.
+    Approved,
+    /// A reviewer requested changes.
+    ChangesRequested,
+    /// Review required before it can merge.
+    ReviewRequired,
+}
+
+/// An unresolved review thread (comments on a line of the diff).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewThread {
+    /// File, relative to the repository root.
+    pub path: String,
+    /// Line in the file, if the thread is on one (None for an outdated
+    /// thread or a file comment).
+    pub line: Option<u64>,
+    /// The commented code changed since.
+    pub outdated: bool,
+    /// Author login of the first comment.
+    pub author: String,
+    /// The first comment as plain text (HTML comments and tags left out),
+    /// at most [`crate::MAX_REVIEW_COMMENT_CHARS`] characters.
+    pub body: String,
+    /// Web URL of the first comment.
+    pub url: String,
+    /// Comments in the thread.
+    pub comments: u64,
+}
+
+/// The pull request of a worktree's branch with its CI and review state
+/// ([`Request::PullRequestDetail`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestDetail {
+    /// Number, branch, title, URL and state.
+    pub pr: PullRequestInfo,
+    /// Base branch.
+    pub base: String,
+    /// Summary of `checks`: any failed → Failed, else any pending →
+    /// Pending, else Passed; None without checks.
+    pub checks_state: Option<CheckState>,
+    /// CI checks on the head commit.
+    pub checks: Vec<PullRequestCheck>,
+    /// Review decision; None if the repository requires no reviews and
+    /// nobody reviewed yet.
+    pub review_decision: Option<ReviewDecision>,
+    /// Reviewers whose latest review approves.
+    pub approvals: u64,
+    /// Reviewers whose latest review requests changes.
+    pub changes_requested: u64,
+    /// Conversation comments (not review comments).
+    pub comments: u64,
+    /// Unresolved review threads.
+    pub unresolved_threads: u64,
+    /// Those threads, oldest first; empty unless asked for.
+    pub threads: Vec<ReviewThread>,
+}
+
+/// Open a pull request for a worktree's branch
+/// ([`Request::CreatePullRequest`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePullRequest {
+    /// Worktree; its branch is the head, and must be pushed.
+    pub worktree: WorktreeId,
+    /// Title; empty fills title and body from the commits (`--fill`).
+    pub title: String,
+    /// Body (Markdown).
+    pub body: String,
+    /// Base branch; None: the repository's default branch.
+    pub base: Option<String>,
+    /// Open it as a draft.
+    pub draft: bool,
+}
+
 /// Kind of a [`FileEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1115,6 +1225,24 @@ pub enum Request {
         /// Initial size of the setup pane.
         size: TermSize,
     },
+    /// The newest pull request whose head is the worktree's branch (not a
+    /// fork's), with CI checks and reviews (`gh api graphql` on the host).
+    /// -> [`Response::PullRequestDetail`], None if there is none or the
+    /// worktree has no branch. Clients send it only to daemons of at least
+    /// [`crate::PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION`] (also
+    /// [`Request::CreatePullRequest`]).
+    PullRequestDetail {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Also list the unresolved review threads (the count is always
+        /// there).
+        threads: bool,
+    },
+    /// Open a pull request (`gh pr create` on the host).
+    /// -> [`Response::PullRequestCreated`]. gh's refusals (branch not
+    /// pushed, a PR already exists, not logged in) are `Git` errors
+    /// carrying its message.
+    CreatePullRequest(CreatePullRequest),
 }
 
 /// Successful responses. Append-only.
@@ -1198,6 +1326,10 @@ pub enum Response {
     WorktreeTemplate(WorktreeTemplateInfo),
     /// Reply to [`Request::SetupWorktree`].
     WorktreeSetUp(WorktreeSetup),
+    /// Reply to [`Request::PullRequestDetail`].
+    PullRequestDetail(Option<PullRequestDetail>),
+    /// Reply to [`Request::CreatePullRequest`]: the new pull request.
+    PullRequestCreated(PullRequestInfo),
 }
 
 /// Error category for a failed request.

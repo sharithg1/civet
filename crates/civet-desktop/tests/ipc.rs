@@ -186,6 +186,14 @@ fn every_command_through_ipc() {
             json!({ "hostId": "x", "worktree": "/w", "size": size }),
         ),
         ("list_pull_requests", json!({ "hostId": "x", "repo": "r" })),
+        (
+            "pull_request_detail",
+            json!({ "hostId": "x", "worktree": "/w", "threads": true }),
+        ),
+        (
+            "create_pull_request",
+            json!({ "hostId": "x", "request": { "worktree": "/w", "title": "t", "body": "", "base": null, "draft": false } }),
+        ),
         ("git_status", json!({ "hostId": "x", "worktree": "/w" })),
         (
             "git_diff",

@@ -37,7 +37,9 @@ import type {
   TransportChoice,
   WorktreeId,
   WorktreeInfo,
+  PullRequestDetail,
   PullRequestInfo,
+  CreatePullRequest,
   DirListing,
   HostDirListing,
   FileList,
@@ -148,6 +150,18 @@ export interface CivetBackend {
   setupWorktree(hostId: string, worktree: WorktreeId, size: TermSize): Promise<WorktreeSetup>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
+  /**
+   * The newest pull request of the worktree's branch with CI checks and
+   * reviews, null if none (needs civetd >= 0.4.3). `threads`: also the
+   * unresolved review threads.
+   */
+  pullRequestDetail(
+    hostId: string,
+    worktree: WorktreeId,
+    threads: boolean
+  ): Promise<PullRequestDetail | null>
+  /** `gh pr create` on the host for the worktree's (pushed) branch (needs civetd >= 0.4.3). */
+  createPullRequest(hostId: string, request: CreatePullRequest): Promise<PullRequestInfo>
   /** `git status` of a worktree with line counts (needs civetd >= 0.1.11). */
   gitStatus(hostId: string, worktree: WorktreeId): Promise<GitStatusInfo>
   /** One file's diff: index vs. HEAD if `staged`, else working tree vs. index. */
@@ -386,6 +400,16 @@ export class TauriBackend implements CivetBackend {
   }
   listPullRequests(hostId: string, repo: RepoId) {
     return this.call<PullRequestInfo[]>('list_pull_requests', { hostId, repo })
+  }
+  pullRequestDetail(hostId: string, worktree: WorktreeId, threads: boolean) {
+    return this.call<PullRequestDetail | null>('pull_request_detail', {
+      hostId,
+      worktree,
+      threads
+    })
+  }
+  createPullRequest(hostId: string, request: CreatePullRequest) {
+    return this.call<PullRequestInfo>('create_pull_request', { hostId, request })
   }
   gitStatus(hostId: string, worktree: WorktreeId) {
     return this.call<GitStatusInfo>('git_status', { hostId, worktree })

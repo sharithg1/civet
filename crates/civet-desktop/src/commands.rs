@@ -198,6 +198,28 @@ pub async fn setup_worktree(
 }
 
 #[tauri::command]
+pub async fn pull_request_detail(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    threads: bool,
+) -> Res<Option<civet_proto::PullRequestDetail>> {
+    state
+        .hosts
+        .pull_request_detail(&host_id, worktree, threads)
+        .await
+}
+
+#[tauri::command]
+pub async fn create_pull_request(
+    state: State<'_, AppState>,
+    host_id: String,
+    request: civet_proto::CreatePullRequest,
+) -> Res<civet_proto::PullRequestInfo> {
+    state.hosts.create_pull_request(&host_id, request).await
+}
+
+#[tauri::command]
 pub async fn git_status(
     state: State<'_, AppState>,
     host_id: String,
@@ -682,6 +704,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         upload_file,
         list_worktrees,
         list_pull_requests,
+        pull_request_detail,
+        create_pull_request,
         git_status,
         git_diff,
         git_branch,

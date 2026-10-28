@@ -65,14 +65,15 @@ pub use agent::{
 };
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
-    AgentStatusEvent, CommandSpec, ConflictSide, ControlRequest, ControlResponse, DaemonInfo,
-    DirListing, ErrorCode, Event, FileChunk, FileEntry, FileKind, FileList, FileOp, FileOpResult,
-    FilePreview, GitAction, GitBlobRef, GitBranchInfo, GitChangeKind, GitDiffInfo, GitDiscardEntry,
-    GitDiscardSnapshot, GitFileChange, GitStatusInfo, HostDir, HostDirListing, KillSignal,
-    LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind, PullRequestInfo, PullRequestState,
-    RepoInfo, RepoLifecycle, Request, Response, RpcError, SpawnPaneRequest, StaleReason,
-    SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle, WorktreeSetup,
-    WorktreeTemplate, WorktreeTemplateInfo, WorktreeUpdate,
+    AgentStatusEvent, CheckState, CommandSpec, ConflictSide, ControlRequest, ControlResponse,
+    CreatePullRequest, DaemonInfo, DirListing, ErrorCode, Event, FileChunk, FileEntry, FileKind,
+    FileList, FileOp, FileOpResult, FilePreview, GitAction, GitBlobRef, GitBranchInfo,
+    GitChangeKind, GitDiffInfo, GitDiscardEntry, GitDiscardSnapshot, GitFileChange, GitStatusInfo,
+    HostDir, HostDirListing, KillSignal, LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind,
+    PullRequestCheck, PullRequestDetail, PullRequestInfo, PullRequestState, RepoInfo,
+    RepoLifecycle, Request, Response, ReviewDecision, ReviewThread, RpcError, SpawnPaneRequest,
+    StaleReason, SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle,
+    WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo, WorktreeUpdate,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -179,6 +180,14 @@ pub const WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION: &str = "0.4.1";
 /// [`Request::SetWorktreeTemplate`] and [`Request::SetupWorktree`]
 /// (appended within protocol 1 after [`Request::UpdateWorktree`]).
 pub const WORKTREE_TEMPLATE_MIN_DAEMON_VERSION: &str = "0.4.2";
+
+/// Oldest daemon that understands [`Request::PullRequestDetail`] and
+/// [`Request::CreatePullRequest`] (appended within protocol 1 after
+/// [`Request::SetupWorktree`]).
+pub const PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION: &str = "0.4.3";
+
+/// Longest [`ReviewThread::body`], in characters.
+pub const MAX_REVIEW_COMMENT_CHARS: usize = 600;
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
