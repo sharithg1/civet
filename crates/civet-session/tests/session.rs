@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use civet_proto::{
     AgentStatus, AgentStatusEvent, AgentStatusSource, ClientId, CommandSpec, Event, InputMessage,
-    KillSignal, LaunchAgentRequest, MAX_INFLIGHT_UPDATES, PaneId, RepoId, SpawnPaneRequest,
-    TermSize, UpdateKind, WorktreeId,
+    KillSignal, LaunchAgentRequest, MAX_INFLIGHT_UPDATES, PaneId, PromptTrigger, RepoId,
+    SpawnPaneRequest, TermSize, UpdateKind, WorktreeId,
 };
 use civet_session::{InputOutcome, PaneOutput, SessionConfig, SessionError, SessionManager};
 use tokio::sync::broadcast;
@@ -1627,6 +1627,148 @@ async fn osc52_clipboard_write_is_an_event() {
         }
         other => panic!("unexpected {other:?}"),
     }
+}
+
+// ----- prompts (broadcast / queued) -----------------------------------------
+
+/// A fake agent TUI: raw tty, bracketed paste on, every input byte to
+/// `out`. `before` runs first (e.g. hook status writes).
+fn prompt_reader(out: &Path, before: &str) -> SpawnPaneRequest {
+    let mut r = sh(&format!(
+        "{before} stty raw -echo; printf '\\033[?2004hREADY'; exec cat > '{}'",
+        out.display()
+    ));
+    r.agent = Some("fake".into());
+    r
+}
+
+async fn wait_file(path: &Path, want: &[u8]) -> Instant {
+    let mut got = Vec::new();
+    let start = Instant::now();
+    while got != want {
+        assert!(
+            start.elapsed() < T,
+            "timed out: {:?} != {:?}",
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(want)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        got = std::fs::read(path).unwrap_or_default();
+    }
+    Instant::now()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_prompt_pastes_then_presses_enter() {
+    let f = fixture();
+    let out = f.root.join("typed");
+    let info = f.mgr.spawn_pane(prompt_reader(&out, "")).await.unwrap();
+    wait_screen(&f.mgr, info.id, "READY").await;
+    let sent = Instant::now();
+    f.mgr
+        .send_prompt(info.id, "fix the bug\r\nthen run tests\n\n")
+        .unwrap();
+    let pasted = wait_file(&out, b"\x1b[200~fix the bug\rthen run tests\x1b[201~").await;
+    // The Enter comes as its own write, after the paste (unless this
+    // machine is so slow that the paste only showed up late).
+    if pasted.duration_since(sent) < Duration::from_millis(250) {
+        assert!(!std::fs::read(&out).unwrap().ends_with(b"\r"));
+    }
+    wait_file(&out, b"\x1b[200~fix the bug\rthen run tests\x1b[201~\r").await;
+
+    let err = f.mgr.send_prompt(info.id, " \n").unwrap_err();
+    assert!(matches!(err, SessionError::InvalidArgument(_)), "{err:?}");
+    let err = f.mgr.send_prompt(PaneId(999), "x").unwrap_err();
+    assert!(matches!(err, SessionError::NotFound(_)), "{err:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_prompt_fires_when_the_agent_is_done() {
+    let f = fixture();
+    let mut events = f.mgr.subscribe_events();
+    let out = f.root.join("typed");
+    let info = f
+        .mgr
+        .spawn_pane(prompt_reader(
+            &out,
+            "printf running > \"$CIVET_STATUS_FILE\"; sleep 0.8; printf done > \"$CIVET_STATUS_FILE\";",
+        ))
+        .await
+        .unwrap();
+    let first = f
+        .mgr
+        .queue_prompt(info.id, "next task", PromptTrigger::Done)
+        .unwrap();
+    let second = f
+        .mgr
+        .queue_prompt(info.id, "after that", PromptTrigger::Done)
+        .unwrap();
+    assert_eq!(
+        f.mgr.queued_prompts_of(info.id),
+        [first.clone(), second.clone()]
+    );
+    let edited = f
+        .mgr
+        .edit_queued_prompt(second.id, "edited", PromptTrigger::DoneOrNeedsInput)
+        .unwrap();
+    assert_eq!(edited.text, "edited");
+    match next_event(&mut events, |e| {
+        matches!(e, Event::PromptQueue { sent: Some(_), .. })
+    })
+    .await
+    {
+        Event::PromptQueue {
+            pane,
+            prompts,
+            sent,
+        } => {
+            assert_eq!(pane, info.id);
+            assert_eq!(sent, Some(first.id));
+            assert_eq!(prompts, std::slice::from_ref(&edited));
+        }
+        _ => unreachable!(),
+    }
+    wait_file(&out, b"\x1b[200~next task\x1b[201~\r").await;
+    // Still "done": the second one waits for the next turn.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        b"\x1b[200~next task\x1b[201~\r"
+    );
+    f.mgr.cancel_queued_prompt(edited.id).unwrap();
+    assert!(f.mgr.queued_prompts().is_empty());
+    assert!(matches!(
+        f.mgr.cancel_queued_prompt(edited.id),
+        Err(SessionError::NotFound(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_prompts_are_dropped_when_the_pane_exits() {
+    let f = fixture();
+    let mut events = f.mgr.subscribe_events();
+    let info = f.mgr.spawn_pane(sh("sleep 0.5")).await.unwrap();
+    f.mgr
+        .queue_prompt(info.id, "never sent", PromptTrigger::Done)
+        .unwrap();
+    match next_event(
+        &mut events,
+        |e| matches!(e, Event::PromptQueue { prompts, .. } if prompts.is_empty()),
+    )
+    .await
+    {
+        Event::PromptQueue { pane, sent, .. } => {
+            assert_eq!(pane, info.id);
+            assert_eq!(sent, None);
+        }
+        _ => unreachable!(),
+    }
+    assert!(f.mgr.queued_prompts().is_empty());
+    let err = f
+        .mgr
+        .queue_prompt(info.id, "x", PromptTrigger::Done)
+        .unwrap_err();
+    assert!(matches!(err, SessionError::InvalidArgument(_)), "{err:?}");
 }
 
 // ----- git status / diff ------------------------------------------------------

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use civet_proto::{
     AgentStatus, ClientId, Event, InputMessage, KillSignal, LaunchAgentRequest, PaneId, PaneInfo,
-    ProjectInfo, ProjectKind, RepoId, RepoInfo, ScrollbackPage, ScrollbackRequest,
-    SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo,
+    ProjectInfo, ProjectKind, PromptTrigger, QueuedPrompt, RepoId, RepoInfo, ScrollbackPage,
+    ScrollbackRequest, SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -20,6 +20,7 @@ use crate::git::{
 };
 use crate::hooks::{self, HookFiles, ShellKind, basename};
 use crate::pane::{Pane, SpawnParams, lock};
+use crate::prompts::{self, PromptQueues};
 use crate::subscription::Subscription;
 use crate::watch::{WorktreeWatch, common_dir};
 use crate::{ENV_WORKTREE, InputOutcome, KNOWN_AGENTS, SessionConfig, SessionError};
@@ -87,6 +88,9 @@ struct Inner {
     next_pane: AtomicU64,
     repos: tokio::sync::Mutex<Vec<StoredRepo>>,
     pushed_branches: crate::lifecycle::PushedBranches,
+    /// Queued prompts and pending Enter presses (see [`crate::prompts`]);
+    /// driven by the status ticker.
+    prompts: Mutex<PromptQueues>,
     shutdown: AtomicBool,
 }
 
@@ -197,6 +201,7 @@ impl SessionManager {
             next_pane: AtomicU64::new(1),
             repos: tokio::sync::Mutex::new(repos),
             pushed_branches: Default::default(),
+            prompts: Mutex::new(PromptQueues::default()),
             shutdown: AtomicBool::new(false),
             config,
         });
@@ -1222,6 +1227,71 @@ impl SessionManager {
         Ok(())
     }
 
+    // ----- prompts (see crate::prompts) ----------------------------------
+
+    /// Type `text` into the pane and press Enter [`prompts::SUBMIT_DELAY`]
+    /// later (the ticker does). Returns once the text is queued for the PTY.
+    pub fn send_prompt(&self, pane: PaneId, text: &str) -> Result<(), SessionError> {
+        let text = prompts::clean_prompt(text)?;
+        self.pane(pane)?.type_prompt(&text)?;
+        lock(&self.inner.prompts).submit_at(pane, Instant::now() + prompts::SUBMIT_DELAY);
+        Ok(())
+    }
+
+    /// Queue a prompt on a pane, sent the next time its agent changes into
+    /// a status `trigger` fires on. Emits PromptQueue.
+    pub fn queue_prompt(
+        &self,
+        pane: PaneId,
+        text: &str,
+        trigger: PromptTrigger,
+    ) -> Result<QueuedPrompt, SessionError> {
+        let text = prompts::clean_prompt(text)?;
+        let p = self.pane(pane)?;
+        if p.is_exited() {
+            return Err(SessionError::InvalidArgument(format!("{pane} has exited")));
+        }
+        let prompt = lock(&self.inner.prompts).push(pane, p.status(), text, trigger)?;
+        self.emit_prompt_queue(pane, None);
+        Ok(prompt)
+    }
+
+    /// Change a queued prompt's text and trigger. Emits PromptQueue.
+    pub fn edit_queued_prompt(
+        &self,
+        id: u64,
+        text: &str,
+        trigger: PromptTrigger,
+    ) -> Result<QueuedPrompt, SessionError> {
+        let text = prompts::clean_prompt(text)?;
+        let prompt = lock(&self.inner.prompts).edit(id, text, trigger)?;
+        self.emit_prompt_queue(prompt.pane, None);
+        Ok(prompt)
+    }
+
+    /// Drop a queued prompt. Emits PromptQueue.
+    pub fn cancel_queued_prompt(&self, id: u64) -> Result<(), SessionError> {
+        let prompt = lock(&self.inner.prompts)
+            .remove(id)
+            .ok_or_else(|| SessionError::NotFound(format!("queued prompt {id}")))?;
+        self.emit_prompt_queue(prompt.pane, None);
+        Ok(())
+    }
+
+    /// Every queued prompt, by pane, oldest first.
+    pub fn queued_prompts(&self) -> Vec<QueuedPrompt> {
+        lock(&self.inner.prompts).all()
+    }
+
+    /// One pane's queued prompts, oldest first.
+    pub fn queued_prompts_of(&self, pane: PaneId) -> Vec<QueuedPrompt> {
+        lock(&self.inner.prompts).of(pane)
+    }
+
+    fn emit_prompt_queue(&self, pane: PaneId, sent: Option<u64>) {
+        emit_prompt_queue(&self.inner, pane, sent);
+    }
+
     /// Serve a scrollback page.
     pub fn fetch_scrollback(
         &self,
@@ -1361,14 +1431,81 @@ fn ticker(weak: Weak<Inner>) {
             return;
         }
         let panes: Vec<_> = lock(&inner.panes).values().cloned().collect();
-        drop(inner);
         n = n.wrapping_add(1);
         let now = Instant::now();
-        for p in panes {
+        for p in &panes {
             if n % HOOK_POLL_TICKS == 0 {
                 p.poll_hook_file();
             }
             p.tick(now);
+        }
+        run_prompts(&inner, &panes, now);
+        drop(inner);
+    }
+}
+
+fn emit_prompt_queue(inner: &Inner, pane: PaneId, sent: Option<u64>) {
+    let prompts = lock(&inner.prompts).of(pane);
+    let _ = inner.events.send(Event::PromptQueue {
+        pane,
+        prompts,
+        sent,
+    });
+}
+
+/// One ticker round of the prompt queues: drop the queues of panes that
+/// exited or closed, feed the others' status, send the prompts that are
+/// due and press the Enters that are due. Pane writes never block (they
+/// queue for the PTY writer), so this is cheap.
+fn run_prompts(inner: &Inner, panes: &[Arc<Pane>], now: Instant) {
+    let by_id: BTreeMap<PaneId, &Arc<Pane>> = panes.iter().map(|p| (p.id, p)).collect();
+    let (due, submits, exited) = {
+        let mut q = lock(&inner.prompts);
+        let mut exited = Vec::new();
+        for pane in q.panes() {
+            match by_id.get(&pane) {
+                Some(p) if !p.is_exited() => q.observe(pane, p.status(), now),
+                // Exited: tell clients the queue is gone. Closed: the pane
+                // itself is gone for them.
+                Some(_) => {
+                    q.drop_pane(pane);
+                    exited.push(pane);
+                }
+                None => {
+                    q.drop_pane(pane);
+                }
+            }
+        }
+        let due = q.due(now, |pane| by_id.get(&pane).map(|p| p.status()));
+        (due, q.due_submits(now), exited)
+    };
+    for pane in exited {
+        emit_prompt_queue(inner, pane, None);
+    }
+    for prompt in due {
+        let Some(p) = by_id.get(&prompt.pane) else {
+            continue;
+        };
+        match p.type_prompt(&prompt.text) {
+            Ok(()) => {
+                tracing::info!(pane = prompt.pane.0, id = prompt.id, "queued prompt sent");
+                let mut q = lock(&inner.prompts);
+                q.remove(prompt.id);
+                q.submit_at(prompt.pane, now + prompts::SUBMIT_DELAY);
+                drop(q);
+                emit_prompt_queue(inner, prompt.pane, Some(prompt.id));
+            }
+            Err(SessionError::Busy(_)) => {
+                lock(&inner.prompts).retry(prompt.pane, now + prompts::FIRE_RETRY);
+            }
+            Err(e) => {
+                tracing::debug!(pane = prompt.pane.0, error = %e, "queued prompt not sent");
+            }
+        }
+    }
+    for pane in submits {
+        if let Some(Err(e)) = by_id.get(&pane).map(|p| p.press_enter()) {
+            tracing::debug!(pane = pane.0, error = %e, "prompt submit dropped");
         }
     }
 }

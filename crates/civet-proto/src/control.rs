@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentStatus, AgentStatusSource};
 use crate::ids::{PaneId, RepoId, RequestId, WorktreeId};
+use crate::prompts::{PromptTrigger, QueuedPrompt};
 use crate::term::{ScrollbackPage, ScrollbackRequest, TermSize};
 
 /// A repository known to the daemon.
@@ -1029,6 +1030,50 @@ pub enum Request {
         /// Rebase or merge.
         strategy: UpdateStrategy,
     },
+    /// Type `text` into a pane and submit it (see [`crate::prompts`]): a
+    /// bracketed paste if the program enabled it, Enter a moment later.
+    /// Sent to each pane of a broadcast. -> [`Response::Ok`] once the text
+    /// is queued for the PTY (the Enter follows). Empty text, text over
+    /// [`crate::MAX_PROMPT_BYTES`] or an exited pane are `InvalidArgument`.
+    /// Clients send it only to daemons of at least
+    /// [`crate::PROMPTS_MIN_DAEMON_VERSION`] (also the queue requests).
+    SendPrompt {
+        /// Pane.
+        pane: PaneId,
+        /// Prompt text; trailing newlines are dropped.
+        text: String,
+    },
+    /// Queue a prompt on a pane, sent the next time its agent reaches the
+    /// trigger's status. -> [`Response::QueuedPrompt`]; every client gets
+    /// [`Event::PromptQueue`]. At most [`crate::MAX_QUEUED_PROMPTS`] per
+    /// pane (`InvalidArgument` beyond).
+    QueuePrompt {
+        /// Pane.
+        pane: PaneId,
+        /// Prompt text.
+        text: String,
+        /// When to send it.
+        trigger: PromptTrigger,
+    },
+    /// Change a queued prompt's text and trigger (it keeps its place).
+    /// -> [`Response::QueuedPrompt`]; `NotFound` once it was sent or
+    /// cancelled.
+    EditQueuedPrompt {
+        /// [`QueuedPrompt::id`].
+        id: u64,
+        /// New text.
+        text: String,
+        /// New trigger.
+        trigger: PromptTrigger,
+    },
+    /// Drop a queued prompt. -> [`Response::Ok`]; `NotFound` once it was
+    /// sent or cancelled.
+    CancelQueuedPrompt {
+        /// [`QueuedPrompt::id`].
+        id: u64,
+    },
+    /// Every queued prompt, by pane, oldest first. -> [`Response::QueuedPrompts`]
+    ListQueuedPrompts,
 }
 
 /// Successful responses. Append-only.
@@ -1107,6 +1152,10 @@ pub enum Response {
     WorktreeLifecycle(RepoLifecycle),
     /// Reply to [`Request::UpdateWorktree`].
     WorktreeUpdated(WorktreeUpdate),
+    /// Reply to [`Request::QueuePrompt`] and [`Request::EditQueuedPrompt`].
+    QueuedPrompt(QueuedPrompt),
+    /// Reply to [`Request::ListQueuedPrompts`].
+    QueuedPrompts(Vec<QueuedPrompt>),
 }
 
 /// Error category for a failed request.
@@ -1259,6 +1308,18 @@ pub enum Event {
         /// Decoded clipboard text.
         text: String,
     },
+    /// A pane's queued prompts changed (queued, edited, cancelled, sent, or
+    /// dropped because the pane exited). Sent only to clients new enough to
+    /// decode it (client version at least
+    /// [`crate::PROMPT_QUEUE_EVENT_MIN_CLIENT_VERSION`]).
+    PromptQueue {
+        /// Pane.
+        pane: PaneId,
+        /// Its queue now, oldest (next to send) first.
+        prompts: Vec<QueuedPrompt>,
+        /// Set when the change is that this prompt was just sent.
+        sent: Option<u64>,
+    },
 }
 
 impl Event {
@@ -1271,7 +1332,8 @@ impl Event {
             | Event::PaneTitle { pane, .. }
             | Event::PaneResized { pane, .. }
             | Event::Bell { pane }
-            | Event::Clipboard { pane, .. } => Some(*pane),
+            | Event::Clipboard { pane, .. }
+            | Event::PromptQueue { pane, .. } => Some(*pane),
             Event::AgentStatus(e) => Some(e.pane),
             Event::ReposChanged | Event::WorktreesChanged { .. } => None,
         }

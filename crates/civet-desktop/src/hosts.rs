@@ -723,7 +723,8 @@ impl HostManager {
             Event::Bell { .. }
             | Event::ReposChanged
             | Event::WorktreesChanged { .. }
-            | Event::Clipboard { .. } => {}
+            | Event::Clipboard { .. }
+            | Event::PromptQueue { .. } => {}
         }
         self.inner.ui.daemon_event(DaemonEventPayload {
             host_id: host.id.clone(),
@@ -1710,6 +1711,69 @@ impl HostManager {
         status: AgentStatus,
     ) -> Result<(), CmdError> {
         expect_response!(self.request(host_id, Request::SetAgentStatus { pane, status }).await?, Response::Ok => ())
+    }
+
+    /// `send_prompt`: type a prompt into a pane and submit it.
+    pub async fn send_prompt(
+        &self,
+        host_id: &str,
+        pane: PaneId,
+        text: String,
+    ) -> Result<(), CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PROMPTS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::SendPrompt { pane, text }).await?, Response::Ok => ())
+    }
+
+    /// `queue_prompt`
+    pub async fn queue_prompt(
+        &self,
+        host_id: &str,
+        pane: PaneId,
+        text: String,
+        trigger: civet_proto::PromptTrigger,
+    ) -> Result<civet_proto::QueuedPrompt, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PROMPTS_MIN_DAEMON_VERSION)?;
+        let request = Request::QueuePrompt {
+            pane,
+            text,
+            trigger,
+        };
+        expect_response!(self.request(host_id, request).await?, Response::QueuedPrompt(p) => p)
+    }
+
+    /// `edit_queued_prompt`
+    pub async fn edit_queued_prompt(
+        &self,
+        host_id: &str,
+        id: u64,
+        text: String,
+        trigger: civet_proto::PromptTrigger,
+    ) -> Result<civet_proto::QueuedPrompt, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PROMPTS_MIN_DAEMON_VERSION)?;
+        let request = Request::EditQueuedPrompt { id, text, trigger };
+        expect_response!(self.request(host_id, request).await?, Response::QueuedPrompt(p) => p)
+    }
+
+    /// `cancel_queued_prompt`
+    pub async fn cancel_queued_prompt(&self, host_id: &str, id: u64) -> Result<(), CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PROMPTS_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::CancelQueuedPrompt { id }).await?, Response::Ok => ())
+    }
+
+    /// `list_queued_prompts`: every pane's queue (empty before civetd 0.4.2,
+    /// which has none).
+    pub async fn list_queued_prompts(
+        &self,
+        host_id: &str,
+    ) -> Result<Vec<civet_proto::QueuedPrompt>, CmdError> {
+        self.host(host_id)?;
+        if self
+            .check_daemon_version(host_id, civet_proto::PROMPTS_MIN_DAEMON_VERSION)
+            .is_err()
+        {
+            return Ok(Vec::new());
+        }
+        expect_response!(self.request(host_id, Request::ListQueuedPrompts).await?, Response::QueuedPrompts(p) => p)
     }
 
     /// `set_prediction`

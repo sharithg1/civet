@@ -18,12 +18,16 @@
 // with their count. While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
 // (not a git repository) is a single row that selects its root: it has no
-// worktrees.
+// worktrees. ⌘-click picks several worktrees for "Send prompt" (⇧⌘B; a bar
+// above Settings shows the selection), and prompts queued on a worktree's
+// agents (state/prompts.ts) are listed under its row: click to edit, × to
+// cancel.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Archive,
   ArchiveRestore,
+  ListEnd,
   ArrowLeft,
   ArrowRight,
   Brush,
@@ -42,10 +46,12 @@ import {
   PanelLeft,
   Plus,
   Search,
+  Send,
   Settings,
   SquarePen,
   Terminal,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react'
 import {
   activateTab,
@@ -79,11 +85,21 @@ import {
   useWorktreeLifecycle
 } from '@/state/lifecycle'
 import { useChanges } from '@/state/changes'
+import {
+  cancelQueuedPrompt,
+  clearSelected,
+  openPromptDialog,
+  openSendPrompt,
+  toggleSelected,
+  usePrompts
+} from '@/state/prompts'
+import { promptPreview, triggerLabel } from '@/lib/prompts'
 import { dropLineClass, useReorder, type Reorder } from '@/lib/reorder'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { basename, cn } from '@/lib/utils'
 import { useTitleBarInset } from '@/lib/window-chrome'
 import {
+  agentName,
   ago,
   clearedParts,
   worktreeBranch,
@@ -91,7 +107,7 @@ import {
   worktreeTask,
   type ClearedLabel
 } from '@/lib/worktree-view'
-import type { PullRequestInfo, WorktreeInfo } from '@/types'
+import type { PaneId, PaneInfo, PullRequestInfo, QueuedPrompt, WorktreeInfo } from '@/types'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -150,6 +166,7 @@ export function Sidebar() {
           <HostSection key={id} host={hosts[id]!} reorder={reorder} index={i} />
         ))}
       </div>
+      <SelectionBar />
       <SidebarFooter />
     </aside>
   )
@@ -249,6 +266,13 @@ function SidebarNav() {
         hint="⌘O"
         onClick={() => useStore.setState({ addProject: { hostId: null } })}
       />
+      <NavItem
+        icon={<Send />}
+        label="Send prompt"
+        hint="⇧⌘B"
+        disabled={!anyConnected}
+        onClick={() => openSendPrompt()}
+      />
     </nav>
   )
 }
@@ -277,6 +301,32 @@ function NavItem({
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {hint && <Kbd className="opacity-0 transition-opacity group-hover:opacity-100">{hint}</Kbd>}
     </button>
+  )
+}
+
+/** Worktrees ⌘-clicked for "Send prompt": how many, send, clear. */
+function SelectionBar() {
+  const count = usePrompts((s) => s.selected.length)
+  if (!count) return null
+  return (
+    <div
+      data-selection-bar
+      title={`${count} worktree${count === 1 ? '' : 's'} selected (⌘-click to add or remove)`}
+      className="mx-2 mb-1 flex h-[30px] shrink-0 items-center gap-1 rounded-md bg-sidebar-accent pr-1 pl-2 text-sm"
+    >
+      <span className="min-w-0 flex-1 truncate text-soft">{count} selected</span>
+      <button
+        type="button"
+        onClick={() => openSendPrompt()}
+        className="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-[4px] px-1.5 text-foreground hover:bg-hover-strong [&_svg]:size-3.5"
+      >
+        <Send />
+        Send prompt…
+      </button>
+      <IconButton label="Clear selection" side="top" onClick={clearSelected}>
+        <X className="size-3.5" />
+      </IconButton>
+    </div>
   )
 }
 
@@ -700,7 +750,7 @@ function useStaleCount(hostId: string, repo: string): number {
   }).length
 }
 
-/** Right-click menu of a worktree row: clear label, archive / unarchive, update, remove. */
+/** Right-click menu of a worktree row: send prompt, clear label, archive / unarchive, update, remove. */
 function WorktreeMenu({
   hostId,
   wt,
@@ -736,6 +786,11 @@ function WorktreeMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
+        <ContextMenuItem onSelect={() => openSendPrompt([wsKey(hostId, wt.id)])}>
+          <Send />
+          Send prompt…
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem
           disabled={!label}
           onSelect={() => label && setWorktreeLabelCleared(hostId, wt.id, label)}
@@ -838,6 +893,7 @@ function WorktreeRow({
   const selected = useStore((s) => s.active?.hostId === hostId && s.active.worktree === wt.id)
   const unread = useStore((s) => s.unread[key])
   const removing = useStore((s) => !!s.removing[key])
+  const picked = usePrompts((s) => s.selected.includes(key))
   const paneMap = useStore((s) => s.panes[hostId])
   // Any worktree, the main one included (a feature branch may be checked
   // out there), except on the default branch.
@@ -901,16 +957,24 @@ function WorktreeRow({
         data-archived={archived ? 'true' : undefined}
         data-active={selected ? 'true' : 'false'}
         data-removing={removing ? 'true' : undefined}
+        data-picked={picked ? 'true' : undefined}
         aria-disabled={removing || undefined}
         title={
           removing
             ? `Removing ${host.label}:${wt.path}…`
             : `${useTask ? `${branch}\n` : ''}${host.label}:${wt.path}`
         }
-        onClick={() => !removing && selectWorktree(hostId, wt.id)}
+        onClick={(e) => {
+          if (removing) return
+          // ⌘-click: pick for "Send prompt"; a plain click drops the picks.
+          if (e.metaKey || e.ctrlKey) return toggleSelected(key)
+          clearSelected()
+          selectWorktree(hostId, wt.id)
+        }}
         className={cn(
           'relative mx-2 flex cursor-default flex-col rounded-md px-2',
           selected ? 'bg-sidebar-accent' : !removing && 'hover:bg-hover',
+          picked && 'ring-1 ring-status-run/70 ring-inset',
           archived && !selected && 'opacity-60',
           // Why: the tab sub-rows have their own click handlers; with their
           // pointer events off every click lands on the (guarded) row.
@@ -1000,7 +1064,68 @@ function WorktreeRow({
             })}
           </div>
         )}
+        {!removing && <QueuedPrompts hostId={hostId} panes={panes} />}
       </div>
     </WorktreeMenu>
+  )
+}
+
+/**
+ * Prompts queued on a worktree's agents, next first: one line each (click
+ * to edit, × to cancel), the agent named when the worktree has several.
+ */
+function QueuedPrompts({ hostId, panes }: { hostId: string; panes: PaneInfo[] }) {
+  const queues = usePrompts((s) => s.queues[hostId])
+  const items: { prompt: QueuedPrompt; pane: PaneInfo }[] = []
+  for (const pane of panes) {
+    for (const prompt of queues?.[pane.id as PaneId] ?? []) items.push({ prompt, pane })
+  }
+  if (!items.length) return null
+  const several = new Set(items.map((i) => i.pane.id)).size > 1
+  // Named like the tabs: "Claude 1", "Codex 1"… in pane order.
+  const names = new Map<PaneId, string>()
+  const counts = new Map<string, number>()
+  for (const p of panes.filter((p) => p.agent).sort((a, b) => a.id - b.id)) {
+    const kind = agentName(p)
+    const n = (counts.get(kind) ?? 0) + 1
+    counts.set(kind, n)
+    names.set(p.id, `${kind} ${n}`)
+  }
+  return (
+    <div className="-mt-0.5 mb-1 flex flex-col" data-queued-prompts>
+      {items.map(({ prompt, pane }, i) => {
+        const next = i === 0 || items[i - 1]!.pane.id !== pane.id
+        return (
+          <div
+            key={prompt.id}
+            data-queued-prompt={prompt.id}
+            title={`Queued for ${pane.title || `pane ${pane.id}`}, sent ${triggerLabel(prompt.trigger)}${next ? '' : ' (after the one above)'}\n\n${prompt.text}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              openPromptDialog({ kind: 'edit', hostId, prompt })
+            }}
+            className="group/qp flex h-6 cursor-default items-center gap-2 pl-[26px] text-sm"
+          >
+            <ListEnd className="size-3 shrink-0 text-dim" aria-label="Queued prompt" />
+            {several && next && <span className="shrink-0 text-quiet">{names.get(pane.id)}</span>}
+            <span className="min-w-0 flex-1 truncate text-quiet group-hover/qp:text-soft">
+              {promptPreview(prompt.text, 60)}
+            </span>
+            <button
+              type="button"
+              aria-label="Cancel queued prompt"
+              title="Cancel queued prompt"
+              onClick={(e) => {
+                e.stopPropagation()
+                void cancelQueuedPrompt(hostId, prompt)
+              }}
+              className="grid size-[18px] shrink-0 cursor-pointer place-items-center rounded-[4px] text-dim opacity-0 group-hover/qp:opacity-100 hover:bg-hover-strong hover:text-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+        )
+      })}
+    </div>
   )
 }

@@ -297,6 +297,22 @@ fn all_requests() -> Vec<Request> {
             worktree: WorktreeId::from("/w"),
             strategy: UpdateStrategy::Merge,
         },
+        Request::SendPrompt {
+            pane: PaneId(3),
+            text: "run the tests\nthen commit".into(),
+        },
+        Request::QueuePrompt {
+            pane: PaneId(3),
+            text: "now open a PR".into(),
+            trigger: PromptTrigger::Done,
+        },
+        Request::EditQueuedPrompt {
+            id: 9,
+            text: "yes".into(),
+            trigger: PromptTrigger::DoneOrNeedsInput,
+        },
+        Request::CancelQueuedPrompt { id: 9 },
+        Request::ListQueuedPrompts,
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -541,6 +557,12 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             outcome: UpdateOutcome::UpToDate,
             conflicts: vec![],
         })),
+        Ok(Response::QueuedPrompt(queued_prompt())),
+        Ok(Response::QueuedPrompts(vec![
+            queued_prompt(),
+            queued_prompt(),
+        ])),
+        Ok(Response::QueuedPrompts(vec![])),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -583,7 +605,27 @@ fn all_events() -> Vec<Event> {
             pane: PaneId(1),
             text: "copied ✓".into(),
         },
+        Event::PromptQueue {
+            pane: PaneId(7),
+            prompts: vec![queued_prompt()],
+            sent: None,
+        },
+        Event::PromptQueue {
+            pane: PaneId(7),
+            prompts: vec![],
+            sent: Some(4),
+        },
     ]
+}
+
+fn queued_prompt() -> QueuedPrompt {
+    QueuedPrompt {
+        id: 4,
+        pane: PaneId(7),
+        text: "now run the e2e tests".into(),
+        trigger: PromptTrigger::DoneOrNeedsInput,
+        created_at_ms: 1_700_000_000_000,
+    }
 }
 
 #[test]
@@ -1039,6 +1081,48 @@ fn host_stats_is_appended() {
     assert_eq!(v["hostStats"]["samples"][0]["memUsed"], 41u64 << 30);
     assert_eq!(v["hostStats"]["load"], serde_json::json!([820, 610, 400]));
     assert_eq!(v["hostStats"]["processes"][0]["worktree"], "/w");
+}
+
+#[test]
+fn prompts_are_appended() {
+    // Appended within protocol 1 after UpdateWorktree (request 33) /
+    // WorktreeUpdated (response 28) and Clipboard (event 9).
+    let req = encode(&Request::SendPrompt {
+        pane: PaneId(2),
+        text: "hi".into(),
+    })
+    .unwrap();
+    assert_eq!(req, vec![34, 2, 2, b'h', b'i']);
+    assert_eq!(encode(&Request::ListQueuedPrompts).unwrap(), vec![38]);
+    let resp = encode(&Response::QueuedPrompts(vec![])).unwrap();
+    assert_eq!(resp, vec![30, 0]);
+    let ev = encode(&Event::PromptQueue {
+        pane: PaneId(2),
+        prompts: vec![],
+        sent: None,
+    })
+    .unwrap();
+    assert_eq!(ev, vec![10, 2, 0, 0]);
+    assert_eq!(
+        Event::PromptQueue {
+            pane: PaneId(2),
+            prompts: vec![],
+            sent: None
+        }
+        .pane(),
+        Some(PaneId(2))
+    );
+    let v = serde_json::to_value(Event::PromptQueue {
+        pane: PaneId(7),
+        prompts: vec![queued_prompt()],
+        sent: Some(4),
+    })
+    .unwrap();
+    assert_eq!(
+        v["promptQueue"]["prompts"][0]["trigger"],
+        "doneOrNeedsInput"
+    );
+    assert_eq!(v["promptQueue"]["sent"], 4);
 }
 
 #[test]

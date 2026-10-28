@@ -52,7 +52,9 @@ import type {
   HostStats,
   RepoLifecycle,
   UpdateStrategy,
-  WorktreeUpdate
+  WorktreeUpdate,
+  PromptTrigger,
+  QueuedPrompt
 } from './types'
 
 export type Unlisten = () => void
@@ -216,6 +218,27 @@ export interface CivetBackend {
   killPane(hostId: string, pane: PaneId, signal?: KillSignal): Promise<void>
   fetchScrollback(hostId: string, pane: PaneId, query: ScrollbackQuery): Promise<ScrollbackPageView>
   setAgentStatus(hostId: string, pane: PaneId, status: AgentStatus): Promise<void>
+  /**
+   * Type `text` into an agent pane and submit it (bracketed paste, then
+   * Enter): one pane of a broadcast (civetd >= 0.4.2).
+   */
+  sendPrompt(hostId: string, pane: PaneId, text: string): Promise<void>
+  /** Queue a prompt the daemon sends when the pane's agent is next done (civetd >= 0.4.2). */
+  queuePrompt(
+    hostId: string,
+    pane: PaneId,
+    text: string,
+    trigger: PromptTrigger
+  ): Promise<QueuedPrompt>
+  editQueuedPrompt(
+    hostId: string,
+    id: number,
+    text: string,
+    trigger: PromptTrigger
+  ): Promise<QueuedPrompt>
+  cancelQueuedPrompt(hostId: string, id: number): Promise<void>
+  /** Every pane's queued prompts (empty from a civetd older than 0.4.2). */
+  listQueuedPrompts(hostId: string): Promise<QueuedPrompt[]>
   setPrediction(enabled: boolean): Promise<void>
   /** Write text to the system clipboard (Cmd+C on a terminal selection). */
   writeClipboard(text: string): Promise<void>
@@ -514,6 +537,21 @@ export class TauriBackend implements CivetBackend {
   }
   setAgentStatus(hostId: string, pane: PaneId, status: AgentStatus) {
     return this.callVoid('set_agent_status', { hostId, pane, status })
+  }
+  sendPrompt(hostId: string, pane: PaneId, text: string) {
+    return this.callVoid('send_prompt', { hostId, pane, text })
+  }
+  queuePrompt(hostId: string, pane: PaneId, text: string, trigger: PromptTrigger) {
+    return this.call<QueuedPrompt>('queue_prompt', { hostId, pane, text, trigger })
+  }
+  editQueuedPrompt(hostId: string, id: number, text: string, trigger: PromptTrigger) {
+    return this.call<QueuedPrompt>('edit_queued_prompt', { hostId, id, text, trigger })
+  }
+  cancelQueuedPrompt(hostId: string, id: number) {
+    return this.callVoid('cancel_queued_prompt', { hostId, id })
+  }
+  listQueuedPrompts(hostId: string) {
+    return this.call<QueuedPrompt[]>('list_queued_prompts', { hostId })
   }
   setPrediction(enabled: boolean) {
     return this.callVoid('set_prediction', { enabled })

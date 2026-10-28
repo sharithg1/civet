@@ -20,6 +20,8 @@
 //!   their own QUIC streams.
 //! * [`stats`]: host resource stats ([`HostStats`]), polled by the
 //!   stats view.
+//! * [`prompts`]: prompts the daemon types into agent panes (broadcast and
+//!   queued follow-ups, [`QueuedPrompt`]).
 //! * [`term`]: terminal traffic: [`InputMessage`] (client keystrokes with
 //!   sequence numbers), [`ScreenUpdate`] (server screen diffs as VT bytes),
 //!   [`ScreenAck`], and scrollback paging.
@@ -56,6 +58,7 @@ pub mod ids;
 pub mod keys;
 pub mod messages;
 pub mod ports;
+pub mod prompts;
 pub mod stats;
 pub mod term;
 
@@ -82,6 +85,7 @@ pub use ids::{ClientId, PaneId, RepoId, RequestId, WorktreeId};
 pub use keys::{CertFingerprint, ResumeToken, SessionKey};
 pub use messages::{ClientMessage, ServerMessage, StreamOpen};
 pub use ports::{ForwardReply, ListeningPort, MAX_PORT_COMMAND_CHARS, PortsUpdate};
+pub use prompts::{MAX_PROMPT_BYTES, MAX_QUEUED_PROMPTS, PromptTrigger, QueuedPrompt};
 pub use stats::{
     DiskSpace, GpuInfo, HostStats, MAX_STATS_COMMAND_CHARS, MAX_STATS_PROCESSES, MAX_STATS_SAMPLES,
     ProcessUsage, StatsSample,
@@ -173,6 +177,16 @@ pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
 /// [`Request::UpdateWorktree`] (appended within protocol 1 after
 /// [`Request::HostStats`]).
 pub const WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION: &str = "0.4.1";
+
+/// Oldest daemon that understands [`Request::SendPrompt`] and the prompt
+/// queue requests (appended within protocol 1 after
+/// [`Request::UpdateWorktree`]).
+pub const PROMPTS_MIN_DAEMON_VERSION: &str = "0.4.2";
+
+/// Oldest client (`ClientHello::client_version`) that can decode
+/// [`Event::PromptQueue`] (appended within protocol 1 after
+/// [`Event::Clipboard`]; gated like [`CLIPBOARD_EVENT_MIN_CLIENT_VERSION`]).
+pub const PROMPT_QUEUE_EVENT_MIN_CLIENT_VERSION: &str = "0.4.2";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

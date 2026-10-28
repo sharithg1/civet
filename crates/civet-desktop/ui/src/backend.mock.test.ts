@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MOCK_VERSION, MockBackend } from './backend.mock'
 import { PaneStream, type TerminalSink } from './terminal/pane-stream'
 import { RecordKind, isFull, parseRecords, type TermRecord } from './terminal/records'
-import type { HostStateEvent } from './types'
+import type { DaemonEvent, HostStateEvent } from './types'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
@@ -516,5 +516,79 @@ describe('MockBackend worktree lifecycle', () => {
     await expect(settle(b.updateWorktree('devbox', wake!.id, 'merge'))).rejects.toThrow(
       /in progress/
     )
+  })
+})
+
+describe('MockBackend prompts', () => {
+  it('queues prompts like civetd: one per turn, when the agent is next done', async () => {
+    const { b } = await connected()
+    const events: DaemonEvent[] = []
+    await b.onDaemonEvent(({ event }) => events.push(event))
+    const panes = await b.listPanes('devbox')
+    const agent = panes.find((p) => p.agent && p.status === 'idle' && !p.exited)!
+    const status = async () => (await b.listPanes('devbox')).find((p) => p.id === agent.id)!.status
+    const first = await b.queuePrompt('devbox', agent.id, 'first', 'done')
+    const second = await b.queuePrompt('devbox', agent.id, 'second\r\n', 'done')
+    expect(second.text).toBe('second')
+    expect(await b.listQueuedPrompts('devbox')).toEqual([first, second])
+    expect(events.at(-1)).toEqual({
+      promptQueue: { pane: agent.id, prompts: [first, second], sent: null }
+    })
+    // Idle, not a change into "done": nothing is sent.
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await b.listQueuedPrompts('devbox')).toHaveLength(2)
+
+    // A prompt sent now starts a turn; its end sends the first queued one.
+    await b.sendPrompt('devbox', agent.id, 'go')
+    expect(await status()).toBe('running')
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(await status()).toBe('done')
+    await vi.advanceTimersByTimeAsync(800)
+    expect(events).toContainEqual({
+      promptQueue: { pane: agent.id, prompts: [second], sent: first.id }
+    })
+    expect(await status()).toBe('running')
+
+    const edited = await b.editQueuedPrompt('devbox', second.id, 'edited', 'doneOrNeedsInput')
+    expect(await b.listQueuedPrompts('devbox')).toEqual([edited])
+    await b.cancelQueuedPrompt('devbox', second.id)
+    expect(await b.listQueuedPrompts('devbox')).toEqual([])
+    await expect(b.cancelQueuedPrompt('devbox', second.id)).rejects.toMatchObject({
+      code: 'notFound'
+    })
+    await expect(b.sendPrompt('devbox', agent.id, ' \n')).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    const exited = panes.find((p) => p.exited)!
+    await expect(b.queuePrompt('devbox', exited.id, 'x', 'done')).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+  })
+
+  it('a queue is dropped when its pane exits', async () => {
+    const { b } = await connected()
+    const events: DaemonEvent[] = []
+    await b.onDaemonEvent(({ event }) => events.push(event))
+    const shell = (await b.listPanes('devbox')).find((p) => !p.agent)!
+    await b.queuePrompt('devbox', shell.id, 'never', 'done')
+    await b.sendPrompt('devbox', shell.id, 'exit')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(await b.listQueuedPrompts('devbox')).toEqual([])
+    expect(events.at(-1)).toEqual({ promptQueue: { pane: shell.id, prompts: [], sent: null } })
+  })
+
+  it('a civetd older than 0.4.2 has no prompts', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'old-box' })
+    await vi.runAllTimersAsync()
+    await p
+    const pane = (await b.listPanes('old-box'))[0]!
+    expect(await b.listQueuedPrompts('old-box')).toEqual([])
+    await expect(b.sendPrompt('old-box', pane.id, 'hi')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    await expect(b.queuePrompt('old-box', pane.id, 'hi', 'done')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
   })
 })

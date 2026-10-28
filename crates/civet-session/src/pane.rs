@@ -546,6 +546,49 @@ impl Pane {
         Ok(InputOutcome::Applied)
     }
 
+    /// Type a prompt (already cleaned) the way a paste would, without the
+    /// Enter (see [`crate::prompts`]). Not tied to a client's input seqs;
+    /// refused with [`SessionError::Busy`] like client input while the PTY
+    /// backlog is full.
+    pub(crate) fn type_prompt(&self, text: &str) -> Result<(), SessionError> {
+        let bracketed = lock(&self.term).bracketed_paste();
+        self.write_direct(crate::prompts::prompt_bytes(text, bracketed))
+    }
+
+    /// Press Enter (submits a prompt typed by [`Self::type_prompt`]).
+    pub(crate) fn press_enter(&self) -> Result<(), SessionError> {
+        self.write_direct(crate::prompts::SUBMIT.to_vec())
+    }
+
+    fn write_direct(&self, data: Vec<u8>) -> Result<(), SessionError> {
+        if self.is_closed() || self.is_exited() {
+            return Err(SessionError::InvalidArgument(format!(
+                "{} has exited",
+                self.id
+            )));
+        }
+        let backlog = self.pty_backlog();
+        if backlog > 0 && backlog + data.len() > INPUT_BACKLOG_BUDGET {
+            return Err(SessionError::Busy(format!(
+                "{} pty input backlog full ({backlog} bytes)",
+                self.id
+            )));
+        }
+        if !self.send_to_pty(data) {
+            return Err(SessionError::InvalidArgument(format!(
+                "{} has exited",
+                self.id
+            )));
+        }
+        lock(&self.status).on_input(Instant::now());
+        Ok(())
+    }
+
+    /// Current agent status.
+    pub(crate) fn status(&self) -> AgentStatus {
+        lock(&self.status).status
+    }
+
     pub(crate) fn last_input_seq(&self, client: ClientId) -> u64 {
         lock(&self.inputs).get(&client).map_or(0, |r| r.last_seq)
     }
