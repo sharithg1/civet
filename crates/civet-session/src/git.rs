@@ -100,6 +100,13 @@ impl Git {
             .stderr(Stdio::piped())
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
+            // Why: inherited, these would point git at another repo than `dir`.
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_OBJECT_DIRECTORY")
+            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+            .env_remove("GIT_COMMON_DIR")
             .envs(env.iter().copied())
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(spawn_err)?;

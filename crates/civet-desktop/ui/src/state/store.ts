@@ -1006,7 +1006,12 @@ export function openDiffTab(
     (t) =>
       t.path === path &&
       t.diff?.side === diff.side &&
-      (diff.side !== 'turn' || (t.diff.side === 'turn' && t.diff.turn.id === diff.turn.id)),
+      // Why: ids restart when a timeline is pruned; the snapshots tell turns apart.
+      (diff.side !== 'turn' ||
+        (t.diff.side === 'turn' &&
+          t.diff.turn.id === diff.turn.id &&
+          t.diff.turn.from === diff.turn.from &&
+          t.diff.turn.to === diff.turn.to)),
     { kind: 'file', path, diff },
     !!opts.preview
   )

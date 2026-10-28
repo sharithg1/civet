@@ -68,6 +68,8 @@ struct Timeline {
 pub(crate) struct ActivityStore {
     dir: PathBuf,
     timelines: HashMap<String, Timeline>,
+    /// When this daemon run started: the end of turns an earlier run left open.
+    started_ms: u64,
 }
 
 impl ActivityStore {
@@ -80,6 +82,7 @@ impl ActivityStore {
         Self {
             dir,
             timelines: HashMap::new(),
+            started_ms: civet_proto::now_ms(),
         }
     }
 
@@ -123,6 +126,8 @@ impl ActivityStore {
         for turn in &mut t.turns {
             if turn.status == AgentStatus::Running {
                 turn.status = AgentStatus::Unknown;
+                turn.ended_ms
+                    .get_or_insert(self.started_ms.max(turn.started_ms));
             }
         }
         t
@@ -416,6 +421,11 @@ mod tests {
             .arg("-C")
             .arg(dir)
             .args(args)
+            // Why: run from a git hook, these would point at the outer repo.
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_OBJECT_DIRECTORY")
             .env("GIT_AUTHOR_NAME", "t")
             .env("GIT_AUTHOR_EMAIL", "t@t")
             .env("GIT_COMMITTER_NAME", "t")
@@ -610,6 +620,7 @@ mod tests {
         assert_eq!(turns.len(), MAX_ACTIVITY_TURNS);
         let last = turns.last().unwrap();
         assert_eq!((last.id, last.status), (105, AgentStatus::Unknown));
+        assert!(last.ended_ms.is_some_and(|ms| ms >= last.started_ms));
         assert_eq!(turns[0].status, AgentStatus::Done);
         // Another worktree has nothing.
         assert!(
