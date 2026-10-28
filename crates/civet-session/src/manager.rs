@@ -911,7 +911,7 @@ impl SessionManager {
             )));
         }
         tracing::info!(repo = %r.id, path = %w.path, "worktree removed");
-        self.forget_worktree(&w.id);
+        self.forget_worktree(&w.id).await;
         Ok(())
     }
 
@@ -1048,7 +1048,7 @@ impl SessionManager {
             tracing::info!(path = %w.path, ?copied, "copied from the main checkout");
         }
 
-        let port = self.worktree_port(&w.id);
+        let port = self.worktree_port(&w.id).await;
         let script = template.setup.clone().unwrap_or_default();
         let setup_pane = if script.trim().is_empty() {
             None
@@ -1117,8 +1117,17 @@ impl SessionManager {
 
     /// The worktree's `CIVET_PORT`, assigned (and persisted) on first use;
     /// None when every block is taken. Assignments of worktrees whose
-    /// directory is gone are dropped first.
-    fn worktree_port(&self, worktree: &WorktreeId) -> Option<u16> {
+    /// directory is gone are dropped first. Runs off the async threads: a
+    /// new assignment stats paths, test-binds ports and writes a file.
+    async fn worktree_port(&self, worktree: &WorktreeId) -> Option<u16> {
+        let (this, w) = (self.clone(), worktree.clone());
+        tokio::task::spawn_blocking(move || this.worktree_port_blocking(&w))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    fn worktree_port_blocking(&self, worktree: &WorktreeId) -> Option<u16> {
         let mut ports = lock(&self.inner.ports);
         if let Some(p) = ports.get(&worktree.0) {
             return Some(*p);
@@ -1142,7 +1151,12 @@ impl SessionManager {
     }
 
     /// A removed worktree's port and setup script.
-    fn forget_worktree(&self, worktree: &WorktreeId) {
+    async fn forget_worktree(&self, worktree: &WorktreeId) {
+        let (this, w) = (self.clone(), worktree.clone());
+        let _ = tokio::task::spawn_blocking(move || this.forget_worktree_blocking(&w)).await;
+    }
+
+    fn forget_worktree_blocking(&self, worktree: &WorktreeId) {
         let mut ports = lock(&self.inner.ports);
         if ports.remove(&worktree.0).is_some() {
             self.save_ports(&ports);
@@ -1281,7 +1295,7 @@ impl SessionManager {
         env.extend(setup.env);
         if let Some(w) = &req.worktree {
             env.push((ENV_WORKTREE.into(), w.0.clone()));
-            if let Some(port) = self.worktree_port(w) {
+            if let Some(port) = self.worktree_port(w).await {
                 env.push((civet_proto::ENV_PORT.into(), port.to_string()));
             }
         }

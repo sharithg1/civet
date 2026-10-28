@@ -197,6 +197,13 @@ pub(crate) fn expand_copy(main: &Path, patterns: &[String]) -> (Vec<String>, Vec
             let mut next = Vec::new();
             for base in &cur {
                 let dir = main.join(base);
+                // Why: a symlinked directory could lead out of the checkout
+                // (`link/*` with `link -> /etc`); copy the link itself instead.
+                if !base.is_empty()
+                    && std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink())
+                {
+                    continue;
+                }
                 let join = |name: &str| {
                     if base.is_empty() {
                         name.to_owned()
@@ -397,6 +404,9 @@ future-key = 1
         }
         std::fs::create_dir_all(main.join("apps/.hidden")).unwrap();
         std::fs::write(main.join("apps/.hidden/.env"), "h").unwrap();
+        std::fs::create_dir_all(dir.path().join("outside")).unwrap();
+        std::fs::write(dir.path().join("outside/secret"), "s").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("outside"), main.join("link")).unwrap();
         std::fs::create_dir_all(wt.join("conf")).unwrap();
         std::fs::write(wt.join(".env"), "mine").unwrap();
         let pats: Vec<String> = [
@@ -407,13 +417,16 @@ future-key = 1
             "../x",
             ".git/config",
             "/etc",
+            "link/*",
+            "link/secret",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
         let (paths, warnings) = expand_copy(&main, &pats);
         assert_eq!(paths, [".env", "apps/a/.env", "apps/b/.env", "conf"]);
-        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert_eq!(warnings.len(), 6, "{warnings:?}");
+        assert!(warnings[4].starts_with("link/*: not in"), "{warnings:?}");
         assert!(warnings[0].starts_with("missing: not in"));
 
         let copied: Vec<bool> = paths

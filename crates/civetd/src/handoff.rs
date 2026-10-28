@@ -48,6 +48,9 @@ const MAX_SUFFIX: u32 = 50;
 const PANE_SIZE: TermSize = TermSize::new(120, 36);
 /// Connecting to the local socket and each request.
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// `SetupWorktree`: the daemon copies the template's files before it
+/// answers, which can take long for a big directory.
+const SETUP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// What to hand off.
 #[derive(Debug, Clone)]
@@ -280,7 +283,7 @@ async fn setup_worktree(session: &ClientSession, wt: &WorktreeInfo) -> Option<Wo
         worktree: wt.id.clone(),
         size: PANE_SIZE,
     };
-    match request(session, req).await {
+    match request_within(session, req, SETUP_TIMEOUT).await {
         Ok(Response::WorktreeSetUp(s)) => {
             for w in &s.warnings {
                 eprintln!("civet handoff: worktree template: {w}");
@@ -428,7 +431,15 @@ async fn connect(state_dir: &Path) -> anyhow::Result<ClientSession> {
 }
 
 async fn request(session: &ClientSession, req: Request) -> Result<Response, RequestError> {
-    match tokio::time::timeout(TIMEOUT, session.request(req)).await {
+    request_within(session, req, TIMEOUT).await
+}
+
+async fn request_within(
+    session: &ClientSession,
+    req: Request,
+    limit: Duration,
+) -> Result<Response, RequestError> {
+    match tokio::time::timeout(limit, session.request(req)).await {
         Ok(r) => r,
         Err(_) => Err(RequestError::ConnectionLost),
     }
