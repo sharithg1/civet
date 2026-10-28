@@ -445,3 +445,76 @@ describe('MockBackend git actions', () => {
 function changed(s: { staged: unknown[]; unstaged: unknown[]; untracked: unknown[] }): number {
   return s.staged.length + s.unstaged.length + s.untracked.length
 }
+
+describe('MockBackend worktree lifecycle', () => {
+  async function settle<T>(p: Promise<T>): Promise<T> {
+    const settled = p.then(
+      (v) => ({ ok: true as const, v }),
+      (e: unknown) => ({ ok: false as const, e })
+    )
+    await vi.runAllTimersAsync()
+    const r = await settled
+    if (!r.ok) throw r.e
+    return r.v
+  }
+
+  it('reports ahead / behind and stale worktrees, with PRs and changes on review', async () => {
+    const { b } = await connected()
+    const cheap = await settle(
+      b.worktreeLifecycle('devbox', 'civet', { fetch: false, review: false })
+    )
+    expect(cheap.base).toBe('origin/main')
+    const by = (l: typeof cheap) => Object.fromEntries(l.worktrees.map((w) => [w.branch, w]))
+    let w = by(cheap)
+    expect(w.main).toMatchObject({ ahead: 0, behind: 0, stale: [], dirty: null })
+    expect(w['quic-resume']).toMatchObject({ ahead: 5, behind: 3, stale: [] })
+    expect(w['scrollback-paging']!.stale).toEqual(['merged'])
+    expect(w['fix-flaky-e2e']!.stale).toEqual(['upstreamGone'])
+
+    const review = await settle(
+      b.worktreeLifecycle('devbox', 'civet', { fetch: true, review: true })
+    )
+    w = by(review)
+    expect(w['scrollback-paging']).toMatchObject({
+      stale: ['merged', 'pullRequestMerged'],
+      dirty: 0,
+      pullRequest: { number: 44 }
+    })
+    expect(w['fix-flaky-e2e']!.stale).toEqual(['upstreamGone', 'pullRequestClosed'])
+    expect(w['fix-flaky-e2e']!.dirty).toBe(1)
+    expect(w['quic-resume']!.stale).toEqual([])
+  })
+
+  it('updates from main: refusals, conflicts and a clean rebase', async () => {
+    const { b } = await connected()
+    const [main, quic, merged] = await b.listWorktrees('devbox', 'civet')
+    const [, wake] = await b.listWorktrees('devbox', 'orca')
+    await expect(settle(b.updateWorktree('devbox', main!.id, 'rebase'))).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    await expect(settle(b.updateWorktree('devbox', quic!.id, 'rebase'))).rejects.toThrow(
+      /uncommitted changes/
+    )
+    expect(await settle(b.updateWorktree('devbox', merged!.id, 'rebase'))).toEqual({
+      base: 'origin/main',
+      outcome: 'updated',
+      conflicts: []
+    })
+    expect((await settle(b.updateWorktree('devbox', merged!.id, 'merge'))).outcome).toBe('upToDate')
+
+    const rebase = await settle(b.updateWorktree('devbox', wake!.id, 'rebase'))
+    expect(rebase).toMatchObject({
+      outcome: 'rebaseConflicts',
+      conflicts: ['src/main/reconnect.ts']
+    })
+    expect((await b.gitStatus('devbox', wake!.id)).conflicted).toEqual([])
+    const merge = await settle(b.updateWorktree('devbox', wake!.id, 'merge'))
+    expect(merge.outcome).toBe('mergeConflicts')
+    expect((await b.gitStatus('devbox', wake!.id)).conflicted.map((c) => c.path)).toEqual([
+      'src/main/reconnect.ts'
+    ])
+    await expect(settle(b.updateWorktree('devbox', wake!.id, 'merge'))).rejects.toThrow(
+      /in progress/
+    )
+  })
+})

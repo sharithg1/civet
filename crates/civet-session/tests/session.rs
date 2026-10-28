@@ -2858,3 +2858,254 @@ async fn repos_saved_before_folder_projects_are_repositories() {
     let wts = mgr.list_worktrees(&projects[0].repo.id).await.unwrap();
     assert_eq!(wts[0].branch.as_deref(), Some("main"));
 }
+
+// ----- worktree lifecycle ----------------------------------------------------
+
+fn commit_file(dir: &Path, name: &str, text: &str) {
+    std::fs::write(dir.join(name), text).unwrap();
+    git(dir, &["add", name]);
+    git(dir, &["commit", "-q", "-m", name]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_lifecycle_and_stale_detection() {
+    use civet_proto::StaleReason;
+    let f = fixture();
+    let origin = f.root.join("origin.git");
+    git(
+        &f.root,
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    let repo_dir = action_repo(&f.root, "proj");
+    git(
+        &repo_dir,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    );
+    git(&repo_dir, &["push", "-q", "-u", "origin", "main"]);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let new_wt = |b: &'static str| {
+        let mgr = &f.mgr;
+        let id = repo.id.clone();
+        async move {
+            let w = mgr
+                .create_worktree(&id, b, Some("main"), None)
+                .await
+                .unwrap();
+            (w.id.clone(), PathBuf::from(&w.path))
+        }
+    };
+
+    // Merged with a merge commit, and main pushed.
+    let (merged, mdir) = new_wt("feat/merged").await;
+    commit_file(&mdir, "m.txt", "m\n");
+    git(
+        &repo_dir,
+        &["merge", "-q", "--no-ff", "-m", "merge", "feat/merged"],
+    );
+    git(&repo_dir, &["push", "-q"]);
+    // Fresh: no commits; its configured upstream was never pushed.
+    let (fresh, _) = new_wt("feat/fresh").await;
+    // Pushed (and tracking it).
+    let (gone, gdir) = new_wt("feat/gone").await;
+    commit_file(&gdir, "g.txt", "g\n");
+    git(&gdir, &["push", "-q", "origin", "feat/gone"]);
+    // Work in progress, behind main.
+    let (wip, wdir) = new_wt("feat/wip").await;
+    commit_file(&wdir, "w.txt", "w\n");
+    commit_file(&repo_dir, "main2.txt", "2\n");
+    git(&repo_dir, &["push", "-q"]);
+    std::fs::write(wdir.join("scratch.txt"), "s\n").unwrap();
+    // Seen pushed, then the remote branch is deleted (squash-merged on
+    // GitHub) and the next look fetches with --prune.
+    let l = f
+        .mgr
+        .worktree_lifecycle(&repo.id, false, false)
+        .await
+        .unwrap();
+    let g = l.worktrees.iter().find(|w| w.worktree == gone).unwrap();
+    assert_eq!(g.upstream.as_deref(), Some("origin/feat/gone"));
+    assert!(!g.upstream_gone && g.stale.is_empty());
+    assert_eq!(g.unpushed, 0);
+    git(&origin, &["branch", "-D", "feat/gone"]);
+
+    let l = f
+        .mgr
+        .worktree_lifecycle(&repo.id, true, false)
+        .await
+        .unwrap();
+    assert_eq!(l.base.as_deref(), Some("origin/main"));
+    assert_eq!(l.fetch_error, None);
+    assert_eq!(l.pull_requests_error, None);
+    let by = |id: &WorktreeId| l.worktrees.iter().find(|w| &w.worktree == id).unwrap();
+    let main = &l.worktrees[0];
+    assert_eq!(main.branch.as_deref(), Some("main"));
+    assert!(main.stale.is_empty());
+    assert_eq!((main.ahead, main.behind), (0, 0));
+    assert_eq!(main.dirty, None, "only counted for a review");
+
+    let m = by(&merged);
+    assert_eq!((m.ahead, m.behind), (0, 2));
+    assert_eq!(m.stale, vec![StaleReason::Merged]);
+    assert_eq!(m.unpushed, 0);
+
+    let fr = by(&fresh);
+    assert_eq!((fr.ahead, fr.behind), (0, 1), "branched after the merge");
+    assert!(fr.upstream_gone, "configured upstream, never pushed");
+    assert_eq!(fr.upstream.as_deref(), Some("origin/feat/fresh"));
+    assert!(fr.stale.is_empty(), "fresh is not finished: {:?}", fr.stale);
+
+    let g = by(&gone);
+    assert!(g.upstream_gone);
+    assert_eq!(g.ahead, 1);
+    assert_eq!(g.unpushed, 1, "pruned: on no remote any more");
+    assert_eq!(g.stale, vec![StaleReason::UpstreamGone]);
+
+    let w = by(&wip);
+    assert_eq!((w.ahead, w.behind), (1, 1));
+    assert_eq!(w.unpushed, 1);
+    assert!(w.upstream_gone, "configured, never pushed");
+    assert!(w.stale.is_empty(), "never seen pushed: {:?}", w.stale);
+
+    // A review counts uncommitted changes; without gh (or a GitHub remote)
+    // it says why there are no pull requests.
+    let l = f
+        .mgr
+        .worktree_lifecycle(&repo.id, false, true)
+        .await
+        .unwrap();
+    let w = l.worktrees.iter().find(|w| w.worktree == wip).unwrap();
+    assert_eq!(w.dirty, Some(1));
+    assert_eq!(l.worktrees[0].dirty, Some(0));
+    assert!(l.pull_requests_error.is_some());
+
+    // Fetch failure is reported, not fatal.
+    git(
+        &repo_dir,
+        &["remote", "set-url", "origin", "/nonexistent/x.git"],
+    );
+    let l = f
+        .mgr
+        .worktree_lifecycle(&repo.id, true, false)
+        .await
+        .unwrap();
+    assert!(l.fetch_error.is_some());
+    assert_eq!(l.worktrees.len(), 5);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn update_worktree_from_main() {
+    use civet_proto::{UpdateOutcome, UpdateStrategy};
+    let f = fixture();
+    let origin = f.root.join("origin.git");
+    git(
+        &f.root,
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    let repo_dir = action_repo(&f.root, "proj");
+    git(
+        &repo_dir,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    );
+    git(&repo_dir, &["push", "-q", "-u", "origin", "main"]);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let w = f
+        .mgr
+        .create_worktree(&repo.id, "feat/up", Some("main"), None)
+        .await
+        .unwrap();
+    let (wt, wdir) = (w.id.clone(), PathBuf::from(&w.path));
+    identity(&wdir);
+    commit_file(&wdir, "mine.txt", "m\n");
+
+    // Nothing new on main.
+    let u = f
+        .mgr
+        .update_worktree(&wt, UpdateStrategy::Rebase)
+        .await
+        .unwrap();
+    assert_eq!(
+        (u.base.as_str(), u.outcome),
+        ("origin/main", UpdateOutcome::UpToDate)
+    );
+
+    // Someone pushes to main from elsewhere: the update fetches it.
+    let other = f.root.join("other");
+    git(
+        &f.root,
+        &["clone", "-q", &origin.to_string_lossy(), "other"],
+    );
+    commit_file(&other, "theirs.txt", "t\n");
+    git(&other, &["push", "-q"]);
+    let u = f
+        .mgr
+        .update_worktree(&wt, UpdateStrategy::Rebase)
+        .await
+        .unwrap();
+    assert_eq!(u.outcome, UpdateOutcome::Updated);
+    assert!(wdir.join("theirs.txt").exists());
+    assert_eq!(
+        git_out(&wdir, &["rev-list", "--count", "--merges", "HEAD"]),
+        "0",
+        "rebased, not merged"
+    );
+    let l = f
+        .mgr
+        .worktree_lifecycle(&repo.id, false, false)
+        .await
+        .unwrap();
+    let me = l.worktrees.iter().find(|x| x.worktree == wt).unwrap();
+    assert_eq!((me.ahead, me.behind), (1, 0));
+
+    // A conflicting change on main: a rebase is aborted and reported...
+    commit_file(&other, "README", "theirs\n");
+    git(&other, &["push", "-q"]);
+    commit_file(&wdir, "README", "mine\n");
+    let head = git_out(&wdir, &["rev-parse", "HEAD"]);
+    let u = f
+        .mgr
+        .update_worktree(&wt, UpdateStrategy::Rebase)
+        .await
+        .unwrap();
+    assert_eq!(u.outcome, UpdateOutcome::RebaseConflicts);
+    assert_eq!(u.conflicts, vec!["README"]);
+    assert_eq!(
+        git_out(&wdir, &["rev-parse", "HEAD"]),
+        head,
+        "nothing changed"
+    );
+    assert_eq!(git_out(&wdir, &["status", "--porcelain"]), "");
+    // ...a merge leaves the conflict to resolve.
+    let u = f
+        .mgr
+        .update_worktree(&wt, UpdateStrategy::Merge)
+        .await
+        .unwrap();
+    assert_eq!(u.outcome, UpdateOutcome::MergeConflicts);
+    assert_eq!(u.conflicts, vec!["README"]);
+    let s = f.mgr.git_status(&wt).await.unwrap();
+    assert_eq!(listed(&s.conflicted), vec!["README"]);
+    // Refused while that merge is in progress.
+    assert!(matches!(
+        f.mgr.update_worktree(&wt, UpdateStrategy::Merge).await,
+        Err(SessionError::InvalidArgument(m)) if m.contains("in progress")
+    ));
+    git(&wdir, &["merge", "--abort"]);
+
+    // Refused with uncommitted changes, on the default branch and detached.
+    std::fs::write(wdir.join("mine.txt"), "changed\n").unwrap();
+    assert!(matches!(
+        f.mgr.update_worktree(&wt, UpdateStrategy::Merge).await,
+        Err(SessionError::InvalidArgument(m)) if m.contains("uncommitted")
+    ));
+    let main = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].id.clone();
+    assert!(matches!(
+        f.mgr.update_worktree(&main, UpdateStrategy::Merge).await,
+        Err(SessionError::InvalidArgument(m)) if m.contains("default branch")
+    ));
+    git(&wdir, &["checkout", "-q", "--", "mine.txt"]);
+    git(&wdir, &["checkout", "-q", "--detach"]);
+    assert!(matches!(
+        f.mgr.update_worktree(&wt, UpdateStrategy::Merge).await,
+        Err(SessionError::InvalidArgument(m)) if m.contains("detached")
+    ));
+}

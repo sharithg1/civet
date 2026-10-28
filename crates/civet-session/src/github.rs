@@ -42,6 +42,17 @@ fn find_gh() -> Option<PathBuf> {
 /// PRs left out. Spawn if `gh` is missing; Git with gh's stderr if it fails
 /// (not authenticated, no GitHub remote...).
 pub(crate) async fn list_pull_requests(dir: &Path) -> Result<Vec<PullRequestInfo>, SessionError> {
+    Ok(list_pull_requests_with_heads(dir)
+        .await?
+        .into_iter()
+        .map(|(pr, _)| pr)
+        .collect())
+}
+
+/// [`list_pull_requests`] with each PR's head commit, if `gh` reported one.
+pub(crate) async fn list_pull_requests_with_heads(
+    dir: &Path,
+) -> Result<Vec<(PullRequestInfo, Option<String>)>, SessionError> {
     let gh = find_gh().ok_or_else(|| SessionError::Spawn("gh not found".into()))?;
     let mut cmd = tokio::process::Command::new(&gh);
     cmd.args([
@@ -52,7 +63,7 @@ pub(crate) async fn list_pull_requests(dir: &Path) -> Result<Vec<PullRequestInfo
         "--limit",
         LIST_LIMIT,
         "--json",
-        "number,title,url,state,isDraft,headRefName,isCrossRepository",
+        "number,title,url,state,isDraft,headRefName,headRefOid,isCrossRepository",
     ])
     .current_dir(dir)
     .stdin(Stdio::null())
@@ -89,26 +100,31 @@ struct GhPr {
     is_draft: bool,
     head_ref_name: String,
     #[serde(default)]
+    head_ref_oid: Option<String>,
+    #[serde(default)]
     is_cross_repository: bool,
 }
 
-fn parse_pr_list(json: &[u8]) -> Result<Vec<PullRequestInfo>, SessionError> {
+fn parse_pr_list(json: &[u8]) -> Result<Vec<(PullRequestInfo, Option<String>)>, SessionError> {
     let prs: Vec<GhPr> = serde_json::from_slice(json)
         .map_err(|e| SessionError::Git(format!("unexpected gh output: {e}")))?;
     Ok(prs
         .into_iter()
         .filter(|p| !p.is_cross_repository)
-        .map(|p| PullRequestInfo {
-            state: match p.state.as_str() {
-                "MERGED" => PullRequestState::Merged,
-                "CLOSED" => PullRequestState::Closed,
-                _ if p.is_draft => PullRequestState::Draft,
-                _ => PullRequestState::Open,
-            },
-            number: p.number,
-            branch: p.head_ref_name,
-            title: p.title,
-            url: p.url,
+        .map(|p| {
+            let pr = PullRequestInfo {
+                state: match p.state.as_str() {
+                    "MERGED" => PullRequestState::Merged,
+                    "CLOSED" => PullRequestState::Closed,
+                    _ if p.is_draft => PullRequestState::Draft,
+                    _ => PullRequestState::Open,
+                },
+                number: p.number,
+                branch: p.head_ref_name,
+                title: p.title,
+                url: p.url,
+            };
+            (pr, p.head_ref_oid.filter(|o| !o.is_empty()))
         })
         .collect())
 }
@@ -122,20 +138,20 @@ mod tests {
         let json = br#"[
             {"number":3,"title":"Draft","url":"u3","state":"OPEN","isDraft":true,"headRefName":"a","isCrossRepository":false},
             {"number":2,"title":"Fork","url":"u2","state":"OPEN","isDraft":false,"headRefName":"main","isCrossRepository":true},
-            {"number":1,"title":"Done","url":"u1","state":"MERGED","isDraft":false,"headRefName":"b","isCrossRepository":false},
+            {"number":1,"title":"Done","url":"u1","state":"MERGED","isDraft":false,"headRefName":"b","headRefOid":"abc","isCrossRepository":false},
             {"number":0,"title":"Nope","url":"u0","state":"CLOSED","isDraft":false,"headRefName":"c","isCrossRepository":false}
         ]"#;
         let prs = parse_pr_list(json).unwrap();
         let got: Vec<_> = prs
             .iter()
-            .map(|p| (p.number, p.branch.as_str(), p.state))
+            .map(|(p, oid)| (p.number, p.branch.as_str(), p.state, oid.as_deref()))
             .collect();
         assert_eq!(
             got,
             [
-                (3, "a", PullRequestState::Draft),
-                (1, "b", PullRequestState::Merged),
-                (0, "c", PullRequestState::Closed),
+                (3, "a", PullRequestState::Draft, None),
+                (1, "b", PullRequestState::Merged, Some("abc")),
+                (0, "c", PullRequestState::Closed, None),
             ]
         );
         assert!(parse_pr_list(b"not json").is_err());
