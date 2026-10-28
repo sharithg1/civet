@@ -516,3 +516,69 @@ export type HostStats = {
   /** Pane processes first, then the busiest others; empty unless asked for. */
   processes: ProcessUsage[]
 }
+
+/** Which agent CLI wrote a session log (`agent_usage`). */
+export type UsageAgent = 'claude' | 'codex'
+
+/** Token counts; `input` excludes cache reads and writes. */
+export type TokenCounts = {
+  input: number
+  /** Reasoning included. */
+  output: number
+  cacheWrite: number
+  cacheRead: number
+}
+
+/** One hour of a session (UTC hour start). */
+export type UsageHour = {
+  hourMs: number
+  tokens: TokenCounts
+  /** Estimated cost, micro-dollars. */
+  costMicros: number
+}
+
+/** One agent session's usage in the requested window. */
+export type AgentSessionUsage = {
+  agent: UsageAgent
+  sessionId: string
+  /** Directory the session ran in. */
+  cwd: string
+  /** The (deepest) worktree containing `cwd`, if a project has it. */
+  worktree: WorktreeId | null
+  repo: RepoId | null
+  /** Most tokens first. */
+  models: string[]
+  firstMs: number
+  lastMs: number
+  tokens: TokenCounts
+  /** Estimated, micro-dollars. */
+  costMicros: number
+  /** Tokens of models the daemon has no price for (not in `costMicros`). */
+  unpricedTokens: number
+  /** Oldest first. */
+  hours: UsageHour[]
+}
+
+/** A row of the daemon's price table: micro-dollars per million tokens. */
+export type ModelPrice = {
+  model: string
+  input: number
+  output: number
+  cacheWrite5m: number
+  cacheWrite1h: number
+  cacheRead: number
+}
+
+/**
+ * Reply to `agent_usage` (civetd >= 0.4.1): agent sessions with usage since
+ * `sinceMs`, newest first, read from the host's Claude Code and Codex logs.
+ * Costs are estimates at the list prices in `prices`.
+ */
+export type AgentUsage = {
+  sinceMs: number
+  scannedAtMs: number
+  sessions: AgentSessionUsage[]
+  prices: ModelPrice[]
+  /** `YYYY-MM-DD` */
+  pricesAsOf: string
+}

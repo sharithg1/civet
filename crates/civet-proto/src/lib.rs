@@ -20,6 +20,8 @@
 //!   their own QUIC streams.
 //! * [`stats`]: host resource stats ([`HostStats`]), polled by the
 //!   stats view.
+//! * [`usage`]: agent token use and estimated spend ([`AgentUsage`]), read
+//!   from the agents' session logs.
 //! * [`term`]: terminal traffic: [`InputMessage`] (client keystrokes with
 //!   sequence numbers), [`ScreenUpdate`] (server screen diffs as VT bytes),
 //!   [`ScreenAck`], and scrollback paging.
@@ -58,6 +60,7 @@ pub mod messages;
 pub mod ports;
 pub mod stats;
 pub mod term;
+pub mod usage;
 
 pub use agent::{
     AgentStatus, AgentStatusSource, MAX_STATUS_FILE_BYTES, MAX_STATUS_MESSAGE_CHARS,
@@ -90,6 +93,10 @@ pub use term::{
     ECHO_ACK_DELAY_MS, FULL_REPLAY_LINES, InputMessage, MAX_INFLIGHT_UPDATES, MAX_REPLAY_LINES,
     MAX_TERM_COLS, MAX_TERM_ROWS, ScreenAck, ScreenUpdate, ScrollbackLine, ScrollbackPage,
     ScrollbackQuery, ScrollbackRequest, TermSize, UpdateKind,
+};
+pub use usage::{
+    AgentSessionUsage, AgentUsage, MAX_USAGE_SESSIONS, ModelPrice, TokenCounts, UsageAgent,
+    UsageHour,
 };
 
 /// Wire protocol version. Bump on any incompatible change (see crate docs).
@@ -173,6 +180,10 @@ pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
 /// [`Request::UpdateWorktree`] (appended within protocol 1 after
 /// [`Request::HostStats`]).
 pub const WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION: &str = "0.4.1";
+
+/// Oldest daemon that understands [`Request::AgentUsage`] (appended within
+/// protocol 1 after [`Request::HostStats`]).
+pub const AGENT_USAGE_MIN_DAEMON_VERSION: &str = "0.4.1";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

@@ -36,10 +36,12 @@
 
 mod bootstrap;
 mod ports;
+mod prices;
 mod server;
 mod stats;
 mod sys;
 mod uploads;
+mod usage;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::RangeInclusive;

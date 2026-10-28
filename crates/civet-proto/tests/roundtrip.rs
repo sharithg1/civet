@@ -297,6 +297,9 @@ fn all_requests() -> Vec<Request> {
             worktree: WorktreeId::from("/w"),
             strategy: UpdateStrategy::Merge,
         },
+        Request::AgentUsage {
+            since_ms: 1_700_000_000_000,
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -541,6 +544,7 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             outcome: UpdateOutcome::UpToDate,
             conflicts: vec![],
         })),
+        Ok(Response::AgentUsage(agent_usage())),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -1039,6 +1043,66 @@ fn host_stats_is_appended() {
     assert_eq!(v["hostStats"]["samples"][0]["memUsed"], 41u64 << 30);
     assert_eq!(v["hostStats"]["load"], serde_json::json!([820, 610, 400]));
     assert_eq!(v["hostStats"]["processes"][0]["worktree"], "/w");
+}
+
+fn agent_usage() -> AgentUsage {
+    let tokens = TokenCounts {
+        input: 1200,
+        output: 3400,
+        cache_write: 50_000,
+        cache_read: 900_000,
+    };
+    AgentUsage {
+        since_ms: 1_699_000_000_000,
+        scanned_at_ms: 1_700_000_100_000,
+        sessions: vec![AgentSessionUsage {
+            agent: UsageAgent::Claude,
+            session_id: "a6cd0e7b".into(),
+            cwd: "/w/crates".into(),
+            worktree: Some(WorktreeId::from("/w")),
+            repo: Some(RepoId("r".into())),
+            models: vec!["claude-opus-5-5".into()],
+            first_ms: 1_700_000_000_000,
+            last_ms: 1_700_000_090_000,
+            tokens,
+            cost_micros: 1_234_567,
+            unpriced_tokens: 0,
+            hours: vec![UsageHour {
+                hour_ms: 1_699_999_200_000,
+                tokens,
+                cost_micros: 1_234_567,
+            }],
+        }],
+        prices: vec![ModelPrice {
+            model: "claude-opus-5-5".into(),
+            input: 4_000_000,
+            output: 20_000_000,
+            cache_write_5m: 5_000_000,
+            cache_write_1h: 8_000_000,
+            cache_read: 200_000,
+        }],
+        prices_as_of: "2026-10-27".into(),
+    }
+}
+
+#[test]
+fn agent_usage_is_appended() {
+    // Appended within protocol 1 after HostStats (31) / HostStats (26).
+    let req = encode(&Request::AgentUsage { since_ms: 5 }).unwrap();
+    assert_eq!(req, vec![32, 5]);
+    let resp = encode(&Response::AgentUsage(agent_usage())).unwrap();
+    assert_eq!(resp[0], 27);
+    let v = serde_json::to_value(Response::AgentUsage(agent_usage())).unwrap();
+    assert_eq!(v["agentUsage"]["sessions"][0]["agent"], "claude");
+    assert_eq!(
+        v["agentUsage"]["sessions"][0]["tokens"]["cacheRead"],
+        900_000
+    );
+    assert_eq!(
+        v["agentUsage"]["sessions"][0]["hours"][0]["costMicros"],
+        1_234_567
+    );
+    assert_eq!(v["agentUsage"]["prices"][0]["cacheWrite1h"], 8_000_000);
 }
 
 #[test]

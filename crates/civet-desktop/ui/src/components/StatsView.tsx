@@ -2,7 +2,8 @@
 // memory, and a warning when memory or a disk is nearly full) and the view
 // it opens over the work area: CPU (history and every core), memory,
 // network, disk I/O, filesystems, GPUs, and what each worktree's processes
-// use. Data comes from state/stats.ts (the active worktree's host). Every
+// use, then agent token use and spend (AgentUsage.tsx). Data comes from
+// state/stats.ts (the active worktree's host). Every
 // chart is one series in the chart hue; the status colors only mark
 // trouble, always next to a label.
 
@@ -23,8 +24,9 @@ import {
 import { agentName, compactWorktreeName, paneWhat, worktreeBranch } from '@/lib/worktree-view'
 import { usePrefs } from '@/state/prefs'
 import { hasHostStats, useHostStats } from '@/state/stats'
-import { useStore, wtKey } from '@/state/store'
+import { useStore } from '@/state/store'
 import type { HostStats, PaneInfo, ProcessUsage, StatsSample, WorktreeInfo } from '@/types'
+import { AgentUsagePanel, useWorktreeInfos } from './AgentUsage'
 
 /** Samples in the indicator's sparkline (one minute at 2 s). */
 const INDICATOR_SAMPLES = 30
@@ -295,6 +297,7 @@ export function StatsView({ hostId, worktree }: { hostId: string; worktree: stri
         </div>
 
         <ProcessesPanel hostId={hostId} activeWorktree={worktree} processes={stats.processes} />
+        <AgentUsagePanel hostId={hostId} activeWorktree={worktree} />
       </div>
     </div>
   )
@@ -532,18 +535,6 @@ function ProcessesPanel({
       )}
     </section>
   )
-}
-
-/** Worktree id → info, across the host's projects. */
-function useWorktreeInfos(hostId: string): Map<string, WorktreeInfo> {
-  const repos = useStore((s) => s.repos[hostId])
-  const worktrees = useStore((s) => s.worktrees)
-  return useMemo(() => {
-    const m = new Map<string, WorktreeInfo>()
-    for (const r of repos ?? [])
-      for (const w of worktrees[wtKey(hostId, r.id)] ?? []) m.set(w.id, w)
-    return m
-  }, [hostId, repos, worktrees])
 }
 
 function GroupRow({

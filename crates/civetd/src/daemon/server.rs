@@ -41,6 +41,7 @@ pub(crate) struct Server {
     clients: Mutex<HashMap<ClientId, ClientState>>,
     ports: Arc<super::ports::PortWatcher>,
     stats: Arc<super::stats::StatsSampler>,
+    usage: Arc<super::usage::UsageScanner>,
     shutting_down: AtomicBool,
     next_conn: AtomicU64,
 }
@@ -98,6 +99,7 @@ impl Server {
         Self {
             ports: super::ports::PortWatcher::new(sessions.clone()),
             stats: super::stats::StatsSampler::new(sessions.clone()),
+            usage: super::usage::UsageScanner::new(sessions.clone()),
             sessions,
             key,
             instance_id,
@@ -574,6 +576,9 @@ impl Server {
                 .update_worktree(&worktree, strategy)
                 .await
                 .map(Response::WorktreeUpdated),
+            Request::AgentUsage { since_ms } => {
+                return Ok(Response::AgentUsage(self.usage.request(since_ms).await));
+            }
             Request::CreateWorktree {
                 repo,
                 branch,

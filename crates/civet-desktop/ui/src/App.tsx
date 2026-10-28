@@ -34,6 +34,7 @@ import {
 } from './state/store'
 import { initPorts } from './state/ports'
 import { initStats } from './state/stats'
+import { initUsage } from './state/usage'
 
 export function App() {
   const [ready, setReady] = useState(false)
@@ -51,7 +52,9 @@ export function App() {
         const app = await initApp(b)
         const ports = await initPorts(b)
         const stats = initStats(b)
+        const usage = initUsage(b)
         return () => {
+          usage()
           stats()
           ports()
           app()

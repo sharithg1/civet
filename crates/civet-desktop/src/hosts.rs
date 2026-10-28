@@ -1270,6 +1270,16 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::HostStats { since, processes }).await?, Response::HostStats(s) => s)
     }
 
+    /// `agent_usage`: agent token use and estimated spend on the host.
+    pub async fn agent_usage(
+        &self,
+        host_id: &str,
+        since_ms: u64,
+    ) -> Result<civet_proto::AgentUsage, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::AGENT_USAGE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::AgentUsage { since_ms }).await?, Response::AgentUsage(u) => u)
+    }
+
     /// `list_files`: one directory level of a worktree.
     pub async fn list_files(
         &self,

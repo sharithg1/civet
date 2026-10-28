@@ -111,6 +111,7 @@ import { IconButton } from './IconButton'
 import { PanelResizeHandle } from './PanelResizeHandle'
 import { StatusDot } from './StatusDot'
 import { AgentLogo, hasAgentLogo } from './AgentLogo'
+import { WorktreeSpend } from './AgentUsage'
 
 export function Sidebar() {
   const hostOrder = useStore((s) => s.hostOrder)
@@ -950,6 +951,7 @@ function WorktreeRow({
             </span>
           )}
           {pr && !hidden.pr && !removing && <PullRequestIcon pr={pr} />}
+          {!removing && <WorktreeSpend hostId={hostId} worktree={wt.id} />}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
           ) : wt.isMain ? (
