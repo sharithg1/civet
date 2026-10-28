@@ -7,7 +7,9 @@
 // list changes (git moved a HEAD) and once a minute. The Clean up dialog asks
 // again with `fetch` and `review` (uncommitted changes, pull requests). A
 // daemon older than civetd 0.4.1 answers `unsupported`; that host is then
-// left alone (no counts, no Clean up). Removal goes through the store's
+// left alone (no counts, no Clean up) while it runs that same daemon
+// version; an upgrade, or a version not known yet, is asked again. Removal
+// goes through the store's
 // removeWorktree, one at a time, so git still refuses a dirty worktree and
 // the sessions there are closed only after it succeeded.
 
@@ -40,8 +42,11 @@ export const LIFECYCLE_REFRESH_MS = 60_000
 type LifecycleState = {
   /** wtKey(hostId, repo) → last cheap answer (no fetch, no review) */
   byRepo: Record<string, RepoLifecycle>
-  /** hostIds whose daemon predates `worktree_lifecycle` */
-  unsupported: Record<string, true>
+  /**
+   * hostId → version of the daemon that answered `unsupported` (null: not
+   * known when it answered, so it is asked again)
+   */
+  unsupported: Record<string, string | null>
   /** The Clean up dialog's repository, while it is open. */
   cleanup: { hostId: string; repo: string } | null
 }
@@ -57,7 +62,7 @@ const running = new Map<string, { again: boolean; done: Promise<void> }>()
 /** Re-ask the cheap lifecycle of a repo (coalesced: one at a time, newest wins). */
 export function refreshLifecycle(hostId: string, repo: string): Promise<void> {
   const b = useStore.getState().backend
-  if (!b || useLifecycle.getState().unsupported[hostId]) return Promise.resolve()
+  if (!b || !lifecycleSupported(hostId)) return Promise.resolve()
   const k = wtKey(hostId, repo)
   const r = running.get(k)
   if (r) {
@@ -76,7 +81,8 @@ export function refreshLifecycle(hostId: string, repo: string): Promise<void> {
     } catch (err) {
       const e = CivetError.from(err)
       if (e.code === 'unsupported') {
-        useLifecycle.setState((s) => ({ unsupported: { ...s.unsupported, [hostId]: true } }))
+        const version = useStore.getState().hosts[hostId]?.daemonVersion ?? null
+        useLifecycle.setState((s) => ({ unsupported: { ...s.unsupported, [hostId]: version } }))
       } else {
         console.debug(`worktree_lifecycle ${repo} on ${hostId}:`, e)
       }
@@ -85,6 +91,22 @@ export function refreshLifecycle(hostId: string, repo: string): Promise<void> {
     }
   })()
   return entry.done
+}
+
+/**
+ * False while the host runs the daemon version that answered `unsupported`
+ * (unknown versions and upgrades are asked again).
+ */
+export function lifecycleSupported(hostId: string): boolean {
+  const refused = useLifecycle.getState().unsupported[hostId]
+  return refused == null || refused !== useStore.getState().hosts[hostId]?.daemonVersion
+}
+
+/** {@link lifecycleSupported} as a hook. */
+export function useLifecycleSupported(hostId: string): boolean {
+  const refused = useLifecycle((l) => l.unsupported[hostId])
+  const version = useStore((s) => s.hosts[hostId]?.daemonVersion)
+  return refused == null || refused !== version
 }
 
 /**

@@ -74,6 +74,7 @@ import {
   aheadBehindTitle,
   updateFromMain,
   useLifecycle,
+  useLifecycleSupported,
   useRepoLifecycle,
   useWorktreeLifecycle
 } from '@/state/lifecycle'
@@ -717,7 +718,7 @@ function WorktreeMenu({
   children: ReactNode
 }) {
   const life = useWorktreeLifecycle(hostId, wt.repo, wt.id)
-  const supported = useLifecycle((l) => !l.unsupported[hostId])
+  const supported = useLifecycleSupported(hostId)
   const busy = useChanges((c) => !!c.busy[wsKey(hostId, wt.id)])
   const defaultBranch = useStore(
     (s) => s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch

@@ -141,15 +141,31 @@ describe('worktree lifecycle', () => {
     expect(by['/locked']).toMatchObject({ blocked: 'Locked with git worktree lock' })
   })
 
-  it('remembers a daemon too old for lifecycle and stops asking it', async () => {
+  it('stops asking a daemon too old for lifecycle until its version changes', async () => {
     const worktreeLifecycle = vi.fn(async () => {
       throw new CivetError('unsupported', 'civetd 0.3.0')
     })
-    useStore.setState({ backend: { worktreeLifecycle } as unknown as CivetBackend })
+    const host = (daemonVersion: string | null) => ({
+      h: { hostId: 'h', label: 'devbox', daemonVersion } as never
+    })
+    useStore.setState({
+      backend: { worktreeLifecycle } as unknown as CivetBackend,
+      hosts: host('0.3.0')
+    })
     await refreshLifecycle('h', 'r')
-    expect(useLifecycle.getState().unsupported).toEqual({ h: true })
+    expect(useLifecycle.getState().unsupported).toEqual({ h: '0.3.0' })
     await refreshLifecycle('h', 'r')
     expect(worktreeLifecycle).toHaveBeenCalledTimes(1)
+    // Restarted on a newer civetd: asked again.
+    useStore.setState({ hosts: host('0.4.1') })
+    await refreshLifecycle('h', 'r')
+    expect(worktreeLifecycle).toHaveBeenCalledTimes(2)
+    // Refused before the version was known: not remembered as unsupported.
+    useStore.setState({ hosts: host(null) })
+    await refreshLifecycle('h', 'r')
+    await refreshLifecycle('h', 'r')
+    expect(useLifecycle.getState().unsupported).toEqual({ h: null })
+    expect(worktreeLifecycle).toHaveBeenCalledTimes(4)
   })
 
   it('stores the cheap lifecycle, coalescing overlapping refreshes', async () => {
