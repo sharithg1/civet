@@ -132,12 +132,14 @@ export function usePullRequestPolling(
       !!entry?.detail &&
       entry.detail.unresolvedThreads > 0 &&
       entry.detail.threads.length === 0
-    const tick = (now = false) => {
+    const tick = (now = false, force = false) => {
       if (document.visibilityState === 'hidden') return
       if (usePullRequests.getState().byWorktree[key]?.error?.code === 'unsupported') return
-      void refreshPullRequestDetail(hostId, worktree, now ? 0 : intervalMs / 2)
+      void refreshPullRequestDetail(hostId, worktree, now ? 0 : intervalMs / 2, { force })
     }
-    tick(retry || stale)
+    // Why force: a fetch already running (a sidebar poll) may lack the
+    // threads this poller wants; fetch again once it is done.
+    tick(retry || stale, threads)
     const onTick = () => tick()
     const timer = setInterval(onTick, intervalMs)
     document.addEventListener('visibilitychange', onTick)

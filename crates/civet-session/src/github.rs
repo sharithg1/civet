@@ -561,9 +561,18 @@ fn plain_text(body: &str, max: usize) -> String {
     }
     let mut out = String::new();
     let mut in_tag = false;
-    for c in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
-            '<' => in_tag = true,
+            // A tag starts `<a`, `</` or `<!`; a comparison (`a < b`,
+            // `<= 2`) keeps its `<`.
+            '<' if !in_tag
+                && chars
+                    .peek()
+                    .is_some_and(|n| n.is_ascii_alphabetic() || matches!(n, '/' | '!')) =>
+            {
+                in_tag = true
+            }
             '>' if in_tag => {
                 in_tag = false;
                 out.push(' ');
@@ -721,6 +730,7 @@ mod tests {
         );
         // An unclosed block runs to the end.
         assert_eq!(plain_text("keep <!-- never closed", 100), "keep");
+        assert_eq!(plain_text("if a < b or a <= 2", 100), "if a < b or a <= 2");
         assert_eq!(plain_text("abcdef ghij", 8), "abcdef…");
         assert_eq!(plain_text("éééééé", 4), "ééé…");
     }
