@@ -2,7 +2,8 @@
 // daemon has it, for the stats view's usage panel and the sidebar's
 // per-worktree spend.
 //
-// Polled (`agent_usage`, the last USAGE_DAYS days) every POLL_MS per host,
+// Polled (`agent_usage`, the last USAGE_DAYS days) every POLL_MS per host
+// while the sidebar shows spend (`sidebarSpend`) or the stats view is open,
 // and right away when a host connects or the stats view opens. The daemon
 // keeps what it parsed of the agents' logs, so a poll only reads what they
 // appended since.
@@ -11,6 +12,7 @@ import { create } from 'zustand'
 import { CivetError, type CivetBackend } from '@/backend'
 import type { AgentUsage } from '@/types'
 import { versionAtLeast } from './fileops'
+import { onPrefsChange, usePrefs } from './prefs'
 import { useStore, type HostView } from './store'
 
 /** Oldest civetd with `AgentUsage` (civet_proto::AGENT_USAGE_MIN_DAEMON_VERSION). */
@@ -79,24 +81,35 @@ function stop(hostId: string): void {
   timers.delete(hostId)
 }
 
-/** Follow connected hosts; returns the cleanup. */
+/** Something shows usage: the sidebar's spend, or the stats view. */
+function wanted(): boolean {
+  return usePrefs.getState().sidebarSpend || useStore.getState().statsOpen
+}
+
+/** Follow connected hosts while usage is shown; returns the cleanup. */
 export function initUsage(be: CivetBackend): () => void {
   backend = be
   const sync = () => {
     const hosts = useStore.getState().hosts
-    for (const id of [...timers.keys()]) if (!hasAgentUsage(hosts[id])) stop(id)
+    const on = wanted()
+    for (const id of [...timers.keys()]) if (!on || !hasAgentUsage(hosts[id])) stop(id)
+    if (!on) return
     for (const [id, h] of Object.entries(hosts))
       if (hasAgentUsage(h) && !timers.has(id)) schedule(id, 0)
   }
   sync()
   const unsub = useStore.subscribe((s, prev) => {
-    if (s.hosts !== prev.hosts) sync()
+    if (s.hosts !== prev.hosts || s.statsOpen !== prev.statsOpen) sync()
     // The stats view opened: bring its host's usage up to date.
     const id = s.active?.hostId
     if (s.statsOpen && !prev.statsOpen && id && timers.has(id)) schedule(id, 0)
   })
+  const unsubPrefs = onPrefsChange((next, prev) => {
+    if (next.sidebarSpend !== prev.sidebarSpend) sync()
+  })
   return () => {
     unsub()
+    unsubPrefs()
     for (const id of [...timers.keys()]) stop(id)
   }
 }
