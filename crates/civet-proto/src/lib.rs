@@ -68,13 +68,15 @@ pub use agent::{
 };
 pub use bootstrap::{BOOTSTRAP_FORMAT, BootstrapInfo};
 pub use control::{
-    AgentStatusEvent, CommandSpec, ConflictSide, ControlRequest, ControlResponse, DaemonInfo,
-    DirListing, ErrorCode, Event, FileChunk, FileEntry, FileKind, FileList, FileOp, FileOpResult,
-    FilePreview, GitAction, GitBlobRef, GitBranchInfo, GitChangeKind, GitDiffInfo, GitDiscardEntry,
-    GitDiscardSnapshot, GitFileChange, GitStatusInfo, HostDir, HostDirListing, KillSignal,
-    LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind, PullRequestInfo, PullRequestState,
-    RepoInfo, RepoLifecycle, Request, Response, RpcError, SpawnPaneRequest, StaleReason,
-    SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle, WorktreeUpdate,
+    AgentStatusEvent, CheckState, CommandSpec, ConflictSide, ControlRequest, ControlResponse,
+    CreatePullRequest, DaemonInfo, DirListing, ErrorCode, Event, FileChunk, FileEntry, FileKind,
+    FileList, FileOp, FileOpResult, FilePreview, GitAction, GitBlobRef, GitBranchInfo,
+    GitChangeKind, GitDiffInfo, GitDiscardEntry, GitDiscardSnapshot, GitFileChange, GitStatusInfo,
+    HostDir, HostDirListing, KillSignal, LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind,
+    PullRequestCheck, PullRequestDetail, PullRequestInfo, PullRequestState, RepoInfo,
+    RepoLifecycle, Request, Response, ReviewDecision, ReviewThread, RpcError, SpawnPaneRequest,
+    StaleReason, SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle,
+    WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo, WorktreeUpdate,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -178,15 +180,28 @@ pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
 /// [`Request::HostStats`]).
 pub const WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION: &str = "0.4.1";
 
+/// Oldest daemon that understands [`Request::GetWorktreeTemplate`],
+/// [`Request::SetWorktreeTemplate`] and [`Request::SetupWorktree`]
+/// (appended within protocol 1 after [`Request::UpdateWorktree`]).
+pub const WORKTREE_TEMPLATE_MIN_DAEMON_VERSION: &str = "0.4.2";
+
+/// Oldest daemon that understands [`Request::PullRequestDetail`] and
+/// [`Request::CreatePullRequest`] (appended within protocol 1 after
+/// [`Request::SetupWorktree`]).
+pub const PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION: &str = "0.4.3";
+
+/// Longest [`ReviewThread::body`], in characters.
+pub const MAX_REVIEW_COMMENT_CHARS: usize = 600;
+
 /// Oldest daemon that understands [`Request::SendPrompt`] and the prompt
 /// queue requests (appended within protocol 1 after
-/// [`Request::UpdateWorktree`]).
-pub const PROMPTS_MIN_DAEMON_VERSION: &str = "0.4.2";
+/// [`Request::CreatePullRequest`]).
+pub const PROMPTS_MIN_DAEMON_VERSION: &str = "0.4.4";
 
 /// Oldest client (`ClientHello::client_version`) that can decode
 /// [`Event::PromptQueue`] (appended within protocol 1 after
 /// [`Event::Clipboard`]; gated like [`CLIPBOARD_EVENT_MIN_CLIENT_VERSION`]).
-pub const PROMPT_QUEUE_EVENT_MIN_CLIENT_VERSION: &str = "0.4.2";
+pub const PROMPT_QUEUE_EVENT_MIN_CLIENT_VERSION: &str = "0.4.4";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
@@ -209,6 +224,12 @@ pub const ENV_PANE_ID: &str = "CIVET_PANE_ID";
 /// status hook file. Agent hooks write a status into it (format:
 /// [`agent::parse_status_file`]); the daemon watches it.
 pub const ENV_STATUS_FILE: &str = "CIVET_STATUS_FILE";
+
+/// Environment variable set in every pane of a worktree: a TCP port picked
+/// for it on the host, the first of a block of ten (`CIVET_PORT` …
+/// `CIVET_PORT + 9`) that no other worktree is given. Stable for the
+/// worktree's lifetime.
+pub const ENV_PORT: &str = "CIVET_PORT";
 
 /// Name of the per-user state directory under `$HOME` (`~/.civet`).
 pub const STATE_DIR_NAME: &str = ".civet";

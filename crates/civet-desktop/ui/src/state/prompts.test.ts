@@ -88,7 +88,7 @@ describe('queued prompts', () => {
           label: 'h',
           state: 'connected',
           transport: 'quic',
-          daemonVersion: '0.4.2',
+          daemonVersion: '0.4.4',
           instanceId: '1',
           upgrade: null,
           rttMs: null,
@@ -124,9 +124,9 @@ describe('queued prompts', () => {
   it('an old daemon is not asked', () => {
     const host = (daemonVersion: string | null, state: 'connected' | 'reconnecting') =>
       ({ state, daemonVersion }) as Parameters<typeof prompts.hasPrompts>[0]
-    expect(prompts.hasPrompts(host('0.4.2', 'connected'))).toBe(true)
+    expect(prompts.hasPrompts(host('0.4.4', 'connected'))).toBe(true)
     expect(prompts.hasPrompts(host(null, 'connected'))).toBe(true)
-    expect(prompts.hasPrompts(host('0.4.1', 'connected'))).toBe(false)
+    expect(prompts.hasPrompts(host('0.4.3', 'connected'))).toBe(false)
     expect(prompts.hasPrompts(host('0.5.0', 'reconnecting'))).toBe(false)
   })
 })

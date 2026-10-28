@@ -1287,7 +1287,7 @@ async fn prompts_over_the_control_stream() {
     let (daemon, dir) = start_daemon().await;
     let info = daemon.info().clone();
     let mut a = raw(&daemon, &info, civetd::VERSION).await;
-    let mut old = raw(&daemon, &info, "0.4.1").await;
+    let mut old = raw(&daemon, &info, "0.4.3").await;
     let pane = match a.request(sh_pane(dir.path())).await.unwrap() {
         Response::PaneSpawned(p) => p.id,
         other => panic!("{other:?}"),

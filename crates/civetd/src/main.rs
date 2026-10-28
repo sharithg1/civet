@@ -67,9 +67,10 @@ enum Cmd {
         /// Read the prompt from FILE (`-` = stdin).
         #[arg(long, value_name = "FILE")]
         prompt_file: Option<PathBuf>,
-        /// Agent to start: claude or codex.
-        #[arg(long, default_value = "claude")]
-        agent: String,
+        /// Agent to start: claude or codex (default: the repo's worktree
+        /// template agent command, else claude).
+        #[arg(long)]
+        agent: Option<String>,
         /// Pane title (default: the prompt's first line).
         #[arg(long)]
         title: Option<String>,
@@ -85,6 +86,10 @@ enum Cmd {
         /// Copy uncommitted changes (incl. untracked files) to the new worktree.
         #[arg(long)]
         carry_changes: bool,
+        /// Skip the repo's worktree template (copied files, setup script,
+        /// agent command and prompt).
+        #[arg(long)]
+        no_setup: bool,
         /// Run even without CIVET_PANE_ID (targets the daemon of the state dir).
         #[arg(long)]
         outside_pane: bool,
@@ -207,6 +212,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             base,
             from,
             carry_changes,
+            no_setup,
             outside_pane,
             state_dir,
             command,
@@ -230,6 +236,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 command,
                 from,
                 carry_changes,
+                setup: !no_setup,
                 state_dir,
                 outside_pane,
             };

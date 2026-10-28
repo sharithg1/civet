@@ -38,10 +38,8 @@ import {
   FolderPlus,
   GitBranchPlus,
   GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
   Lock,
+  MessageSquare,
   MoreHorizontal,
   PanelLeft,
   Plus,
@@ -122,7 +120,15 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  checksSummary,
+  PR_DETAIL_BACKGROUND_POLL_MS,
+  reviewSummary,
+  usePullRequestPolling,
+  usePullRequests
+} from '@/state/pull-requests'
 import { Kbd, useWorktreeTabs } from './chrome'
+import { CHECK_STATE, PR_STATE } from './PullRequestSection'
 import { IconButton } from './IconButton'
 import { PanelResizeHandle } from './PanelResizeHandle'
 import { StatusDot } from './StatusDot'
@@ -853,27 +859,54 @@ function WorktreeMenu({
   )
 }
 
-const PR_ICON = {
-  open: { Icon: GitPullRequest, className: 'text-status-ok', label: 'Open' },
-  draft: { Icon: GitPullRequestDraft, className: 'text-quiet', label: 'Draft' },
-  merged: { Icon: GitMerge, className: 'text-pr-merged', label: 'Merged' },
-  closed: { Icon: GitPullRequestClosed, className: 'text-status-err', label: 'Closed' }
-} as const
-
-/** The branch's pull request state, as in Cursor's sidebar; opens it on GitHub. */
-function PullRequestIcon({ pr }: { pr: PullRequestInfo }) {
-  const { Icon, className, label } = PR_ICON[pr.state]
+/**
+ * The branch's pull request state, as in Cursor's sidebar, with its CI state
+ * and unresolved review comments while it is open; opens it on GitHub.
+ */
+function PullRequestIcon({
+  pr,
+  hostId,
+  worktree
+}: {
+  pr: PullRequestInfo
+  hostId: string
+  worktree: string
+}) {
+  const { Icon, className, label } = PR_STATE[pr.state]
+  const live = pr.state === 'open' || pr.state === 'draft'
+  usePullRequestPolling(hostId, worktree, PR_DETAIL_BACKGROUND_POLL_MS, { enabled: live })
+  const detail = usePullRequests((s) => {
+    const d = s.byWorktree[wsKey(hostId, worktree)]?.detail
+    return live && d?.pr.number === pr.number ? d : null
+  })
+  const checks = detail?.checksState ? CHECK_STATE[detail.checksState] : null
+  const unresolved = detail?.unresolvedThreads ?? 0
+  const lines = [`#${pr.number} · ${label}`, pr.title]
+  if (detail?.checksState) lines.push(`${checks?.label}: ${checksSummary(detail)}`)
+  const review = detail && reviewSummary(detail)
+  if (review) lines.push(review)
+  if (unresolved > 0) lines.push(`${unresolved} unresolved comment${unresolved === 1 ? '' : 's'}`)
+  lines.push('Click to open on GitHub')
   return (
     <button
       type="button"
       aria-label={`Open PR #${pr.number} on GitHub`}
-      title={`#${pr.number} · ${label}\n${pr.title}\nClick to open on GitHub`}
+      title={lines.join('\n')}
       onClick={(e) => {
         e.stopPropagation()
         void openPullRequest(pr)
       }}
-      className="-mx-1 grid size-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] hover:bg-hover-strong"
+      className="-mx-1 flex h-[22px] shrink-0 cursor-pointer items-center gap-1 rounded-[4px] px-1 hover:bg-hover-strong"
     >
+      {unresolved > 0 && (
+        <span className="flex items-center gap-0.5 font-mono text-2xs text-quiet">
+          <MessageSquare className="size-3" />
+          {unresolved}
+        </span>
+      )}
+      {checks && detail?.checksState !== 'passed' && (
+        <checks.Icon aria-label={checks.label} className={cn('size-3', checks.className)} />
+      )}
       <Icon className={cn('size-3.5', className)} />
     </button>
   )
@@ -1013,7 +1046,9 @@ function WorktreeRow({
               {counts}
             </span>
           )}
-          {pr && !hidden.pr && !removing && <PullRequestIcon pr={pr} />}
+          {pr && !hidden.pr && !removing && (
+            <PullRequestIcon pr={pr} hostId={hostId} worktree={wt.id} />
+          )}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
           ) : wt.isMain ? (

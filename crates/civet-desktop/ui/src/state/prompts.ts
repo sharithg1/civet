@@ -1,4 +1,4 @@
-// Broadcast and queued prompts (civetd >= 0.4.2).
+// Broadcast and queued prompts (civetd >= 0.4.4).
 //
 // Broadcast: the prompt dialog sends one text to several agent panes, now
 // (`send_prompt` per pane) or queued on each. Targets come from the dialog's
@@ -27,7 +27,7 @@ import { versionAtLeast } from './fileops'
 import { pushToast, reportError, useStore, type HostView } from './store'
 
 /** Oldest civetd that takes prompts (civet_proto::PROMPTS_MIN_DAEMON_VERSION). */
-export const PROMPTS_MIN_DAEMON_VERSION = '0.4.2'
+export const PROMPTS_MIN_DAEMON_VERSION = '0.4.4'
 
 /** What the prompt dialog is doing. */
 export type PromptDialog =
