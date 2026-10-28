@@ -67,11 +67,14 @@ import type {
   GitStatusInfo,
   HostStats,
   ProcessUsage,
+  WorktreeSetup,
+  WorktreeTemplate,
+  WorktreeTemplateInfo,
   StatsSample
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.2.1'
+export const MOCK_VERSION = '0.4.1'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -81,6 +84,10 @@ const MOCK_PROJECTS_VERSION = '0.1.17'
 const MOCK_LIST_DIRS_VERSION = '0.1.18'
 /** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
 const MOCK_HOST_STATS_VERSION = '0.2.1'
+/** Mock daemons have worktree templates from this version on (WORKTREE_TEMPLATE_MIN_DAEMON_VERSION). */
+const MOCK_TEMPLATES_VERSION = '0.4.1'
+/** First mock `CIVET_PORT`; blocks of ten, like civetd. */
+const MOCK_PORT_FIRST = 41000
 
 /** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
 function versionAtLeast(version: string, min: string): boolean {
@@ -262,15 +269,18 @@ class MockPane {
   shell: MockShell
   constructor(
     readonly host: MockHost,
-    public info: PaneInfo
+    public info: PaneInfo,
+    bannerText?: string
   ) {
     const cwd = info.cwd.replace(/^\/home\/dev/, '~')
     const prompt = `\x1b[32mdev@devbox\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `
-    const banner = info.agent
-      ? `\x1b[1;35m✻ ${info.agent} (mock agent)\x1b[0m\r\n` +
-        `  Working on: ${info.title}\r\n` +
-        `  This is the Civet mock backend; the agent "finishes" in ~12 s.\r\n\r\n`
-      : `\x1b[1mCivet mock shell\x1b[0m — type \x1b[33mhelp\x1b[0m for commands.\r\n`
+    const banner =
+      bannerText ??
+      (info.agent
+        ? `\x1b[1;35m✻ ${info.agent} (mock agent)\x1b[0m\r\n` +
+          `  Working on: ${info.title}\r\n` +
+          `  This is the Civet mock backend; the agent "finishes" in ~12 s.\r\n\r\n`
+        : `\x1b[1mCivet mock shell\x1b[0m — type \x1b[33mhelp\x1b[0m for commands.\r\n`)
     this.shell = new MockShell(this, prompt, banner)
   }
 
@@ -345,6 +355,22 @@ class MockHost {
   repos: RepoInfo[]
   worktrees = new Map<string, WorktreeInfo[]>()
   panes = new Map<PaneId, MockPane>()
+  /** Templates saved on the host, by repo id. */
+  templates = new Map<string, WorktreeTemplate>()
+  /** `.civet/worktree.toml` of a repo's main checkout (a string: it does not parse). */
+  templateFiles = new Map<string, WorktreeTemplate | string>([
+    [
+      'civet',
+      {
+        setup: 'pnpm install\ncp "$CIVET_MAIN_CHECKOUT/.env" .env.local',
+        copy: ['.env'],
+        agent: null,
+        prompt: null
+      }
+    ]
+  ])
+  /** `CIVET_PORT` by worktree id. */
+  ports = new Map<string, number>()
   private nextPaneId = 1
 
   constructor(
@@ -435,6 +461,8 @@ class MockHost {
     size?: TermSize
     /** Initial agent status; only a `running` agent fakes work and finishes. */
     status?: AgentStatus
+    /** Replaces the shell / agent banner. */
+    banner?: string
   }): MockPane {
     const id = this.nextPaneId++
     const info: PaneInfo = {
@@ -451,7 +479,7 @@ class MockHost {
       createdAtMs: Date.now(),
       state: 1
     }
-    const pane = new MockPane(this, info)
+    const pane = new MockPane(this, info, p.banner)
     this.panes.set(id, pane)
     if (p.agent && info.status === 'running') {
       // Fake agent run: some output, then done.
@@ -675,6 +703,14 @@ export const MOCK_HOME = '/home/dev'
  * directory; `*` marks a git repository. Added repos and every ancestor
  * exist too.
  */
+const EMPTY_TEMPLATE: WorktreeTemplate = { setup: null, copy: null, agent: null, prompt: null }
+
+/** Untracked files every mock main checkout has (what templates copy). */
+const MOCK_MAIN_ONLY_FILES: Record<string, string> = {
+  '.env': 'DATABASE_URL=postgres://localhost/dev\nAPI_KEY=mock-key\n',
+  '.env.local': 'DEBUG=1\n'
+}
+
 const MOCK_HOST_DIRS = [
   '.cache',
   '.config',
@@ -1540,6 +1576,134 @@ export class MockBackend implements CivetBackend {
         h.event({ worktreesChanged: { repo } })
       }
     }
+  }
+
+  /** The host, if its daemon has worktree templates. */
+  private templatesHost(hostId: string): MockHost {
+    const h = this.host(hostId)
+    const v = h.summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_TEMPLATES_VERSION))
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; worktree templates need v${MOCK_TEMPLATES_VERSION} or newer (restart the daemon to upgrade)`
+      )
+    return h
+  }
+
+  private templateInfo(h: MockHost, repo: string): WorktreeTemplateInfo {
+    const r = h.repos.find((x) => x.id === repo)
+    if (!r) throw new CivetError('notFound', `repo ${repo} not found`)
+    if (r.kind === 'folder')
+      throw new CivetError(
+        'unsupported',
+        `unsupported: ${r.name} is a folder, not a git repository: no worktree templates`
+      )
+    const host = h.templates.get(repo) ?? EMPTY_TEMPLATE
+    const raw = h.templateFiles.get(repo)
+    const file = typeof raw === 'object' ? raw : null
+    const pick = <K extends keyof WorktreeTemplate>(k: K) => host[k] ?? file?.[k] ?? null
+    return {
+      repo,
+      host: { ...host },
+      filePath: `${r.path}/.civet/worktree.toml`,
+      file: file && { ...file },
+      fileError: typeof raw === 'string' ? `.civet/worktree.toml: ${raw}` : null,
+      effective: {
+        setup: pick('setup'),
+        copy: pick('copy'),
+        agent: pick('agent'),
+        prompt: pick('prompt')
+      }
+    }
+  }
+
+  async worktreeTemplate(hostId: string, repo: string): Promise<WorktreeTemplateInfo> {
+    return this.templateInfo(this.templatesHost(hostId), repo)
+  }
+
+  async setWorktreeTemplate(
+    hostId: string,
+    repo: string,
+    template: WorktreeTemplate
+  ): Promise<WorktreeTemplateInfo> {
+    const h = this.templatesHost(hostId)
+    this.templateInfo(h, repo)
+    const t: WorktreeTemplate = {
+      setup: template.setup,
+      copy: template.copy?.map((p) => p.trim()).filter(Boolean) ?? null,
+      agent: template.agent?.trim() ?? null,
+      prompt: template.prompt
+    }
+    if (Object.values(t).every((v) => v === null)) h.templates.delete(repo)
+    else h.templates.set(repo, t)
+    return this.templateInfo(h, repo)
+  }
+
+  async setupWorktree(hostId: string, worktree: string, size: TermSize): Promise<WorktreeSetup> {
+    const h = this.templatesHost(hostId)
+    const wt = h.allWorktrees().find((w) => w.id === worktree)
+    if (!wt) throw new CivetError('notFound', `worktree ${worktree} not found`)
+    const main = h.worktrees.get(wt.repo)?.find((w) => w.isMain)
+    if (wt.isMain || !main)
+      throw new CivetError(
+        'invalidArgument',
+        `${wt.path} is the main checkout; templates apply to new worktrees`
+      )
+    const info = this.templateInfo(h, wt.repo)
+    const template = info.effective
+    const warnings = info.fileError ? [info.fileError] : []
+    // Main checkouts also have their untracked `.env` (MOCK_MAIN_ONLY_FILES).
+    const from = this.files(hostId, main.id)
+    const to = this.files(hostId, wt.id)
+    const copied: string[] = []
+    for (const p of template.copy ?? []) {
+      const body = from.files.get(p) ?? MOCK_MAIN_ONLY_FILES[p]
+      if (body === undefined) warnings.push(`${p}: not in the main checkout`)
+      else if (!to.exists(p)) {
+        to.create(p, body)
+        copied.push(p)
+      }
+    }
+    let port = h.ports.get(wt.id)
+    if (port === undefined) {
+      const used = new Set(h.ports.values())
+      port = MOCK_PORT_FIRST
+      while (used.has(port)) port += 10
+      h.ports.set(wt.id, port)
+    }
+    const script = template.setup ?? ''
+    let setupPane: PaneInfo | null = null
+    if (script.trim()) {
+      const pane = h.addPane({
+        worktree: wt.id,
+        cwd: wt.path,
+        title: 'Setup',
+        agent: null,
+        command: ['sh', '-e', `/home/dev/.civet/setup/${wt.branch ?? 'wt'}.sh`],
+        size,
+        banner: ''
+      })
+      h.event({ paneCreated: pane.info })
+      setupPane = pane.info
+      void this.runMockSetup(h, pane, script)
+    }
+    return { template, copied, warnings, port, setupPane }
+  }
+
+  /** Echo each script line with fake output; `false` / `exit N` fail it (like `sh -e`). */
+  private async runMockSetup(h: MockHost, pane: MockPane, script: string): Promise<void> {
+    for (const line of script.split('\n').map((l) => l.trim())) {
+      if (!line || line.startsWith('#')) continue
+      await sleep(400)
+      if (!h.panes.has(pane.info.id)) return
+      pane.shell.output(`\x1b[2m+ ${line}\x1b[0m\r\n`)
+      const fail = line === 'false' ? 1 : Number(/^exit (\d+)$/.exec(line)?.[1] ?? 0)
+      if (fail) return h.exitPane(pane.info.id, fail)
+      if (/install/.test(line))
+        pane.shell.output('Lockfile is up to date\r\nPackages: +412\r\nDone in 2.1s\r\n')
+    }
+    await sleep(300)
+    h.exitPane(pane.info.id, 0)
   }
 
   private checkFiles(hostId: string, min = '0.1.10'): void {

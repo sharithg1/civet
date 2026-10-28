@@ -182,3 +182,84 @@ async fn handoff_creates_worktree_and_pane() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("no Civet daemon is reachable"), "{err}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn handoff_applies_the_worktree_template() {
+    let state = tempfile::tempdir().unwrap();
+    let mut opts = DaemonOptions::new(state.path());
+    opts.bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    opts.port_range = 0..=0;
+    opts.shell = Some("/bin/sh".into());
+    let daemon = Daemon::start(opts).await.unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let repo = make_repo(root.path());
+    let repo_s = repo.display().to_string();
+    // The template's agent: a script that records its argv and env.
+    let agent = root.path().join("my-agent");
+    std::fs::write(
+        &agent,
+        "#!/bin/sh\nprintf '%s|' \"$@\" > args.txt\necho \"$CIVET_PORT\" > port.txt\nsleep 30\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::create_dir_all(repo.join(".civet")).unwrap();
+    std::fs::write(
+        repo.join(".civet/worktree.toml"),
+        format!(
+            "setup = \"echo set-up > setup.txt\"\ncopy = [\".env\"]\nagent = \"'{}' --flag\"\nprompt = \"Conventions first.\"\n",
+            agent.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(repo.join(".env"), "K=V\n").unwrap();
+
+    let v = json(
+        &handoff(
+            state.path(),
+            true,
+            &["--prompt", "Do the thing", "--from", &repo_s],
+        )
+        .await,
+    );
+    let wt = PathBuf::from(v["worktree"].as_str().unwrap());
+    assert_eq!(v["agent"], "my-agent");
+    assert_eq!(v["copied"], serde_json::json!([".env"]));
+    assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "K=V\n");
+    assert!(v["setupPane"].is_u64(), "{v}");
+    assert_eq!(wait_for_file(&wt.join("setup.txt")).await, "set-up\n");
+    assert_eq!(
+        wait_for_file(&wt.join("args.txt")).await,
+        "--flag|Conventions first.\n\nDo the thing|"
+    );
+    let port = v["port"].as_u64().unwrap();
+    assert_eq!(
+        wait_for_file(&wt.join("port.txt")).await.trim(),
+        port.to_string()
+    );
+    let setup = daemon
+        .sessions()
+        .pane_info(civet_proto::PaneId(v["setupPane"].as_u64().unwrap()))
+        .unwrap();
+    assert_eq!(setup.title, "Setup");
+
+    // --agent overrides the template's command; --no-setup skips it all.
+    let fake = [
+        "--",
+        "/bin/sh",
+        "-c",
+        "printf '%s' \"$1\" > p.txt; sleep 30",
+        "x",
+    ];
+    let mut args = vec!["--prompt", "Other", "--from", &repo_s, "--no-setup"];
+    args.extend(fake);
+    let v = json(&handoff(state.path(), true, &args).await);
+    let wt = PathBuf::from(v["worktree"].as_str().unwrap());
+    assert_eq!(v["setupPane"], serde_json::Value::Null);
+    assert_eq!(v["copied"], serde_json::json!([]));
+    assert!(!wt.join(".env").exists());
+    assert_eq!(wait_for_file(&wt.join("p.txt")).await, "Other");
+
+    daemon.shutdown("test").await;
+}

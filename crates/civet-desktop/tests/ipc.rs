@@ -176,6 +176,15 @@ fn every_command_through_ipc() {
             json!({ "hostId": "x", "since": null, "processes": true }),
         ),
         ("list_worktrees", json!({ "hostId": "x", "repo": "r" })),
+        ("worktree_template", json!({ "hostId": "x", "repo": "r" })),
+        (
+            "set_worktree_template",
+            json!({ "hostId": "x", "repo": "r", "template": { "setup": null, "copy": [".env"], "agent": null, "prompt": null } }),
+        ),
+        (
+            "setup_worktree",
+            json!({ "hostId": "x", "worktree": "/w", "size": size }),
+        ),
         ("list_pull_requests", json!({ "hostId": "x", "repo": "r" })),
         ("git_status", json!({ "hostId": "x", "worktree": "/w" })),
         (

@@ -562,6 +562,18 @@ impl Server {
                     self.stats.request(since, processes).await,
                 ));
             }
+            Request::GetWorktreeTemplate { repo } => s
+                .worktree_template(&repo)
+                .await
+                .map(Response::WorktreeTemplate),
+            Request::SetWorktreeTemplate { repo, template } => s
+                .set_worktree_template(&repo, template)
+                .await
+                .map(Response::WorktreeTemplate),
+            Request::SetupWorktree { worktree, size } => s
+                .setup_worktree(&worktree, clamp_size(size))
+                .await
+                .map(Response::WorktreeSetUp),
             Request::CreateWorktree {
                 repo,
                 branch,

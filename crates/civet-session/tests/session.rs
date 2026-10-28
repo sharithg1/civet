@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use civet_proto::{
     AgentStatus, AgentStatusEvent, AgentStatusSource, ClientId, CommandSpec, Event, InputMessage,
     KillSignal, LaunchAgentRequest, MAX_INFLIGHT_UPDATES, PaneId, RepoId, SpawnPaneRequest,
-    TermSize, UpdateKind, WorktreeId,
+    TermSize, UpdateKind, WorktreeId, WorktreeTemplate,
 };
 use civet_session::{InputOutcome, PaneOutput, SessionConfig, SessionError, SessionManager};
 use tokio::sync::broadcast;
@@ -1491,6 +1491,172 @@ async fn launch_agent_in_new_worktree() {
         .unwrap();
     assert_eq!(p.title, "t3");
     wait_screen(&f.mgr, p.id, "via-string").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_templates_and_setup() {
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let info = f.mgr.worktree_template(&repo.id).await.unwrap();
+    assert_eq!(info.file, None);
+    assert_eq!(info.effective, WorktreeTemplate::default());
+    assert!(info.file_path.ends_with("proj/.civet/worktree.toml"));
+
+    // The repository file, and files to copy (untracked, like a real .env).
+    std::fs::create_dir_all(repo_dir.join(".civet")).unwrap();
+    std::fs::write(
+        repo_dir.join(".civet/worktree.toml"),
+        "setup = \"echo setup-in=$PWD port=$CIVET_PORT main=$CIVET_MAIN_CHECKOUT b=$CIVET_BRANCH\\nfalse\\necho not-reached\"\n\
+         copy = [\".env\", \".env.missing\"]\nagent = \"claude --model opus\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo_dir.join(".env"), "SECRET=1\n").unwrap();
+    let info = f.mgr.worktree_template(&repo.id).await.unwrap();
+    assert_eq!(info.file_error, None);
+    assert_eq!(info.effective.agent.as_deref(), Some("claude --model opus"));
+
+    // Host settings override field by field.
+    let info = f
+        .mgr
+        .set_worktree_template(
+            &repo.id,
+            WorktreeTemplate {
+                prompt: Some("Read AGENTS.md first.".into()),
+                agent: Some(" codex ".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(info.effective.agent.as_deref(), Some("codex"));
+    assert_eq!(info.effective.copy, info.file.as_ref().unwrap().copy);
+    assert!(f.root.join("state/worktree-templates.json").exists());
+
+    let wt = f
+        .mgr
+        .create_worktree(&repo.id, "feat/t", None, None)
+        .await
+        .unwrap();
+    let main = f.mgr.list_worktrees(&repo.id).await.unwrap()[0].clone();
+    assert!(matches!(
+        f.mgr.setup_worktree(&main.id, TermSize::new(80, 24)).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    let mut events = f.mgr.subscribe_events();
+    let setup = f
+        .mgr
+        .setup_worktree(&wt.id, TermSize::new(100, 24))
+        .await
+        .unwrap();
+    assert_eq!(setup.copied, [".env"]);
+    assert_eq!(setup.warnings, [".env.missing: not in the main checkout"]);
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&wt.path).join(".env")).unwrap(),
+        "SECRET=1\n"
+    );
+    let port = setup.port.unwrap();
+    let pane = setup.setup_pane.unwrap();
+    assert_eq!(pane.title, "Setup");
+    assert_eq!(pane.worktree, Some(wt.id.clone()));
+    let text = wait_screen(&f.mgr, pane.id, "setup-in=").await.join("");
+    assert!(
+        text.contains(&format!(
+            "setup-in={} port={port} main={} b=feat/t",
+            wt.path,
+            repo_dir.display()
+        )),
+        "{text}"
+    );
+    // `sh -e`: the failing line ends the script with its code.
+    let exited = next_event(
+        &mut events,
+        |e| matches!(e, Event::PaneExited { pane: p, .. } if *p == pane.id),
+    )
+    .await;
+    assert_eq!(
+        exited,
+        Event::PaneExited {
+            pane: pane.id,
+            exit_code: Some(1)
+        }
+    );
+    assert!(
+        !f.mgr
+            .screen_text(pane.id)
+            .unwrap()
+            .join("")
+            .contains("not-reached")
+    );
+
+    // Every pane of the worktree gets the same port; another worktree another one.
+    let p = f
+        .mgr
+        .spawn_pane(SpawnPaneRequest {
+            worktree: Some(wt.id.clone()),
+            ..sh("echo again=$CIVET_PORT; sleep 30")
+        })
+        .await
+        .unwrap();
+    wait_screen(&f.mgr, p.id, &format!("again={port}")).await;
+    let other = f
+        .mgr
+        .create_worktree(&repo.id, "feat/u", None, None)
+        .await
+        .unwrap();
+    let other_setup = f
+        .mgr
+        .setup_worktree(&other.id, TermSize::new(80, 24))
+        .await
+        .unwrap();
+    assert_ne!(other_setup.port, Some(port));
+    // An empty host script switches the repository's script off.
+    f.mgr
+        .set_worktree_template(
+            &repo.id,
+            WorktreeTemplate {
+                setup: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let again = f
+        .mgr
+        .setup_worktree(&other.id, TermSize::new(80, 24))
+        .await
+        .unwrap();
+    assert_eq!(again.setup_pane, None);
+    assert_eq!(again.copied, Vec::<String>::new(), "kept the existing .env");
+    assert_eq!(again.port, other_setup.port);
+
+    // Removing the worktree frees its port; clearing the template deletes it.
+    f.mgr.kill_pane(p.id, KillSignal::Kill).unwrap();
+    f.mgr.remove_worktree(&wt.id, true).await.unwrap();
+    let ports = std::fs::read_to_string(f.root.join("state/worktree-ports.json")).unwrap();
+    assert!(!ports.contains(&wt.path), "{ports}");
+    let info = f
+        .mgr
+        .set_worktree_template(&repo.id, WorktreeTemplate::default())
+        .await
+        .unwrap();
+    assert_eq!(info.host, WorktreeTemplate::default());
+    assert_eq!(info.effective, info.file.unwrap());
+
+    // A broken repository file is reported, not fatal.
+    std::fs::write(repo_dir.join(".civet/worktree.toml"), "setup = [").unwrap();
+    let info = f.mgr.worktree_template(&repo.id).await.unwrap();
+    assert!(
+        info.file_error
+            .unwrap()
+            .starts_with(".civet/worktree.toml:")
+    );
+    let setup = f
+        .mgr
+        .setup_worktree(&other.id, TermSize::new(80, 24))
+        .await
+        .unwrap();
+    assert_eq!(setup.warnings.len(), 1, "{:?}", setup.warnings);
 }
 
 // ----- agent status --------------------------------------------------------

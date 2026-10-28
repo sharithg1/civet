@@ -71,6 +71,7 @@ pub use control::{
     GitDiscardSnapshot, GitFileChange, GitStatusInfo, HostDir, HostDirListing, KillSignal,
     LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind, PullRequestInfo, PullRequestState,
     RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
+    WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -168,6 +169,11 @@ pub const LIST_DIRS_MIN_DAEMON_VERSION: &str = "0.1.18";
 /// protocol 1 after [`Request::ListDirs`]).
 pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
 
+/// Oldest daemon that understands [`Request::GetWorktreeTemplate`],
+/// [`Request::SetWorktreeTemplate`] and [`Request::SetupWorktree`]
+/// (appended within protocol 1 after [`Request::HostStats`]).
+pub const WORKTREE_TEMPLATE_MIN_DAEMON_VERSION: &str = "0.4.1";
+
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -189,6 +195,12 @@ pub const ENV_PANE_ID: &str = "CIVET_PANE_ID";
 /// status hook file. Agent hooks write a status into it (format:
 /// [`agent::parse_status_file`]); the daemon watches it.
 pub const ENV_STATUS_FILE: &str = "CIVET_STATUS_FILE";
+
+/// Environment variable set in every pane of a worktree: a TCP port picked
+/// for it on the host, the first of a block of ten (`CIVET_PORT` …
+/// `CIVET_PORT + 9`) that no other worktree is given. Stable for the
+/// worktree's lifetime.
+pub const ENV_PORT: &str = "CIVET_PORT";
 
 /// Name of the per-user state directory under `$HOME` (`~/.civet`).
 pub const STATE_DIR_NAME: &str = ".civet";
