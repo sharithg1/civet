@@ -16,6 +16,8 @@
 //!   QUIC stream after the control stream.
 //! * [`control`]: control RPC ([`Request`] / [`Response`]) and pushed
 //!   [`Event`]s.
+//! * [`activity`]: the per-worktree agent activity timeline
+//!   ([`AgentActivity`]).
 //! * [`ports`]: listening-port updates and TCP port forwarding, each on
 //!   their own QUIC streams.
 //! * [`stats`]: host resource stats ([`HostStats`]), polled by the
@@ -46,6 +48,7 @@
 //! `#[serde(untagged)]`, `#[serde(flatten)]`, `skip_serializing_if`) must not
 //! be used in this crate.
 
+pub mod activity;
 pub mod agent;
 pub mod bootstrap;
 pub mod control;
@@ -59,6 +62,7 @@ pub mod ports;
 pub mod stats;
 pub mod term;
 
+pub use activity::{AgentActivity, AgentTurn, MAX_ACTIVITY_TURNS, MAX_TURN_FILES};
 pub use agent::{
     AgentStatus, AgentStatusSource, MAX_STATUS_FILE_BYTES, MAX_STATUS_MESSAGE_CHARS,
     parse_status_file,
@@ -167,6 +171,11 @@ pub const LIST_DIRS_MIN_DAEMON_VERSION: &str = "0.1.18";
 /// Oldest daemon that understands [`Request::HostStats`] (appended within
 /// protocol 1 after [`Request::ListDirs`]).
 pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
+
+/// Oldest daemon that understands [`Request::AgentActivity`] and
+/// [`Request::TurnDiff`] (appended within protocol 1 after
+/// [`Request::HostStats`]).
+pub const AGENT_ACTIVITY_MIN_DAEMON_VERSION: &str = "0.4.1";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

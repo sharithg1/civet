@@ -330,6 +330,59 @@ describe('MockBackend git', () => {
   })
 })
 
+describe('MockBackend agent activity', () => {
+  it('has a seeded timeline and records turns as agents run', async () => {
+    const { b } = await connected()
+    const [, quic, scroll, v3] = await b.listWorktrees('devbox', 'civet')
+    const turns = async (wt: string) => (await b.agentActivity('devbox', wt)).turns
+    const v3Turns = await turns(v3!.id)
+    expect(v3Turns.map((t) => t.status)).toEqual(['done', 'done', 'idle', 'needsInput'])
+    // Oldest first.
+    expect(v3Turns.map((t) => t.startedMs)).toEqual([...v3Turns.map((t) => t.startedMs)].sort())
+    const edit = v3Turns[0]!
+    const file = edit.files.find((f) => f.kind === 'added')!
+    const d = await b.turnDiff('devbox', v3!.id, file.path, {
+      from: edit.fromTree!,
+      to: edit.toTree!
+    })
+    expect(d.diff).toContain('@@')
+
+    // The running agent finished (while connecting) with the worktree's changes.
+    const done = (await turns(quic!.id)).at(-1)!
+    expect(done).toMatchObject({ pane: 1, status: 'done', prompt: 'Implement QUIC resume' })
+    expect(done.files.length).toBeGreaterThan(0)
+
+    // A new agent pane in a quiet worktree: running, then needs input.
+    expect(await turns(scroll!.id)).toEqual([])
+    const pane = await b.spawnPane('devbox', {
+      worktree: scroll!.id,
+      cwd: null,
+      command: { program: 'claude', args: [] },
+      env: [],
+      size: { cols: 80, rows: 24, pixelWidth: 0, pixelHeight: 0 },
+      title: 'Page faster',
+      agent: 'claude'
+    })
+    expect(await turns(scroll!.id)).toMatchObject([{ status: 'running', endedMs: null }])
+    await b.setAgentStatus('devbox', pane.id, 'needsInput')
+    expect(await turns(scroll!.id)).toMatchObject([
+      { pane: pane.id, agent: 'claude', status: 'needsInput' }
+    ])
+    // A shell pane is not an agent: nothing recorded.
+    const shell = (await b.listPanes('devbox')).find((p) => !p.agent && p.worktree === scroll!.id)!
+    await b.setAgentStatus('devbox', shell.id, 'running')
+    expect(await turns(scroll!.id)).toHaveLength(1)
+  })
+
+  it('is unsupported on an old civetd', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.agentActivity('pre-git', '/w')).rejects.toMatchObject({ code: 'unsupported' })
+  })
+})
+
 describe('MockBackend git actions', () => {
   /** Run a git action through the mock's fake delay. */
   async function act<T>(p: Promise<T>): Promise<T> {

@@ -184,6 +184,37 @@ export type GitDiffInfo = {
   diff: string
 }
 
+/**
+ * One stretch of an agent working in a worktree (`agent_activity`, civetd >=
+ * 0.4.1): from its status turning `running` until it left it.
+ */
+export type AgentTurn = {
+  /** Increases by one per turn within the worktree. */
+  id: number
+  /** Only names a live pane for turns of the current daemon run. */
+  pane: PaneId
+  /** The pane's agent hint, else its title. */
+  agent: string
+  /** The prompt, when the agent's hook reported it. */
+  prompt: string | null
+  startedMs: number
+  /** null while running. */
+  endedMs: number | null
+  /** `running` while it runs, then what it ended in; `unknown`: interrupted (daemon stopped, pane closed). */
+  status: AgentStatus
+  /** The status message at the end (hook / notification text). */
+  message: string | null
+  /** Files that differ between the snapshots at the start and the end. */
+  files: GitFileChange[]
+  filesTruncated: boolean
+  /** Snapshot trees (null: not a git worktree, or the snapshot failed). */
+  fromTree: string | null
+  toTree: string | null
+}
+
+/** A worktree's agent activity timeline, oldest turn first. */
+export type AgentActivity = { turns: AgentTurn[] }
+
 /** A worktree's branch vs. its upstream (`git_branch`, civetd >= 0.1.14). */
 export type GitBranchInfo = {
   /** null: detached HEAD. */

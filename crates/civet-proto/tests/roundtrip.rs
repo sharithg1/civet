@@ -284,6 +284,17 @@ fn all_requests() -> Vec<Request> {
             since: Some(41),
             processes: true,
         },
+        Request::AgentActivity {
+            worktree: WorktreeId::from("/w"),
+        },
+        Request::TurnDiff {
+            worktree: WorktreeId::from("/w"),
+            from: "a".repeat(40),
+            to: "b".repeat(40),
+            path: "src/new.rs".into(),
+            old_path: Some("src/old.rs".into()),
+            context_lines: 3,
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -517,6 +528,8 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             truncated: false,
         })),
         Ok(Response::HostStats(host_stats())),
+        Ok(Response::AgentActivity(agent_activity())),
+        Ok(Response::AgentActivity(AgentActivity::default())),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -916,6 +929,79 @@ fn host_stats() -> HostStats {
             worktree: Some(WorktreeId::from("/w")),
         }],
     }
+}
+
+fn agent_activity() -> AgentActivity {
+    AgentActivity {
+        turns: vec![
+            AgentTurn {
+                id: 7,
+                pane: PaneId(3),
+                agent: "claude".into(),
+                prompt: Some("Fix the copay bug".into()),
+                started_ms: 1_700_000_000_000,
+                ended_ms: Some(1_700_000_090_000),
+                status: AgentStatus::Done,
+                message: None,
+                files: vec![GitFileChange {
+                    path: "src/new.rs".into(),
+                    old_path: Some("src/old.rs".into()),
+                    kind: GitChangeKind::Renamed,
+                    additions: Some(4),
+                    deletions: Some(1),
+                }],
+                files_truncated: false,
+                from_tree: Some("a".repeat(40)),
+                to_tree: Some("b".repeat(40)),
+            },
+            AgentTurn {
+                id: 8,
+                pane: PaneId(3),
+                agent: "claude".into(),
+                prompt: None,
+                started_ms: 1_700_000_100_000,
+                ended_ms: None,
+                status: AgentStatus::Running,
+                message: None,
+                files: vec![],
+                files_truncated: false,
+                from_tree: None,
+                to_tree: None,
+            },
+        ],
+    }
+}
+
+#[test]
+fn agent_activity_is_appended() {
+    // Appended within protocol 1 after HostStats (31 / 26).
+    let req = encode(&Request::AgentActivity {
+        worktree: WorktreeId::from("/w"),
+    })
+    .unwrap();
+    assert_eq!(req, vec![32, 2, b'/', b'w']);
+    let req = encode(&Request::TurnDiff {
+        worktree: WorktreeId::from("/w"),
+        from: "a".into(),
+        to: "b".into(),
+        path: "p".into(),
+        old_path: None,
+        context_lines: 3,
+    })
+    .unwrap();
+    assert_eq!(req[0], 33);
+    let resp = encode(&Response::AgentActivity(agent_activity())).unwrap();
+    assert_eq!(resp[0], 27);
+    let v = serde_json::to_value(Response::AgentActivity(agent_activity())).unwrap();
+    let turn = &v["agentActivity"]["turns"][0];
+    assert_eq!(turn["startedMs"], 1_700_000_000_000u64);
+    assert_eq!(turn["status"], "done");
+    assert_eq!(turn["files"][0]["oldPath"], "src/old.rs");
+    assert_eq!(turn["fromTree"], "a".repeat(40));
+    assert_eq!(
+        v["agentActivity"]["turns"][1]["endedMs"],
+        serde_json::Value::Null
+    );
 }
 
 #[test]

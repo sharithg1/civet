@@ -892,6 +892,33 @@ pub enum Request {
         /// the daemon samples processes only while someone asks for them).
         processes: bool,
     },
+    /// The worktree's agent activity timeline (see [`crate::activity`]).
+    /// -> [`Response::AgentActivity`] (empty for a worktree no agent worked
+    /// in). Clients send it only to daemons of at least
+    /// [`crate::AGENT_ACTIVITY_MIN_DAEMON_VERSION`] (also
+    /// [`Request::TurnDiff`]).
+    AgentActivity {
+        /// Worktree.
+        worktree: WorktreeId,
+    },
+    /// One file's unified diff between the two snapshots of a turn
+    /// ([`crate::AgentTurn::from_tree`] → [`crate::AgentTurn::to_tree`]).
+    /// -> [`Response::GitDiff`], with the limits of [`Request::GitDiff`]. A
+    /// `NotFound` error once git pruned a snapshot.
+    TurnDiff {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Tree at the start of the turn.
+        from: String,
+        /// Tree at the end of the turn.
+        to: String,
+        /// Path relative to the worktree root.
+        path: String,
+        /// Source path of a rename / copy, to diff the pair.
+        old_path: Option<String>,
+        /// Context lines around each hunk (`-U`).
+        context_lines: u32,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -966,6 +993,8 @@ pub enum Response {
     Dirs(HostDirListing),
     /// Reply to [`Request::HostStats`].
     HostStats(crate::stats::HostStats),
+    /// Reply to [`Request::AgentActivity`].
+    AgentActivity(crate::activity::AgentActivity),
 }
 
 /// Error category for a failed request.

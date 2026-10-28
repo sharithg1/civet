@@ -645,6 +645,18 @@ describe('store', () => {
     expect(ws().activeTab).toBe(ws().tabs[2]!.id)
     store.openFileTab('h', '/w', 'src/main.rs')
     expect(ws().activeTab).toBe(main)
+    // An agent turn's diff of the file: one tab per turn.
+    const turn = (id: number) => ({
+      side: 'turn' as const,
+      oldPath: null,
+      turn: { id, from: 'a'.repeat(40), to: 'b'.repeat(40) }
+    })
+    store.openDiffTab('h', '/w', 'src/main.rs', turn(1))
+    store.openDiffTab('h', '/w', 'src/main.rs', turn(2))
+    const turn1 = ws().tabs.findIndex((t) => t.kind === 'file' && t.diff?.side === 'turn')
+    store.openDiffTab('h', '/w', 'src/main.rs', turn(1))
+    expect(ws().activeTab).toBe(ws().tabs[turn1]!.id)
+    expect(ws().tabs.filter((t) => t.kind === 'file' && t.diff?.side === 'turn')).toHaveLength(2)
     for (const t of ws().tabs.filter((t) => t.kind === 'file' && t.diff)) store.closeTab(key, t.id)
     expect(ws().tabs).toHaveLength(3)
 

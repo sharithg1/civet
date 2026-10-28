@@ -188,6 +188,35 @@ pub async fn git_diff(
         .await
 }
 
+/// The worktree's agent activity timeline (turns, files changed per turn).
+#[tauri::command]
+pub async fn agent_activity(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+) -> Res<civet_proto::AgentActivity> {
+    state.hosts.agent_activity(&host_id, worktree).await
+}
+
+/// One file's diff within an agent turn, between the turn's snapshots.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn turn_diff(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    from: String,
+    to: String,
+    path: String,
+    old_path: Option<String>,
+    context_lines: u32,
+) -> Res<civet_proto::GitDiffInfo> {
+    state
+        .hosts
+        .turn_diff(&host_id, worktree, from, to, path, old_path, context_lines)
+        .await
+}
+
 #[tauri::command]
 pub async fn git_branch(
     state: State<'_, AppState>,
@@ -623,6 +652,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_pull_requests,
         git_status,
         git_diff,
+        agent_activity,
+        turn_diff,
         git_branch,
         git_action,
         create_worktree,

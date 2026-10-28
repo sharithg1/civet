@@ -651,6 +651,11 @@ impl Pane {
         }
     }
 
+    /// See [`StatusTracker::is_agent`].
+    pub(crate) fn is_agent(&self) -> bool {
+        lock(&self.status).is_agent()
+    }
+
     /// Set status from a client request.
     pub(crate) fn set_status_from_client(&self, status: AgentStatus) {
         self.emit_status(vec![Change {

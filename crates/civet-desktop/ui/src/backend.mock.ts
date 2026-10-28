@@ -67,7 +67,9 @@ import type {
   GitStatusInfo,
   HostStats,
   ProcessUsage,
-  StatsSample
+  StatsSample,
+  AgentActivity,
+  AgentTurn
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
@@ -81,6 +83,11 @@ const MOCK_PROJECTS_VERSION = '0.1.17'
 const MOCK_LIST_DIRS_VERSION = '0.1.18'
 /** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
 const MOCK_HOST_STATS_VERSION = '0.2.1'
+/**
+ * Mock daemons record agent activity from this version on (civetd: 0.4.1,
+ * AGENT_ACTIVITY_MIN_DAEMON_VERSION; the mock's own version predates it).
+ */
+const MOCK_AGENT_ACTIVITY_VERSION = MOCK_VERSION
 
 /** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
 function versionAtLeast(version: string, min: string): boolean {
@@ -345,7 +352,10 @@ class MockHost {
   repos: RepoInfo[]
   worktrees = new Map<string, WorktreeInfo[]>()
   panes = new Map<PaneId, MockPane>()
+  /** worktree → agent turns, oldest first (`agentActivity`). */
+  activity = new Map<string, AgentTurn[]>()
   private nextPaneId = 1
+  private nextTurnId = 1
 
   constructor(
     readonly backend: MockBackend,
@@ -424,6 +434,150 @@ class MockHost {
     })
     failed.shell.output('\x1b[31m● Stopped after 3 consecutive test failures.\x1b[0m\r\n')
     failed.info = { ...failed.info, exited: true, exitCode: 1 }
+    this.seedActivity()
+  }
+
+  /** What the agents did before the app connected (the Activity tab). */
+  private seedActivity(): void {
+    const civet = this.worktrees.get('civet')!
+    const min = 60_000
+    const now = Date.now()
+    const past = (
+      worktree: WorktreeInfo,
+      pane: PaneId,
+      agent: string,
+      prompt: string | null,
+      [start, end]: [number, number],
+      status: AgentStatus,
+      message: string | null,
+      files: GitFileChange[]
+    ) => {
+      const turn = this.newTurn(pane, agent, prompt, now - start * min)
+      this.pushTurn(worktree.id, {
+        ...turn,
+        endedMs: now - end * min,
+        status,
+        message,
+        files,
+        toTree: fakeSha()
+      })
+    }
+    const [, quic, , v3, flaky] = civet
+    past(quic!, 1, 'claude', 'Rename rejoin to resume and document it', [190, 152], 'done', null, [
+      change(
+        'crates/civet-transport/src/resume.rs',
+        'renamed',
+        3,
+        1,
+        'crates/civet-transport/src/rejoin.rs'
+      ),
+      change('docs/RESUME.md', 'added', 5, 0)
+    ])
+    past(v3!, 3, 'claude', 'Redesign the workspace chrome', [131, 102], 'done', null, [
+      change('crates/civet-desktop/ui/src/components/TitleBar.tsx', 'modified', 118, 41),
+      change('crates/civet-desktop/ui/src/components/Sidebar.tsx', 'modified', 27, 9),
+      change('crates/civet-desktop/ui/src/components/chrome.tsx', 'added', 96, 0),
+      change('crates/civet-desktop/ui/src/assets/civet.png', 'modified', null, null)
+    ])
+    past(
+      v3!,
+      5,
+      'codex',
+      'Review the tab layout',
+      [88, 79],
+      'done',
+      'Reviewed 3 files; no issues.',
+      []
+    )
+    past(v3!, 4, 'claude', 'Draft the PR description', [61, 57], 'idle', null, [
+      change('docs/PR.md', 'added', 22, 0)
+    ])
+    past(
+      v3!,
+      3,
+      'claude',
+      'Make the tab strip scroll',
+      [24, 3],
+      'needsInput',
+      'Claude needs your permission to use Bash',
+      [
+        change('crates/civet-desktop/ui/src/components/TitleBar.tsx', 'modified', 34, 12),
+        change('crates/civet-desktop/ui/src/lib/tabs.ts', 'added', 48, 0)
+      ]
+    )
+    past(
+      flaky!,
+      6,
+      'claude',
+      'Fix the flaky reconnect e2e',
+      [47, 22],
+      'idle',
+      'Stopped after 3 consecutive test failures.',
+      [change('tests/e2e/src/reconnect.rs', 'modified', 6, 2)]
+    )
+  }
+
+  private newTurn(
+    pane: PaneId,
+    agent: string,
+    prompt: string | null,
+    startedMs: number
+  ): AgentTurn {
+    return {
+      id: this.nextTurnId++,
+      pane,
+      agent,
+      prompt,
+      startedMs,
+      endedMs: null,
+      status: 'running',
+      message: null,
+      files: [],
+      filesTruncated: false,
+      fromTree: fakeSha(),
+      toTree: null
+    }
+  }
+
+  /** Add a turn, keeping the timeline oldest first (seeded history comes after live turns). */
+  private pushTurn(worktree: string, turn: AgentTurn): void {
+    const turns = [...(this.activity.get(worktree) ?? []), turn]
+    this.activity.set(
+      worktree,
+      turns.sort((a, b) => a.startedMs - b.startedMs)
+    )
+  }
+
+  /** Open a turn for an agent pane that started running (like civetd's recorder). */
+  private beginTurn(pane: MockPane): void {
+    const { id, worktree, agent, title } = pane.info
+    if (!worktree || !agent || this.openTurn(id)) return
+    this.pushTurn(worktree, this.newTurn(id, agent, title, Date.now()))
+  }
+
+  private openTurn(pane: PaneId): { worktree: string; index: number } | null {
+    for (const [worktree, turns] of this.activity) {
+      const index = turns.findLastIndex((t) => t.pane === pane && t.status === 'running')
+      if (index >= 0) return { worktree, index }
+    }
+    return null
+  }
+
+  /** Close the pane's open turn; the "files" are the worktree's mock changes. */
+  private endTurn(pane: PaneId, status: AgentStatus, message: string | null): void {
+    const open = this.openTurn(pane)
+    if (!open) return
+    const turns = [...this.activity.get(open.worktree)!]
+    const { staged, unstaged, untracked } = mockGitStatus(open.worktree)
+    turns[open.index] = {
+      ...turns[open.index]!,
+      endedMs: Date.now(),
+      status,
+      message,
+      files: [...staged, ...unstaged, ...untracked].sort((a, b) => a.path.localeCompare(b.path)),
+      toTree: fakeSha()
+    }
+    this.activity.set(open.worktree, turns)
   }
 
   addPane(p: {
@@ -453,6 +607,7 @@ class MockHost {
     }
     const pane = new MockPane(this, info)
     this.panes.set(id, pane)
+    if (info.status === 'running') this.beginTurn(pane)
     if (p.agent && info.status === 'running') {
       // Fake agent run: some output, then done.
       const tick = setInterval(() => {
@@ -483,6 +638,8 @@ class MockHost {
     const previous = pane.info.status
     if (previous === status) return
     pane.info = { ...pane.info, status }
+    if (status === 'running') this.beginTurn(pane)
+    else this.endTurn(id, status, message)
     this.event({
       agentStatus: { pane: id, status, previous, source: 'client', message, atMs: Date.now() }
     })
@@ -515,6 +672,7 @@ class MockHost {
     if (!pane) throw new CivetError('notFound', `pane ${id} not found`)
     pane.shell.closed()
     this.panes.delete(id)
+    this.endTurn(id, 'unknown', null)
     this.event({ paneClosed: { pane: id } })
   }
 
@@ -1431,6 +1589,33 @@ export class MockBackend implements CivetBackend {
     // Network actions take a moment, so the busy state shows.
     await sleep(typeof action === 'string' && ['push', 'pull', 'fetch'].includes(action) ? 600 : 80)
     return this.git(hostId, worktree).apply(action)
+  }
+
+  async agentActivity(hostId: string, worktree: string): Promise<AgentActivity> {
+    this.checkAgentActivity(hostId)
+    return { turns: [...(this.host(hostId).activity.get(worktree) ?? [])] }
+  }
+
+  async turnDiff(
+    hostId: string,
+    worktree: string,
+    path: string,
+    opts: { from: string; to: string; oldPath?: string | null; contextLines?: number }
+  ): Promise<GitDiffInfo> {
+    this.checkAgentActivity(hostId)
+    this.host(hostId).checkGit(worktree, 'diffs')
+    // A rename's diff is the staged one in the mock.
+    return mockGitDiff(worktree, path, opts.oldPath != null, 0)
+  }
+
+  private checkAgentActivity(hostId: string): void {
+    const v = this.host(hostId).summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_AGENT_ACTIVITY_VERSION)) {
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; agent activity needs v0.4.1 or newer (restart the daemon to upgrade)`
+      )
+    }
   }
 
   private git(hostId: string, worktree: string): MockGit {
