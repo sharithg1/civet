@@ -1288,6 +1288,13 @@ pub enum Request {
     },
     /// Every queued prompt, by pane, oldest first. -> [`Response::QueuedPrompts`]
     ListQueuedPrompts,
+    /// Token use and estimated spend of the agent sessions on the host (see
+    /// [`crate::usage`]). -> [`Response::AgentUsage`]. Clients send it only
+    /// to daemons of at least [`crate::AGENT_USAGE_MIN_DAEMON_VERSION`].
+    AgentUsage {
+        /// Only usage at or after this time (ms since epoch) counts.
+        since_ms: u64,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -1379,6 +1386,8 @@ pub enum Response {
     QueuedPrompt(QueuedPrompt),
     /// Reply to [`Request::ListQueuedPrompts`].
     QueuedPrompts(Vec<QueuedPrompt>),
+    /// Reply to [`Request::AgentUsage`].
+    AgentUsage(crate::usage::AgentUsage),
 }
 
 /// Error category for a failed request.

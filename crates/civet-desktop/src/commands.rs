@@ -336,6 +336,17 @@ pub async fn host_stats(
     state.hosts.host_stats(&host_id, since, processes).await
 }
 
+/// Token use and estimated spend of the host's agent sessions since
+/// `since_ms`, from the agents' own logs.
+#[tauri::command]
+pub async fn agent_usage(
+    state: State<'_, AppState>,
+    host_id: String,
+    since_ms: u64,
+) -> Res<civet_proto::AgentUsage> {
+    state.hosts.agent_usage(&host_id, since_ms).await
+}
+
 #[tauri::command]
 pub async fn list_files(
     state: State<'_, AppState>,
@@ -753,6 +764,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         remove_repo,
         list_dirs,
         host_stats,
+        agent_usage,
         prepare_file_drop,
         upload_file,
         list_worktrees,

@@ -36,6 +36,7 @@ import {
 import { initPorts } from './state/ports'
 import { initStats } from './state/stats'
 import { initPrompts, openSendPrompt } from './state/prompts'
+import { initUsage } from './state/usage'
 
 export function App() {
   const [ready, setReady] = useState(false)
@@ -54,7 +55,9 @@ export function App() {
         const ports = await initPorts(b)
         const stats = initStats(b)
         const prompts = await initPrompts(b)
+        const usage = initUsage(b)
         return () => {
+          usage()
           prompts()
           stats()
           ports()

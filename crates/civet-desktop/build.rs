@@ -20,6 +20,7 @@ const COMMANDS: &[&str] = &[
     "worktree_template",
     "set_worktree_template",
     "setup_worktree",
+    "agent_usage",
     "prepare_file_drop",
     "upload_file",
     "list_worktrees",

@@ -175,6 +175,7 @@ fn every_command_through_ipc() {
             "host_stats",
             json!({ "hostId": "x", "since": null, "processes": true }),
         ),
+        ("agent_usage", json!({ "hostId": "x", "sinceMs": 0 })),
         ("list_worktrees", json!({ "hostId": "x", "repo": "r" })),
         ("worktree_template", json!({ "hostId": "x", "repo": "r" })),
         (

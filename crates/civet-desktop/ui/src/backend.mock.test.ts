@@ -317,6 +317,39 @@ describe('MockBackend host stats', () => {
   })
 })
 
+describe('MockBackend agent usage', () => {
+  it('reports sessions in the window, matched to worktrees and priced', async () => {
+    const { b } = await connected()
+    const since = Date.now() - 30 * 86_400_000
+    const p = b.agentUsage('devbox', since)
+    await vi.advanceTimersByTimeAsync(50)
+    const u = await p
+    expect(u.sinceMs).toBe(since)
+    expect(u.prices.length).toBeGreaterThan(0)
+    expect(u.sessions.length).toBeGreaterThan(3)
+    expect(u.sessions.some((s) => s.worktree != null && s.repo != null)).toBe(true)
+    expect(u.sessions.some((s) => s.worktree == null)).toBe(true)
+    expect(u.sessions.some((s) => s.unpricedTokens > 0 && s.costMicros === 0)).toBe(true)
+    for (const s of u.sessions) {
+      expect(s.hours.length).toBeGreaterThan(0)
+      expect(Object.values(s.tokens).every((n) => n >= 0)).toBe(true)
+      expect(s.hours.every((h) => h.tokens.output > 0)).toBe(true)
+      expect(s.costMicros).toBe(s.hours.reduce((n, h) => n + h.costMicros, 0))
+      expect(s.hours.every((h) => h.hourMs >= since - 3_600_000)).toBe(true)
+    }
+    const last = u.sessions.map((s) => s.lastMs)
+    expect(last).toEqual([...last].sort((x, y) => y - x))
+  })
+
+  it('is unsupported before civetd 0.4.5', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.agentUsage('pre-git', 0)).rejects.toMatchObject({ code: 'unsupported' })
+  })
+})
+
 describe('MockBackend git', () => {
   it('reports changes and diffs', async () => {
     const { b } = await connected()
