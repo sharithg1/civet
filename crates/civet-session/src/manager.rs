@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 
 use civet_proto::{
     AgentStatus, ClientId, Event, InputMessage, KillSignal, LaunchAgentRequest, PaneId, PaneInfo,
-    ProjectInfo, ProjectKind, RepoId, RepoInfo, ScrollbackPage, ScrollbackRequest,
-    SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo, WorktreeSetup, WorktreeTemplate,
-    WorktreeTemplateInfo,
+    ProjectInfo, ProjectKind, PromptTrigger, QueuedPrompt, RepoId, RepoInfo, ScrollbackPage,
+    ScrollbackRequest, SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo, WorktreeSetup,
+    WorktreeTemplate, WorktreeTemplateInfo,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -22,6 +22,7 @@ use crate::git::{
 };
 use crate::hooks::{self, HookFiles, ShellKind, basename};
 use crate::pane::{Pane, SpawnParams, lock};
+use crate::prompts::{self, PromptQueues};
 use crate::subscription::Subscription;
 use crate::templates;
 use crate::watch::{WorktreeWatch, common_dir};
@@ -94,6 +95,9 @@ struct Inner {
     templates: tokio::sync::Mutex<BTreeMap<String, WorktreeTemplate>>,
     /// `CIVET_PORT` by worktree id (`worktree-ports.json`).
     ports: Mutex<BTreeMap<String, u16>>,
+    /// Queued prompts and pending Enter presses (see [`crate::prompts`]);
+    /// driven by the status ticker.
+    prompts: Mutex<PromptQueues>,
     shutdown: AtomicBool,
     activity: Arc<Mutex<ActivityStore>>,
 }
@@ -212,6 +216,7 @@ impl SessionManager {
             pushed_branches: Default::default(),
             templates: tokio::sync::Mutex::new(host_templates),
             ports: Mutex::new(ports),
+            prompts: Mutex::new(PromptQueues::default()),
             shutdown: AtomicBool::new(false),
             activity,
             config,
@@ -1565,6 +1570,89 @@ impl SessionManager {
         Ok(())
     }
 
+    // ----- prompts (see crate::prompts) ----------------------------------
+
+    /// Type `text` into the pane and press Enter [`prompts::SUBMIT_DELAY`]
+    /// later (the ticker does). Returns once the text is queued for the PTY,
+    /// or, while the pane's previous prompt still waits for its Enter (or
+    /// its PTY is backlogged), once it is set to follow. `Busy` when
+    /// [`civet_proto::MAX_QUEUED_PROMPTS`] already wait that way.
+    pub fn send_prompt(&self, pane: PaneId, text: &str) -> Result<(), SessionError> {
+        let text = prompts::clean_prompt(text)?;
+        let p = self.pane(pane)?;
+        if p.is_exited() {
+            return Err(SessionError::InvalidArgument(format!("{pane} has exited")));
+        }
+        // Check and write under the queue lock (lock order: prompts, then
+        // the pane's), so the ticker cannot type into the pane in between.
+        // Older held prompts go first.
+        let mut q = lock(&self.inner.prompts);
+        if q.submitting(pane) || q.has_deferred(pane) {
+            return q.defer(pane, text);
+        }
+        match p.type_prompt(&text) {
+            Ok(()) => q.submit_at(pane, Instant::now() + prompts::SUBMIT_DELAY),
+            // PTY backlogged: typed once it drains.
+            Err(SessionError::Busy(_)) => q.defer(pane, text)?,
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+
+    /// Queue a prompt on a pane, sent the next time its agent changes into
+    /// a status `trigger` fires on. Emits PromptQueue.
+    pub fn queue_prompt(
+        &self,
+        pane: PaneId,
+        text: &str,
+        trigger: PromptTrigger,
+    ) -> Result<QueuedPrompt, SessionError> {
+        let text = prompts::clean_prompt(text)?;
+        let p = self.pane(pane)?;
+        if p.is_exited() {
+            return Err(SessionError::InvalidArgument(format!("{pane} has exited")));
+        }
+        let prompt = lock(&self.inner.prompts).push(pane, p.status(), text, trigger)?;
+        self.emit_prompt_queue(pane, None);
+        Ok(prompt)
+    }
+
+    /// Change a queued prompt's text and trigger. Emits PromptQueue.
+    pub fn edit_queued_prompt(
+        &self,
+        id: u64,
+        text: &str,
+        trigger: PromptTrigger,
+    ) -> Result<QueuedPrompt, SessionError> {
+        let text = prompts::clean_prompt(text)?;
+        let prompt = lock(&self.inner.prompts).edit(id, text, trigger)?;
+        self.emit_prompt_queue(prompt.pane, None);
+        Ok(prompt)
+    }
+
+    /// Drop a queued prompt. Emits PromptQueue.
+    pub fn cancel_queued_prompt(&self, id: u64) -> Result<(), SessionError> {
+        let prompt = lock(&self.inner.prompts)
+            .remove(id)
+            .ok_or_else(|| SessionError::NotFound(format!("queued prompt {id}")))?;
+        self.emit_prompt_queue(prompt.pane, None);
+        Ok(())
+    }
+
+    /// Every queued prompt, by pane, oldest first.
+    pub fn queued_prompts(&self) -> Vec<QueuedPrompt> {
+        lock(&self.inner.prompts).all()
+    }
+
+    /// One pane's queued prompts, oldest first.
+    pub fn queued_prompts_of(&self, pane: PaneId) -> Vec<QueuedPrompt> {
+        lock(&self.inner.prompts).of(pane)
+    }
+
+    fn emit_prompt_queue(&self, pane: PaneId, sent: Option<u64>) {
+        emit_prompt_queue(&self.inner, pane, sent);
+    }
+
     /// Serve a scrollback page.
     pub fn fetch_scrollback(
         &self,
@@ -1715,14 +1803,104 @@ fn ticker(weak: Weak<Inner>) {
             return;
         }
         let panes: Vec<_> = lock(&inner.panes).values().cloned().collect();
-        drop(inner);
         n = n.wrapping_add(1);
         let now = Instant::now();
-        for p in panes {
+        for p in &panes {
             if n % HOOK_POLL_TICKS == 0 {
                 p.poll_hook_file();
             }
             p.tick(now);
         }
+        run_prompts(&inner, &panes, now);
+        drop(inner);
+    }
+}
+
+fn emit_prompt_queue(inner: &Inner, pane: PaneId, sent: Option<u64>) {
+    let prompts = lock(&inner.prompts).of(pane);
+    let _ = inner.events.send(Event::PromptQueue {
+        pane,
+        prompts,
+        sent,
+    });
+}
+
+/// One ticker round of the prompt queues: drop the queues of panes that
+/// exited or closed, feed the others' status, press the Enters that are
+/// due, then type deferred and due prompts into panes with no Enter
+/// pending. All under the queue lock, so nothing is typed into a pane
+/// between a prompt and its Enter; pane writes never block (they queue
+/// for the PTY writer), so this is cheap.
+fn run_prompts(inner: &Inner, panes: &[Arc<Pane>], now: Instant) {
+    let by_id: BTreeMap<PaneId, &Arc<Pane>> = panes.iter().map(|p| (p.id, p)).collect();
+    // (pane, sent prompt id) whose queue changed, announced after the lock.
+    let mut changed: Vec<(PaneId, Option<u64>)> = Vec::new();
+    {
+        let mut q = lock(&inner.prompts);
+        for pane in q.panes() {
+            match by_id.get(&pane) {
+                Some(p) if !p.is_exited() => q.observe(pane, p.status(), now),
+                // Exited: tell clients the queue is gone. Closed: the pane
+                // itself is gone for them.
+                Some(_) => {
+                    q.drop_pane(pane);
+                    changed.push((pane, None));
+                }
+                None => {
+                    q.drop_pane(pane);
+                }
+            }
+        }
+        for pane in q.due_submits(now) {
+            match by_id.get(&pane).map(|p| p.press_enter()) {
+                // The paste is in; the Enter must follow once the PTY drains.
+                Some(Err(SessionError::Busy(_))) => q.submit_at(pane, now + prompts::FIRE_RETRY),
+                Some(Err(e)) => tracing::debug!(pane = pane.0, error = %e, "prompt submit dropped"),
+                _ => {}
+            }
+        }
+        for (pane, text) in q.ready_deferred() {
+            let Some(p) = by_id.get(&pane) else {
+                q.drop_pane(pane);
+                continue;
+            };
+            match p.type_prompt(&text) {
+                Ok(()) => {
+                    q.take_deferred(pane);
+                    q.submit_at(pane, now + prompts::SUBMIT_DELAY);
+                }
+                // Stays deferred: tried again next round.
+                Err(SessionError::Busy(_)) => {}
+                Err(e) => {
+                    tracing::debug!(pane = pane.0, error = %e, "prompt not sent");
+                    q.take_deferred(pane);
+                }
+            }
+        }
+        for prompt in q.due(now, |pane| by_id.get(&pane).map(|p| p.status())) {
+            let pane = prompt.pane;
+            let Some(p) = by_id.get(&pane) else {
+                continue;
+            };
+            if q.submitting(pane) || q.has_deferred(pane) {
+                q.retry(pane, now + prompts::SUBMIT_DELAY);
+                continue;
+            }
+            match p.type_prompt(&prompt.text) {
+                Ok(()) => {
+                    tracing::info!(pane = pane.0, id = prompt.id, "queued prompt sent");
+                    q.remove(prompt.id);
+                    q.submit_at(pane, now + prompts::SUBMIT_DELAY);
+                    changed.push((pane, Some(prompt.id)));
+                }
+                Err(SessionError::Busy(_)) => q.retry(pane, now + prompts::FIRE_RETRY),
+                Err(e) => {
+                    tracing::debug!(pane = pane.0, error = %e, "queued prompt not sent");
+                }
+            }
+        }
+    }
+    for (pane, sent) in changed {
+        emit_prompt_queue(inner, pane, sent);
     }
 }

@@ -127,6 +127,16 @@ fn alt_screen_and_cursor_shape() {
 }
 
 #[test]
+fn bracketed_paste_mode() {
+    let mut t = term(20, 5);
+    assert!(!t.bracketed_paste());
+    t.feed(b"\x1b[?2004h");
+    assert!(t.bracketed_paste());
+    t.feed(b"\x1b[?2004l");
+    assert!(!t.bracketed_paste());
+}
+
+#[test]
 fn synchronized_update_is_applied_immediately() {
     let mut t = term(20, 5);
     t.feed(b"\x1b[?2026hhello");

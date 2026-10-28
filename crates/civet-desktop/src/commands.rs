@@ -4,8 +4,8 @@
 //! Keep the list in sync with `build.rs` (ACL) and the capability file.
 
 use civet_proto::{
-    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, RepoId, ScrollbackQuery,
-    SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
+    AgentStatus, KillSignal, LaunchAgentRequest, PaneId, PaneInfo, PromptTrigger, QueuedPrompt,
+    RepoId, ScrollbackQuery, SpawnPaneRequest, SubscribeInfo, TermSize, WorktreeId, WorktreeInfo,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -547,6 +547,59 @@ pub async fn set_agent_status(
     state.hosts.set_agent_status(&host_id, pane, status).await
 }
 
+/// Type a prompt into a pane and submit it (one pane of a broadcast).
+#[tauri::command]
+pub async fn send_prompt(
+    state: State<'_, AppState>,
+    host_id: String,
+    pane: PaneId,
+    text: String,
+) -> Res<()> {
+    state.hosts.send_prompt(&host_id, pane, text).await
+}
+
+/// Queue a prompt on a pane, sent by the daemon when its agent is next done.
+#[tauri::command]
+pub async fn queue_prompt(
+    state: State<'_, AppState>,
+    host_id: String,
+    pane: PaneId,
+    text: String,
+    trigger: PromptTrigger,
+) -> Res<QueuedPrompt> {
+    state
+        .hosts
+        .queue_prompt(&host_id, pane, text, trigger)
+        .await
+}
+
+#[tauri::command]
+pub async fn edit_queued_prompt(
+    state: State<'_, AppState>,
+    host_id: String,
+    id: u64,
+    text: String,
+    trigger: PromptTrigger,
+) -> Res<QueuedPrompt> {
+    state
+        .hosts
+        .edit_queued_prompt(&host_id, id, text, trigger)
+        .await
+}
+
+#[tauri::command]
+pub async fn cancel_queued_prompt(state: State<'_, AppState>, host_id: String, id: u64) -> Res<()> {
+    state.hosts.cancel_queued_prompt(&host_id, id).await
+}
+
+#[tauri::command]
+pub async fn list_queued_prompts(
+    state: State<'_, AppState>,
+    host_id: String,
+) -> Res<Vec<QueuedPrompt>> {
+    state.hosts.list_queued_prompts(&host_id).await
+}
+
 #[tauri::command]
 pub async fn set_prediction(state: State<'_, AppState>, enabled: bool) -> Res<()> {
     state.hosts.set_prediction(enabled);
@@ -765,6 +818,11 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         kill_pane,
         fetch_scrollback,
         set_agent_status,
+        send_prompt,
+        queue_prompt,
+        edit_queued_prompt,
+        cancel_queued_prompt,
+        list_queued_prompts,
         set_prediction,
         write_clipboard,
         read_clipboard,

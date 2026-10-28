@@ -16,6 +16,10 @@
 //!   newest-wins diffs, coalescing, a bounded in-flight window and echo acks.
 //! * **Agent status detection** (process exit, hook file, OSC 9/777/133, BEL
 //!   and idle heuristics), pushed as [`civet_proto::Event::AgentStatus`].
+//! * **Prompts** typed into panes for the user: sent now (broadcast) or
+//!   queued until the agent is next done
+//!   ([`SessionManager::queue_prompt`]), pushed as
+//!   [`civet_proto::Event::PromptQueue`].
 //! * **Agent activity timeline** per worktree: each turn's times, status and
 //!   the files it changed (see `activity.rs`).
 //!
@@ -35,6 +39,7 @@ mod hooks;
 mod lifecycle;
 mod manager;
 mod pane;
+mod prompts;
 mod status;
 mod subscription;
 mod sys;

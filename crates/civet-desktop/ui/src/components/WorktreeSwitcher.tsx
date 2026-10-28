@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Laptop, Server } from 'lucide-react'
 import { allWorktrees, panesOfWorktree, selectWorktree, useStore, wsKey } from '@/state/store'
 import { usePrefs } from '@/state/prefs'
+import { openSendPrompt } from '@/state/prompts'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { switcherGroups, type SwitcherEntry } from '@/lib/switcher'
@@ -243,6 +244,16 @@ function SwitcherBody() {
         <span>⏎ open</span>
         <span>⌥` previous worktree</span>
         <span className="flex-1" />
+        <button
+          type="button"
+          className="cursor-pointer hover:text-foreground"
+          onClick={() => {
+            useStore.setState({ switcherOpen: false })
+            openSendPrompt()
+          }}
+        >
+          ⇧⌘B send prompt
+        </button>
         <span>esc</span>
       </div>
     </>

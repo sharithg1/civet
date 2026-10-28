@@ -140,6 +140,7 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
 
 const KEYS: [string, string][] = [
   ['⌘K', 'Switch worktree'],
+  ['⇧⌘B', 'Send prompt to agents (⌘-click worktrees to pick several)'],
   ['⌥`', 'Previous worktree'],
   ['⌥↑ / ⌥↓', 'Previous / next worktree'],
   ['⌥1 … ⌥9', 'Go to tab'],

@@ -499,6 +499,23 @@ export type DaemonEvent =
   | { bell: { pane: PaneId } }
   | 'reposChanged'
   | { worktreesChanged: { repo: RepoId } }
+  | { promptQueue: { pane: PaneId; prompts: QueuedPrompt[]; sent: number | null } }
+
+/** When a queued prompt is sent (`civet_proto::PromptTrigger`). */
+export type PromptTrigger = 'done' | 'doneOrNeedsInput'
+
+/**
+ * A prompt the daemon types into a pane the next time its agent reaches the
+ * trigger's status (civetd >= 0.4.4). A pane's prompts go out oldest first,
+ * one per turn.
+ */
+export type QueuedPrompt = {
+  id: number
+  pane: PaneId
+  text: string
+  trigger: PromptTrigger
+  createdAtMs: number
+}
 
 export type HostStateEvent = {
   hostId: string

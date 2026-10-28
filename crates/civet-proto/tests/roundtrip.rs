@@ -319,6 +319,22 @@ fn all_requests() -> Vec<Request> {
             base: Some("main".into()),
             draft: true,
         }),
+        Request::SendPrompt {
+            pane: PaneId(3),
+            text: "run the tests\nthen commit".into(),
+        },
+        Request::QueuePrompt {
+            pane: PaneId(3),
+            text: "now open a PR".into(),
+            trigger: PromptTrigger::Done,
+        },
+        Request::EditQueuedPrompt {
+            id: 9,
+            text: "yes".into(),
+            trigger: PromptTrigger::DoneOrNeedsInput,
+        },
+        Request::CancelQueuedPrompt { id: 9 },
+        Request::ListQueuedPrompts,
         Request::AgentActivity {
             worktree: WorktreeId::from("/w"),
         },
@@ -634,6 +650,12 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             url: "https://github.com/o/r/pull/43".into(),
             state: PullRequestState::Draft,
         })),
+        Ok(Response::QueuedPrompt(queued_prompt())),
+        Ok(Response::QueuedPrompts(vec![
+            queued_prompt(),
+            queued_prompt(),
+        ])),
+        Ok(Response::QueuedPrompts(vec![])),
         Ok(Response::AgentActivity(agent_activity())),
         Ok(Response::AgentActivity(AgentActivity::default())),
         Err(RpcError::not_found(PaneId(3))),
@@ -678,7 +700,27 @@ fn all_events() -> Vec<Event> {
             pane: PaneId(1),
             text: "copied ✓".into(),
         },
+        Event::PromptQueue {
+            pane: PaneId(7),
+            prompts: vec![queued_prompt()],
+            sent: None,
+        },
+        Event::PromptQueue {
+            pane: PaneId(7),
+            prompts: vec![],
+            sent: Some(4),
+        },
     ]
+}
+
+fn queued_prompt() -> QueuedPrompt {
+    QueuedPrompt {
+        id: 4,
+        pane: PaneId(7),
+        text: "now run the e2e tests".into(),
+        trigger: PromptTrigger::DoneOrNeedsInput,
+        created_at_ms: 1_700_000_000_000,
+    }
 }
 
 #[test]
@@ -1162,13 +1204,13 @@ fn worktree_lifecycle_is_appended() {
 
 #[test]
 fn agent_activity_is_appended() {
-    // Appended within protocol 1 after CreatePullRequest (38) /
-    // PullRequestCreated (32).
+    // Appended within protocol 1 after ListQueuedPrompts (43) /
+    // QueuedPrompts (34).
     let req = encode(&Request::AgentActivity {
         worktree: WorktreeId::from("/w"),
     })
     .unwrap();
-    assert_eq!(req, vec![39, 2, b'/', b'w']);
+    assert_eq!(req, vec![44, 2, b'/', b'w']);
     let req = encode(&Request::TurnDiff {
         worktree: WorktreeId::from("/w"),
         from: "a".into(),
@@ -1178,9 +1220,9 @@ fn agent_activity_is_appended() {
         context_lines: 3,
     })
     .unwrap();
-    assert_eq!(req[0], 40);
+    assert_eq!(req[0], 45);
     let resp = encode(&Response::AgentActivity(agent_activity())).unwrap();
-    assert_eq!(resp[0], 33);
+    assert_eq!(resp[0], 35);
     let v = serde_json::to_value(Response::AgentActivity(agent_activity())).unwrap();
     let turn = &v["agentActivity"]["turns"][0];
     assert_eq!(turn["startedMs"], 1_700_000_000_000u64);
@@ -1284,6 +1326,48 @@ fn worktree_templates_are_appended() {
     .unwrap();
     assert_eq!(v["worktreeSetUp"]["port"], 41_000);
     assert_eq!(v["worktreeSetUp"]["setupPane"], serde_json::Value::Null);
+}
+
+#[test]
+fn prompts_are_appended() {
+    // Appended within protocol 1 after CreatePullRequest (request 38) /
+    // PullRequestCreated (response 32) and Clipboard (event 9).
+    let req = encode(&Request::SendPrompt {
+        pane: PaneId(2),
+        text: "hi".into(),
+    })
+    .unwrap();
+    assert_eq!(req, vec![39, 2, 2, b'h', b'i']);
+    assert_eq!(encode(&Request::ListQueuedPrompts).unwrap(), vec![43]);
+    let resp = encode(&Response::QueuedPrompts(vec![])).unwrap();
+    assert_eq!(resp, vec![34, 0]);
+    let ev = encode(&Event::PromptQueue {
+        pane: PaneId(2),
+        prompts: vec![],
+        sent: None,
+    })
+    .unwrap();
+    assert_eq!(ev, vec![10, 2, 0, 0]);
+    assert_eq!(
+        Event::PromptQueue {
+            pane: PaneId(2),
+            prompts: vec![],
+            sent: None
+        }
+        .pane(),
+        Some(PaneId(2))
+    );
+    let v = serde_json::to_value(Event::PromptQueue {
+        pane: PaneId(7),
+        prompts: vec![queued_prompt()],
+        sent: Some(4),
+    })
+    .unwrap();
+    assert_eq!(
+        v["promptQueue"]["prompts"][0]["trigger"],
+        "doneOrNeedsInput"
+    );
+    assert_eq!(v["promptQueue"]["sent"], 4);
 }
 
 #[test]

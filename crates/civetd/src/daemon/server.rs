@@ -229,12 +229,19 @@ impl Server {
             civet_proto::CLIPBOARD_EVENT_MIN_CLIENT_VERSION,
             &hello.client_version,
         );
+        let prompts_ok = !super::bootstrap::version_newer(
+            civet_proto::PROMPT_QUEUE_EVENT_MIN_CLIENT_VERSION,
+            &hello.client_version,
+        );
         let event_task = tokio::spawn(forward_events(
             events,
             sender.clone(),
             Arc::downgrade(&self),
             client,
-            clipboard_ok,
+            EventFilter {
+                clipboard_ok,
+                prompts_ok,
+            },
         ))
         .abort_handle();
         {
@@ -468,6 +475,27 @@ impl Server {
                 .fetch_scrollback(&req)
                 .map(Response::Scrollback)
                 .map_err(RpcError::from),
+            Request::SendPrompt { pane, text } => sessions
+                .send_prompt(pane, &text)
+                .map(|()| Response::Ok)
+                .map_err(RpcError::from),
+            Request::QueuePrompt {
+                pane,
+                text,
+                trigger,
+            } => sessions
+                .queue_prompt(pane, &text, trigger)
+                .map(Response::QueuedPrompt)
+                .map_err(RpcError::from),
+            Request::EditQueuedPrompt { id, text, trigger } => sessions
+                .edit_queued_prompt(id, &text, trigger)
+                .map(Response::QueuedPrompt)
+                .map_err(RpcError::from),
+            Request::CancelQueuedPrompt { id } => sessions
+                .cancel_queued_prompt(id)
+                .map(|()| Response::Ok)
+                .map_err(RpcError::from),
+            Request::ListQueuedPrompts => Ok(Response::QueuedPrompts(sessions.queued_prompts())),
             // Slow ones (git, fork/exec) run in their own task so input and
             // acks are never stuck behind them.
             slow => {
@@ -752,22 +780,33 @@ async fn futures_join_all<F: std::future::Future<Output = ()> + Send + 'static>(
     }
 }
 
+/// Which of the events appended within protocol 1 a client can decode
+/// (from its hello's `client_version`).
+#[derive(Debug, Clone, Copy)]
+struct EventFilter {
+    /// [`Event::Clipboard`].
+    clipboard_ok: bool,
+    /// [`Event::PromptQueue`].
+    prompts_ok: bool,
+}
+
 /// Push daemon events to one connection. Everything goes to every client
 /// except [`Event::Clipboard`] (OSC 52), which only goes to clients that
-/// can decode it (`clipboard_ok`) and are subscribed to that pane.
+/// can decode it and are subscribed to that pane, and
+/// [`Event::PromptQueue`], which only goes to clients that can decode it.
 ///
 /// If this connection falls behind the daemon's event broadcast (lagged
 /// receiver), the missed events are replaced by a resync: `PaneClosed` for
 /// every pane the client was told about that is gone, `PaneCreated` (full
 /// current `PaneInfo`: title, size, status, exit) for every live pane, and
-/// `ReposChanged`. An event that cannot be encoded is logged and skipped;
+/// `ReposChanged` (and the prompt queue of every live pane). An event that cannot be encoded is logged and skipped;
 /// only a closed connection ends the task.
 async fn forward_events(
     mut events: broadcast::Receiver<Event>,
     sender: ServerSender,
     server: std::sync::Weak<Server>,
     client: ClientId,
-    clipboard_ok: bool,
+    filter: EventFilter,
 ) {
     // Panes this client knows about (to tell it which ones vanished while
     // it lagged).
@@ -779,13 +818,16 @@ async fn forward_events(
         let batch: Vec<Event> = match events.recv().await {
             Ok(ev) => {
                 if let Event::Clipboard { pane, .. } = &ev {
-                    let subscribed = clipboard_ok
+                    let subscribed = filter.clipboard_ok
                         && server
                             .upgrade()
                             .is_some_and(|s| s.subscription(client, *pane).is_some());
                     if !subscribed {
                         continue;
                     }
+                }
+                if matches!(ev, Event::PromptQueue { .. }) && !filter.prompts_ok {
+                    continue;
                 }
                 match &ev {
                     Event::PaneCreated(info) => {
@@ -803,7 +845,7 @@ async fn forward_events(
                     return;
                 };
                 tracing::warn!(client = %client.to_hex(), lost = n, "client lagging behind daemon events; resyncing");
-                resync_events(&server, &mut known)
+                resync_events(&server, &mut known, filter.prompts_ok)
             }
             Err(broadcast::error::RecvError::Closed) => return,
         };
@@ -821,7 +863,11 @@ async fn forward_events(
 
 /// Events that bring a client that missed some back in sync (see
 /// [`forward_events`]). Updates `known` to the current pane set.
-fn resync_events(server: &Server, known: &mut std::collections::HashSet<PaneId>) -> Vec<Event> {
+fn resync_events(
+    server: &Server,
+    known: &mut std::collections::HashSet<PaneId>,
+    prompts_ok: bool,
+) -> Vec<Event> {
     let panes = server.sessions.list_panes();
     let live: std::collections::HashSet<PaneId> = panes.iter().map(|p| p.id).collect();
     let mut gone: Vec<PaneId> = known.difference(&live).copied().collect();
@@ -831,6 +877,15 @@ fn resync_events(server: &Server, known: &mut std::collections::HashSet<PaneId>)
         .map(|pane| Event::PaneClosed { pane })
         .collect();
     out.extend(panes.into_iter().map(Event::PaneCreated));
+    if prompts_ok {
+        let mut live: Vec<PaneId> = live.iter().copied().collect();
+        live.sort();
+        out.extend(live.into_iter().map(|pane| Event::PromptQueue {
+            pane,
+            prompts: server.sessions.queued_prompts_of(pane),
+            sent: None,
+        }));
+    }
     out.push(Event::ReposChanged);
     *known = live;
     out
