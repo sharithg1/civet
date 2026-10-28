@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/select'
 import { HostStateDot, hostMeta } from './Sidebar'
 import { ProjectTile } from './chrome'
+import { WorktreeTemplateEditor } from './WorktreeTemplateEditor'
+import { hasWorktreeTemplates } from '@/state/templates'
 
 const NAV: [SettingsPage, string, ReactNode][] = [
   ['general', 'General', <Settings key="general" />],
@@ -460,37 +462,53 @@ function ProjectsPage() {
   const hosts = useStore((s) => s.hosts)
   const repos = useStore((s) => s.repos)
   const steps = usePrefs((s) => s.createSteps)
+  const [open, setOpen] = useState<string | null>(null)
   return (
-    <Section title="Repositories and folders on each host, and their saved on-create steps">
+    <Section title="Repositories and folders on each host, their saved on-create steps and worktree setup">
       <Card>
         {hostOrder.flatMap((h) =>
           (repos[h] ?? []).map((r) => {
             const saved = steps[`${h}\u0000${r.id}`]
+            const key = `${h}:${r.id}`
+            const templates = r.kind !== 'folder' && hasWorktreeTemplates(h)
             return (
-              <div key={`${h}:${r.id}`} className="flex items-center gap-3 px-1 py-3">
-                <ProjectTile name={r.name} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-foreground">
-                    {r.name}{' '}
-                    <span className="font-normal text-faint">· {hosts[h]?.label ?? h}</span>
+              <div key={key}>
+                <div className="flex items-center gap-3 px-1 py-3">
+                  <ProjectTile name={r.name} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-foreground">
+                      {r.name}{' '}
+                      <span className="font-normal text-faint">· {hosts[h]?.label ?? h}</span>
+                    </div>
+                    <div className="truncate font-mono text-xs text-faint">
+                      {r.path} ·{' '}
+                      {r.kind === 'folder' ? 'folder' : `default ${r.defaultBranch ?? 'HEAD'}`}
+                    </div>
                   </div>
-                  <div className="truncate font-mono text-xs text-faint">
-                    {r.path} ·{' '}
-                    {r.kind === 'folder' ? 'folder' : `default ${r.defaultBranch ?? 'HEAD'}`}
-                  </div>
+                  {r.kind === 'folder' ? (
+                    <div className="text-xs text-muted-foreground">no git</div>
+                  ) : (
+                    <div
+                      className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                      title="Saved on-create steps"
+                    >
+                      {saved
+                        ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
+                        : 'default steps'}
+                    </div>
+                  )}
+                  {templates && (
+                    <button
+                      type="button"
+                      className={btn}
+                      aria-expanded={open === key}
+                      onClick={() => setOpen(open === key ? null : key)}
+                    >
+                      Worktree setup…
+                    </button>
+                  )}
                 </div>
-                {r.kind === 'folder' ? (
-                  <div className="text-xs text-muted-foreground">no git</div>
-                ) : (
-                  <div
-                    className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
-                    title="Saved on-create steps"
-                  >
-                    {saved
-                      ? saved.map((s) => s.cmd || s.kind).join(' → ') || 'no steps'
-                      : 'default steps'}
-                  </div>
-                )}
+                {templates && open === key && <WorktreeTemplateEditor hostId={h} repo={r.id} />}
               </div>
             )
           })

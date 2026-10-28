@@ -72,6 +72,48 @@ export type WorktreeInfo = {
   locked: boolean
 }
 
+/**
+ * Per-project settings for new worktrees (civetd >= 0.4.2). null = not set
+ * here (the next source applies); an empty value is set and means nothing.
+ * Sources, first wins per field: saved on the host (project settings), then
+ * `.civet/worktree.toml` in the main checkout.
+ */
+export type WorktreeTemplate = {
+  /** Run in a "Setup" tab of each new worktree (`sh -e`, or its `#!` line). */
+  setup: string | null
+  /** Paths copied from the main checkout (`*` / `?` globs); existing files kept. */
+  copy: string[] | null
+  /** Command line of the first agent. */
+  agent: string | null
+  /** Default first prompt of the first agent. */
+  prompt: string | null
+}
+
+/** Reply to `worktree_template` / `set_worktree_template`. */
+export type WorktreeTemplateInfo = {
+  repo: RepoId
+  /** Saved on the host. */
+  host: WorktreeTemplate
+  /** `<main>/.civet/worktree.toml`. */
+  filePath: string
+  /** The parsed repository file; null if missing or broken. */
+  file: WorktreeTemplate | null
+  fileError: string | null
+  /** `host` fields over `file` fields. */
+  effective: WorktreeTemplate
+}
+
+/** Reply to `setup_worktree`. */
+export type WorktreeSetup = {
+  template: WorktreeTemplate
+  /** Paths copied from the main checkout. */
+  copied: string[]
+  warnings: string[]
+  /** The worktree's `CIVET_PORT` (set in all of its panes). */
+  port: number | null
+  setupPane: PaneInfo | null
+}
+
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
 
 export type PullRequestInfo = {
@@ -80,6 +122,54 @@ export type PullRequestInfo = {
   title: string
   url: string
   state: PullRequestState
+}
+
+/** One CI check, or all of them (`checksState`). */
+export type CheckState = 'pending' | 'passed' | 'failed' | 'skipped' | 'cancelled'
+
+export type PullRequestCheck = { name: string; state: CheckState; url: string | null }
+
+export type ReviewDecision = 'approved' | 'changesRequested' | 'reviewRequired'
+
+/** An unresolved review thread: its first comment as plain text. */
+export type ReviewThread = {
+  path: string
+  /** null: outdated, or on the whole file. */
+  line: number | null
+  outdated: boolean
+  author: string
+  body: string
+  url: string
+  /** Comments in the thread. */
+  comments: number
+}
+
+/** A worktree branch's pull request with CI and reviews (`pull_request_detail`, civetd >= 0.4.3). */
+export type PullRequestDetail = {
+  pr: PullRequestInfo
+  base: string
+  /** Any failed → failed, else any pending → pending, else passed; null without checks. */
+  checksState: CheckState | null
+  checks: PullRequestCheck[]
+  reviewDecision: ReviewDecision | null
+  /** Reviewers whose latest review approves / requests changes. */
+  approvals: number
+  changesRequested: number
+  /** Conversation comments. */
+  comments: number
+  unresolvedThreads: number
+  /** Empty unless asked for (`threads`). */
+  threads: ReviewThread[]
+}
+
+/** `create_pull_request`. An empty title fills title and body from the commits. */
+export type CreatePullRequest = {
+  worktree: WorktreeId
+  title: string
+  body: string
+  /** null: the repository's default branch. */
+  base: string | null
+  draft: boolean
 }
 
 export type FileKind = 'file' | 'dir' | 'symlink'
@@ -570,7 +660,7 @@ export type ModelPrice = {
 }
 
 /**
- * Reply to `agent_usage` (civetd >= 0.4.2): agent sessions with usage since
+ * Reply to `agent_usage` (civetd >= 0.4.4): agent sessions with usage since
  * `sinceMs`, newest first, read from the host's Claude Code and Codex logs.
  * Costs are estimates at the list prices in `prices`.
  */

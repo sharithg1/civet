@@ -16,7 +16,7 @@ import { onPrefsChange, usePrefs } from './prefs'
 import { useStore, type HostView } from './store'
 
 /** Oldest civetd with `AgentUsage` (civet_proto::AGENT_USAGE_MIN_DAEMON_VERSION). */
-export const AGENT_USAGE_MIN_DAEMON_VERSION = '0.4.2'
+export const AGENT_USAGE_MIN_DAEMON_VERSION = '0.4.4'
 
 /** The window asked for. */
 export const USAGE_DAYS = 30

@@ -43,7 +43,7 @@ only `civetd` is installed.
 
 ```sh
 civet handoff --prompt-file brief.md [--agent claude|codex] [--title T]
-              [--branch B] [--base REV] [--carry-changes] [--from DIR]
+              [--branch B] [--base REV] [--carry-changes] [--no-setup] [--from DIR]
               [-- CMD ARGS…]
 civet handoff --prompt "…"            # or --prompt-file - (stdin)
 ```
@@ -56,7 +56,7 @@ civet handoff --prompt "…"            # or --prompt-file - (stdin)
   An explicit `--branch` that exists is an error.
 * **title**: `--title`, else the brief's first line (Markdown `#` stripped,
   60 characters max). It names the pane in the sidebar.
-* **agent**: `claude` (default) or `codex`, started as `<agent> <brief>` in
+* **agent**: `claude` (default, or the template's agent command) or `codex`, started as `<agent> <brief>` in
   the new worktree through the usual shims (status hooks included).
   `-- CMD ARGS…` runs another command with the brief appended as its last
   argument.
@@ -64,8 +64,16 @@ civet handoff --prompt "…"            # or --prompt-file - (stdin)
   (tracked and untracked, not ignored; computed with `git diff`, so the
   index and stash are untouched) to the new worktree before the agent
   starts. If the patch does not apply, the new worktree is removed again.
+* **worktree template** (see [WORKTREE_TEMPLATES.md](WORKTREE_TEMPLATES.md)):
+  after the worktree is created (and changes carried), `SetupWorktree`
+  copies the template's files, assigns `CIVET_PORT` and starts its setup
+  script in a "Setup" pane. The template's agent command replaces a bare
+  `--agent` when it runs the same program (`claude --model opus` for
+  `--agent claude`) or when `--agent` is not given; its prompt goes before
+  the brief. `--no-setup` skips all of it; template problems are printed to
+  stderr and listed in `warnings`.
 * Output: one JSON line, e.g.
-  `{"repo":"…","worktree":"/src/proj-worktrees/fix-the-flaky-test","branch":"fix-the-flaky-test","base":"3f2c…","pane":12,"title":"Fix the flaky test","agent":"claude","carriedChanges":false}`.
+  `{"repo":"…","worktree":"/src/proj-worktrees/fix-the-flaky-test","branch":"fix-the-flaky-test","base":"3f2c…","pane":12,"title":"Fix the flaky test","agent":"claude","carriedChanges":false,"setupPane":11,"port":41010,"copied":[".env"],"warnings":[]}`.
 
 Errors (exit 1, message on stderr):
 

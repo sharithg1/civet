@@ -50,7 +50,13 @@ civet handoff --agent <claude|codex> --prompt-file "<brief file>"
   `--base <rev>` (default: this worktree's `HEAD`),
   `--carry-changes` (copy this worktree's uncommitted changes, including
   untracked files, into the new one; only when the user asks for it or the
-  task depends on them).
+  task depends on them), `--no-setup` (skip the project's worktree template;
+  only when the user asks).
+
+The project's worktree template applies by itself: files such as `.env` are
+copied from the main checkout, a setup script (e.g. `pnpm install`) runs in a
+"Setup" tab, the template's agent command and prompt prefix are used, and the
+new worktree gets its own `CIVET_PORT`.
 
 If `civet` is not found, use `"$CIVET_SHIM_DIR/civet"`. If the command fails
 with a permission or sandbox error (it connects to the Civet daemon's unix
@@ -62,7 +68,8 @@ On success it prints JSON like:
 ```json
 {"repo":"…","worktree":"/path/to/repo-worktrees/fix-the-flaky-ports-test",
  "branch":"fix-the-flaky-ports-test","base":"3f2c…","pane":12,
- "title":"Fix the flaky ports test","agent":"claude","carriedChanges":false}
+ "title":"Fix the flaky ports test","agent":"claude","carriedChanges":false,
+ "setupPane":13,"port":41010,"copied":[".env"],"warnings":[]}
 ```
 
 ## 4. Report back

@@ -507,6 +507,14 @@ impl Server {
                 .list_pull_requests(&repo)
                 .await
                 .map(Response::PullRequests),
+            Request::PullRequestDetail { worktree, threads } => s
+                .pull_request_detail(&worktree, threads)
+                .await
+                .map(Response::PullRequestDetail),
+            Request::CreatePullRequest(req) => s
+                .create_pull_request(req)
+                .await
+                .map(Response::PullRequestCreated),
             Request::ListFiles {
                 worktree,
                 dir,
@@ -576,6 +584,18 @@ impl Server {
                 .update_worktree(&worktree, strategy)
                 .await
                 .map(Response::WorktreeUpdated),
+            Request::GetWorktreeTemplate { repo } => s
+                .worktree_template(&repo)
+                .await
+                .map(Response::WorktreeTemplate),
+            Request::SetWorktreeTemplate { repo, template } => s
+                .set_worktree_template(&repo, template)
+                .await
+                .map(Response::WorktreeTemplate),
+            Request::SetupWorktree { worktree, size } => s
+                .setup_worktree(&worktree, clamp_size(size))
+                .await
+                .map(Response::WorktreeSetUp),
             Request::AgentUsage { since_ms } => {
                 return Ok(Response::AgentUsage(self.usage.request(since_ms).await));
             }

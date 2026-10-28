@@ -95,7 +95,7 @@ export function AgentUsagePanel({
             ? view?.error
               ? view.error
               : 'Reading agent logs…'
-            : `Agent usage needs civetd 0.4.2 or newer on ${host?.label ?? hostId}`}
+            : `Agent usage needs civetd 0.4.4 or newer on ${host?.label ?? hostId}`}
         </div>
       ) : usage.sessions.length === 0 ? (
         <div className="py-2 text-xs text-faint">

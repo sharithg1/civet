@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-worktree-template"
+description = "Enables the worktree_template command without any pre-configured scope."
+commands.allow = ["worktree_template"]
+
+[[permission]]
+identifier = "deny-worktree-template"
+description = "Denies the worktree_template command without any pre-configured scope."
+commands.deny = ["worktree_template"]

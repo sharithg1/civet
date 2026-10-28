@@ -212,6 +212,116 @@ pub struct WorktreeUpdate {
     pub conflicts: Vec<String>,
 }
 
+/// State of one CI check of a pull request, or of all of them
+/// ([`PullRequestDetail::checks_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckState {
+    /// Queued, running or waiting.
+    Pending,
+    /// Succeeded.
+    Passed,
+    /// Failed, errored, timed out or needs action.
+    Failed,
+    /// Skipped or neutral.
+    Skipped,
+    /// Cancelled (counts as neither passed nor failed).
+    Cancelled,
+}
+
+/// One CI check (a GitHub check run or commit status) on a pull request's
+/// head commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestCheck {
+    /// Check run name or status context.
+    pub name: String,
+    /// State.
+    pub state: CheckState,
+    /// Details page, if any.
+    pub url: Option<String>,
+}
+
+/// A pull request's overall review state (GitHub's `reviewDecision`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewDecision {
+    /// Approved by the required reviewers.
+    Approved,
+    /// A reviewer requested changes.
+    ChangesRequested,
+    /// Review required before it can merge.
+    ReviewRequired,
+}
+
+/// An unresolved review thread (comments on a line of the diff).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewThread {
+    /// File, relative to the repository root.
+    pub path: String,
+    /// Line in the file, if the thread is on one (None for an outdated
+    /// thread or a file comment).
+    pub line: Option<u64>,
+    /// The commented code changed since.
+    pub outdated: bool,
+    /// Author login of the first comment.
+    pub author: String,
+    /// The first comment as plain text (HTML comments and tags left out),
+    /// at most [`crate::MAX_REVIEW_COMMENT_CHARS`] characters.
+    pub body: String,
+    /// Web URL of the first comment.
+    pub url: String,
+    /// Comments in the thread.
+    pub comments: u64,
+}
+
+/// The pull request of a worktree's branch with its CI and review state
+/// ([`Request::PullRequestDetail`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestDetail {
+    /// Number, branch, title, URL and state.
+    pub pr: PullRequestInfo,
+    /// Base branch.
+    pub base: String,
+    /// Summary of `checks`: any failed → Failed, else any pending →
+    /// Pending, else Passed; None without checks.
+    pub checks_state: Option<CheckState>,
+    /// CI checks on the head commit.
+    pub checks: Vec<PullRequestCheck>,
+    /// Review decision; None if the repository requires no reviews and
+    /// nobody reviewed yet.
+    pub review_decision: Option<ReviewDecision>,
+    /// Reviewers whose latest review approves.
+    pub approvals: u64,
+    /// Reviewers whose latest review requests changes.
+    pub changes_requested: u64,
+    /// Conversation comments (not review comments).
+    pub comments: u64,
+    /// Unresolved review threads.
+    pub unresolved_threads: u64,
+    /// Those threads, oldest first; empty unless asked for.
+    pub threads: Vec<ReviewThread>,
+}
+
+/// Open a pull request for a worktree's branch
+/// ([`Request::CreatePullRequest`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePullRequest {
+    /// Worktree; its branch is the head, and must be pushed.
+    pub worktree: WorktreeId,
+    /// Title; empty fills title and body from the commits (`--fill`).
+    pub title: String,
+    /// Body (Markdown).
+    pub body: String,
+    /// Base branch; None: the repository's default branch.
+    pub base: Option<String>,
+    /// Open it as a draft.
+    pub draft: bool,
+}
+
 /// Kind of a [`FileEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -594,6 +704,66 @@ pub enum GitAction {
     StashAll,
     /// Apply and drop the newest stash entry made on this branch.
     StashPop,
+}
+
+/// Per-project settings for new worktrees ([`Request::GetWorktreeTemplate`]).
+/// Every field is optional: None = not set here (the next source applies),
+/// while an empty value is set and means "nothing". The sources, highest
+/// first: the template saved on the host ([`Request::SetWorktreeTemplate`],
+/// from the desktop's project settings), then `.civet/worktree.toml` in
+/// the repository's main checkout (committed and shared). See
+/// `docs/WORKTREE_TEMPLATES.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeTemplate {
+    /// Script run in a "Setup" pane in every new worktree ([`Request::SetupWorktree`]):
+    /// `sh`, unless it starts with a `#!` line.
+    pub setup: Option<String>,
+    /// Paths relative to the main checkout copied into a new worktree
+    /// (files or directories; `*` and `?` match within one path component).
+    /// Files the worktree already has are kept.
+    pub copy: Option<Vec<String>>,
+    /// Command line of the first agent (e.g. `claude --model opus`).
+    pub agent: Option<String>,
+    /// Default first prompt of the first agent (prepended to a handoff's brief).
+    pub prompt: Option<String>,
+}
+
+/// The template of a repository and where its fields come from (reply to
+/// [`Request::GetWorktreeTemplate`] and [`Request::SetWorktreeTemplate`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeTemplateInfo {
+    /// Repository.
+    pub repo: RepoId,
+    /// Saved on the host (the desktop's project settings).
+    pub host: WorktreeTemplate,
+    /// Absolute path of the repository file (`<main>/.civet/worktree.toml`).
+    pub file_path: String,
+    /// Parsed repository file; None if it does not exist or does not parse.
+    pub file: Option<WorktreeTemplate>,
+    /// Why the repository file could not be read or parsed.
+    pub file_error: Option<String>,
+    /// What new worktrees use: `host` fields over `file` fields.
+    pub effective: WorktreeTemplate,
+}
+
+/// What [`Request::SetupWorktree`] did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSetup {
+    /// The effective template applied (its `agent` and `prompt` are for
+    /// the caller, who starts the agent).
+    pub template: WorktreeTemplate,
+    /// Paths copied from the main checkout (relative).
+    pub copied: Vec<String>,
+    /// Problems that did not stop the setup (a listed file missing in the
+    /// main checkout, a copy that failed, a bad repository file).
+    pub warnings: Vec<String>,
+    /// `CIVET_PORT` of the worktree (see [`crate::ENV_PORT`]).
+    pub port: Option<u16>,
+    /// The pane running the setup script, if the template has one.
+    pub setup_pane: Option<PaneInfo>,
 }
 
 /// Program + argv for a pane.
@@ -1029,6 +1199,50 @@ pub enum Request {
         /// Rebase or merge.
         strategy: UpdateStrategy,
     },
+    /// The repository's worktree template and its sources.
+    /// -> [`Response::WorktreeTemplate`]. Clients send it (and
+    /// [`Request::SetWorktreeTemplate`], [`Request::SetupWorktree`]) only to
+    /// daemons of at least [`crate::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION`].
+    GetWorktreeTemplate {
+        /// Repository.
+        repo: RepoId,
+    },
+    /// Replace the template saved on the host for a repository (an
+    /// all-None template deletes it). -> [`Response::WorktreeTemplate`]
+    SetWorktreeTemplate {
+        /// Repository.
+        repo: RepoId,
+        /// New host template.
+        template: WorktreeTemplate,
+    },
+    /// Apply the repository's template to a new worktree: copy the listed
+    /// files from the main checkout, assign its `CIVET_PORT`, and start the
+    /// setup script in a pane. The caller then starts the agent.
+    /// -> [`Response::WorktreeSetUp`]
+    SetupWorktree {
+        /// The new worktree (not the main one).
+        worktree: WorktreeId,
+        /// Initial size of the setup pane.
+        size: TermSize,
+    },
+    /// The newest pull request whose head is the worktree's branch (not a
+    /// fork's), with CI checks and reviews (`gh api graphql` on the host).
+    /// -> [`Response::PullRequestDetail`], None if there is none or the
+    /// worktree has no branch. Clients send it only to daemons of at least
+    /// [`crate::PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION`] (also
+    /// [`Request::CreatePullRequest`]).
+    PullRequestDetail {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Also list the unresolved review threads (the count is always
+        /// there).
+        threads: bool,
+    },
+    /// Open a pull request (`gh pr create` on the host).
+    /// -> [`Response::PullRequestCreated`]. gh's refusals (branch not
+    /// pushed, a PR already exists, not logged in) are `Git` errors
+    /// carrying its message.
+    CreatePullRequest(CreatePullRequest),
     /// Token use and estimated spend of the agent sessions on the host (see
     /// [`crate::usage`]). -> [`Response::AgentUsage`]. Clients send it only
     /// to daemons of at least [`crate::AGENT_USAGE_MIN_DAEMON_VERSION`].
@@ -1114,6 +1328,15 @@ pub enum Response {
     WorktreeLifecycle(RepoLifecycle),
     /// Reply to [`Request::UpdateWorktree`].
     WorktreeUpdated(WorktreeUpdate),
+    /// Reply to [`Request::GetWorktreeTemplate`] and
+    /// [`Request::SetWorktreeTemplate`].
+    WorktreeTemplate(WorktreeTemplateInfo),
+    /// Reply to [`Request::SetupWorktree`].
+    WorktreeSetUp(WorktreeSetup),
+    /// Reply to [`Request::PullRequestDetail`].
+    PullRequestDetail(Option<PullRequestDetail>),
+    /// Reply to [`Request::CreatePullRequest`]: the new pull request.
+    PullRequestCreated(PullRequestInfo),
     /// Reply to [`Request::AgentUsage`].
     AgentUsage(crate::usage::AgentUsage),
 }
