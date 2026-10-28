@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MOCK_VERSION, MockBackend } from './backend.mock'
+import { MOCK_NEW_PR_CHECKS_MS, MOCK_VERSION, MockBackend } from './backend.mock'
 import { PaneStream, type TerminalSink } from './terminal/pane-stream'
 import { RecordKind, isFull, parseRecords, type TermRecord } from './terminal/records'
 import type { DaemonEventEnvelope, HostStateEvent } from './types'
@@ -438,6 +438,79 @@ describe('MockBackend git actions', () => {
     expect((await b.gitStatus('pre-git-box', wt.id)).unstaged.length).toBeGreaterThan(0)
     await expect(b.gitBranch('pre-git-box', wt.id)).rejects.toMatchObject({ code: 'unsupported' })
     await expect(b.gitAction('pre-git-box', wt.id, 'fetch')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+  })
+})
+
+describe('MockBackend pull requests', () => {
+  /** Resolve a call through the mock's fake delays. */
+  async function act<T>(p: Promise<T>): Promise<T> {
+    const settled = p.then(
+      (v) => ({ ok: true as const, v }),
+      (e: unknown) => ({ ok: false as const, e })
+    )
+    await vi.runAllTimersAsync()
+    const r = await settled
+    if (!r.ok) throw r.e
+    return r.v
+  }
+
+  it('reports checks, reviews and unresolved threads of a branch', async () => {
+    const { b } = await connected()
+    const [main, quic] = await b.listWorktrees('devbox', 'civet')
+    const d = (await act(b.pullRequestDetail('devbox', quic!.id, true)))!
+    expect(d.pr).toMatchObject({ number: 47, branch: 'quic-resume', state: 'open' })
+    expect(d.checksState).toBe('failed')
+    expect(d.reviewDecision).toBe('changesRequested')
+    expect(d.threads.length).toBe(d.unresolvedThreads)
+    expect(d.unresolvedThreads).toBeGreaterThan(0)
+    // Without threads: just the count.
+    const light = (await act(b.pullRequestDetail('devbox', quic!.id, false)))!
+    expect(light.threads).toEqual([])
+    expect(light.unresolvedThreads).toBe(d.unresolvedThreads)
+    expect(await act(b.pullRequestDetail('devbox', main!.id, true))).toBeNull()
+  })
+
+  it('opens a PR for a pushed branch; its checks run, then pass', async () => {
+    const { b } = await connected()
+    const wt = (await b.listWorktrees('devbox', 'orca'))[1]!
+    expect(await act(b.pullRequestDetail('devbox', wt.id, false))).toBeNull()
+    const req = { worktree: wt.id, title: '', body: '', base: null, draft: true }
+    // Not published yet: gh refuses.
+    await expect(act(b.createPullRequest('devbox', req))).rejects.toMatchObject({ code: 'git' })
+    await act(b.gitAction('devbox', wt.id, 'push'))
+    const pr = await act(b.createPullRequest('devbox', req))
+    expect(pr).toMatchObject({
+      branch: 'fix-wake-reconnect',
+      state: 'draft',
+      title: 'Fix wake reconnect'
+    })
+    expect((await b.listPullRequests('devbox', 'orca')).map((p) => p.number)).toEqual([pr.number])
+    expect((await act(b.pullRequestDetail('devbox', wt.id, false)))?.checksState).toBe('pending')
+    await vi.advanceTimersByTimeAsync(MOCK_NEW_PR_CHECKS_MS)
+    const d = (await act(b.pullRequestDetail('devbox', wt.id, false)))!
+    expect(d.checksState).toBe('passed')
+    expect(d.checks.every((c) => c.state === 'passed')).toBe(true)
+    expect(d.base).toBe('main')
+    // One open PR per branch.
+    await expect(act(b.createPullRequest('devbox', req))).rejects.toMatchObject({
+      code: 'git',
+      message: expect.stringContaining('already exists')
+    })
+  })
+
+  it('is unsupported on folders and before civetd 0.4.3', async () => {
+    const { b } = await connected()
+    const [notes] = await b.listWorktrees('devbox', 'notes')
+    await expect(act(b.pullRequestDetail('devbox', notes!.id, false))).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    const [, wt] = await b.listWorktrees('pre-git', 'civet')
+    await expect(act(b.pullRequestDetail('pre-git', wt!.id, false))).rejects.toMatchObject({
       code: 'unsupported'
     })
   })

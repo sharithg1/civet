@@ -29,6 +29,8 @@
     "allow-upload-file",
     "allow-list-worktrees",
     "allow-list-pull-requests",
+    "allow-pull-request-detail",
+    "allow-create-pull-request",
     "allow-git-status",
     "allow-git-diff",
     "allow-git-branch",

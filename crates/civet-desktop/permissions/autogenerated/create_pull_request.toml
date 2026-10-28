@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-pull-request"
+description = "Enables the create_pull_request command without any pre-configured scope."
+commands.allow = ["create_pull_request"]
+
+[[permission]]
+identifier = "deny-create-pull-request"
+description = "Denies the create_pull_request command without any pre-configured scope."
+commands.deny = ["create_pull_request"]

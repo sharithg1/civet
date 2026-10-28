@@ -11,7 +11,8 @@
 // behind the default branch, and a menu with stash, undo last commit and
 // "Discard all". Discards are undone from their toast, so only "Discard all"
 // asks first. Everything is greyed out while an action runs, and on a civetd
-// too old for git actions.
+// too old for git actions. Under the branch bar: the branch's pull request
+// with CI and reviews, or "Create pull request" (PullRequestSection.tsx).
 import { useState } from 'react'
 import {
   ArrowDown,
@@ -65,6 +66,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { CHANGE_KIND, Counts } from './DiffView'
 import { IconButton } from './IconButton'
+import { PullRequestSection } from './PullRequestSection'
+import { useWorktreeInfo } from './chrome'
 
 const GROUPS: [ChangeSide, string][] = [
   ['conflicted', 'Conflicts'],
@@ -93,6 +96,7 @@ export function ChangesTab({
   const entry = useChanges((s) => s.byWorktree[key])
   const busy = useChanges((s) => s.busy[key] ?? null)
   const [sel, setSel] = useState<ChangeSelection>(null)
+  const wt = useWorktreeInfo(hostId, worktree)
   // The diff tab showing, to highlight its row.
   const open = useStore((s) => {
     const ws = s.workspaces[key]
@@ -152,6 +156,19 @@ export function ChangesTab({
         busy={busy}
         canAct={canAct}
         connected={connected}
+        pullRequest={
+          wt && (
+            <PullRequestSection
+              hostId={hostId}
+              worktree={worktree}
+              branchName={wt.info.branch}
+              defaultBranch={wt.repo.defaultBranch}
+              branch={supported ? (entry?.branch ?? null) : null}
+              connected={connected}
+              canAct={canAct}
+            />
+          )
+        }
       />
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {entry?.error && (
@@ -341,7 +358,8 @@ function ListHeader({
   branch,
   busy,
   canAct,
-  connected
+  connected,
+  pullRequest
 }: {
   hostId: string
   worktree: string
@@ -350,6 +368,8 @@ function ListHeader({
   busy: string | null
   canAct: boolean
   connected: boolean
+  /** The branch's PR (or "Create pull request"), under the branch bar. */
+  pullRequest?: React.ReactNode
 }) {
   const count = changedFileCount(status)
   let adds = 0
@@ -372,6 +392,7 @@ function ListHeader({
           canAct={canAct}
         />
       )}
+      {pullRequest}
       <div className="flex h-9 items-center gap-2 px-3 text-sm">
         <span className="text-soft">
           {status ? `${count} changed file${count === 1 ? '' : 's'}` : 'Changes'}

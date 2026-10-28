@@ -533,6 +533,35 @@ impl SessionManager {
         crate::github::list_pull_requests(Path::new(&r.path)).await
     }
 
+    /// The pull request of the worktree's branch, with checks and reviews
+    /// (see [`crate::github::pull_request_detail`]). None on a detached HEAD.
+    pub async fn pull_request_detail(
+        &self,
+        worktree: &WorktreeId,
+        threads: bool,
+    ) -> Result<Option<civet_proto::PullRequestDetail>, SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("pull requests")?;
+        let Some(branch) = w.branch else {
+            return Ok(None);
+        };
+        crate::github::pull_request_detail(Path::new(&w.path), &branch, threads).await
+    }
+
+    /// Open a pull request for the worktree's branch (`gh pr create`, see
+    /// [`crate::github::create_pull_request`]).
+    pub async fn create_pull_request(
+        &self,
+        req: civet_proto::CreatePullRequest,
+    ) -> Result<civet_proto::PullRequestInfo, SessionError> {
+        let (r, w) = self.find_worktree(&req.worktree).await?;
+        r.require_git("pull requests")?;
+        let branch = w.branch.ok_or_else(|| {
+            SessionError::InvalidArgument("a detached HEAD can't have a pull request".into())
+        })?;
+        crate::github::create_pull_request(Path::new(&w.path), &branch, &req).await
+    }
+
     /// The worktree's uncommitted changes (see [`crate::changes::status`]).
     pub async fn git_status(
         &self,

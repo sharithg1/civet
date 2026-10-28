@@ -1134,6 +1134,34 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::ListPullRequests { repo }).await?, Response::PullRequests(p) => p)
     }
 
+    /// `pull_request_detail`: the worktree branch's PR with checks and
+    /// reviews (`gh api graphql` on the host).
+    pub async fn pull_request_detail(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        threads: bool,
+    ) -> Result<Option<civet_proto::PullRequestDetail>, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION)?;
+        expect_response!(
+            self.request(host_id, Request::PullRequestDetail { worktree, threads }).await?,
+            Response::PullRequestDetail(d) => d
+        )
+    }
+
+    /// `create_pull_request`: `gh pr create` on the host.
+    pub async fn create_pull_request(
+        &self,
+        host_id: &str,
+        request: civet_proto::CreatePullRequest,
+    ) -> Result<civet_proto::PullRequestInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION)?;
+        expect_response!(
+            self.request(host_id, Request::CreatePullRequest(request)).await?,
+            Response::PullRequestCreated(p) => p
+        )
+    }
+
     /// `git_status`: the worktree's uncommitted changes.
     pub async fn git_status(
         &self,

@@ -3,9 +3,9 @@
 // then a PR-like branch view (state badge, branch → base, title, sections).
 // Files browses and previews the worktree's files (FilesTab.tsx); Changes
 // lists its git status and per-file diffs (ChangesTab.tsx; the tab label's
-// count keeps polling while the panel is open). civetd does not expose
-// commits or PRs yet, so Branch shows what the daemon does report (branch,
-// HEAD, path, sessions) plus "Remove worktree…". Ports lists listening ports
+// count keeps polling while the panel is open). Branch shows what the
+// daemon reports (branch, HEAD, path, sessions, the branch's pull request:
+// PullRequestSection.tsx) plus "Remove worktree…". Ports lists listening ports
 // and port forwards (PortsTab.tsx). A folder project (not a git repository)
 // has no Changes or Branch: they are hidden and Files shows instead.
 // Backend follow-up: branch_info.
@@ -28,6 +28,7 @@ import { PanelResizeHandle } from './PanelResizeHandle'
 import { FilesTab } from './FilesTab'
 import { ChangesCount, ChangesTab } from './ChangesTab'
 import { PortsTab } from './PortsTab'
+import { PullRequestSection } from './PullRequestSection'
 import { StatusDot } from './StatusDot'
 import { RightPanelToggle } from './TitleBar'
 
@@ -238,11 +239,19 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
         </button>
       </Section>
 
-      <Section title="Pull request">
-        <div className="px-3 py-2 text-sm text-quiet">
-          PR and unpushed-commit status aren&apos;t reported by civetd yet.
-        </div>
-      </Section>
+      {!info.isMain && (
+        <Section title="Pull request">
+          <PullRequestSection
+            hostId={hostId}
+            worktree={worktree}
+            branchName={info.branch}
+            defaultBranch={repo.defaultBranch}
+            branch={null}
+            connected={connected}
+            canAct={false}
+          />
+        </Section>
+      )}
 
       {!info.isMain && (
         <div className="px-3 pt-3 pb-4">

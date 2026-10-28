@@ -52,6 +52,8 @@ import type {
   TransportChoice,
   WorktreeInfo,
   PullRequestInfo,
+  PullRequestDetail,
+  CreatePullRequest,
   DirListing,
   FileEntry,
   FileList,
@@ -79,7 +81,7 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.4.2'
+export const MOCK_VERSION = '0.4.3'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -93,6 +95,10 @@ const MOCK_HOST_STATS_VERSION = '0.2.1'
 const MOCK_TEMPLATES_VERSION = '0.4.2'
 /** First mock `CIVET_PORT`; blocks of ten, like civetd. */
 const MOCK_PORT_FIRST = 41000
+/** Mock daemons report PR checks / reviews and open PRs from this version on. */
+const MOCK_PR_DETAIL_VERSION = '0.4.3'
+/** How long the checks of a PR opened in the mock stay pending. */
+export const MOCK_NEW_PR_CHECKS_MS = 8000
 
 /** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
 function versionAtLeast(version: string, min: string): boolean {
@@ -881,6 +887,8 @@ export class MockBackend implements CivetBackend {
   private gitPolls = 0
   /** wsKey-like `host\0worktree` → fake git state. */
   private gits = new Map<string, MockGit>()
+  /** `host\0repo` → its fake pull requests, newest first. */
+  private prs = new Map<string, MockPr[]>()
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
   private hosts = new Map<string, MockHost>()
@@ -1514,25 +1522,107 @@ export class MockBackend implements CivetBackend {
   async listPullRequests(hostId: string, repo: string): Promise<PullRequestInfo[]> {
     const main = this.host(hostId).worktrees.get(repo)?.[0]
     if (main) this.host(hostId).checkGit(main.id, 'pull requests')
-    if (repo !== 'civet') return []
-    const pr = (
-      number: number,
-      branch: string,
-      title: string,
-      state: PullRequestInfo['state']
-    ) => ({
+    return this.pullRequestsOf(hostId, repo).map((p) => ({ ...p.detail.pr }))
+  }
+
+  async pullRequestDetail(
+    hostId: string,
+    worktree: string,
+    threads: boolean
+  ): Promise<PullRequestDetail | null> {
+    const { wt } = this.prWorktree(hostId, worktree)
+    await sleep(120)
+    if (!wt.branch) return null
+    const pr = this.pullRequestsOf(hostId, wt.repo).find((p) => p.detail.pr.branch === wt.branch)
+    if (!pr) return null
+    // A PR opened here runs its CI for a while, then passes.
+    const running = pr.openedAt != null && Date.now() - pr.openedAt < MOCK_NEW_PR_CHECKS_MS
+    const checks = pr.detail.checks.map((c) => ({
+      ...c,
+      state: pr.openedAt == null ? c.state : running ? ('pending' as const) : ('passed' as const)
+    }))
+    return {
+      ...pr.detail,
+      pr: { ...pr.detail.pr },
+      checks,
+      checksState: pr.openedAt == null ? pr.detail.checksState : running ? 'pending' : 'passed',
+      threads: threads ? pr.detail.threads.map((t) => ({ ...t })) : []
+    }
+  }
+
+  async createPullRequest(hostId: string, req: CreatePullRequest): Promise<PullRequestInfo> {
+    const { wt, repo } = this.prWorktree(hostId, req.worktree)
+    if (!wt.branch) {
+      throw new CivetError(
+        'invalidArgument',
+        "invalid argument: a detached HEAD can't have a pull request"
+      )
+    }
+    const branch = this.git(hostId, wt.id).branch
+    if (!branch.upstream || branch.ahead > 0) {
+      throw new CivetError(
+        'git',
+        'git: aborted: you must first push the current branch to a remote, or use the --head flag'
+      )
+    }
+    const list = this.pullRequestsOf(hostId, wt.repo)
+    const base = req.base?.trim() || repo.defaultBranch || 'main'
+    const existing = list.find(
+      (p) => p.detail.pr.branch === wt.branch && p.detail.pr.state !== 'closed'
+    )
+    if (existing) {
+      throw new CivetError(
+        'git',
+        `git: a pull request for branch "${wt.branch}" into branch "${base}" already exists:\n${existing.detail.pr.url}`
+      )
+    }
+    await sleep(700)
+    const number = Math.max(48, ...list.map((p) => p.detail.pr.number)) + 1
+    // `--fill`: the (only) commit's subject.
+    const title =
+      req.title.trim() || wt.branch.replace(/[-_/]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+    const pr: PullRequestInfo = {
       number,
-      branch,
+      branch: wt.branch,
       title,
-      url: `https://github.com/example/civet/pull/${number}`,
-      state
+      url: `https://github.com/example/${repo.name}/pull/${number}`,
+      state: req.draft ? 'draft' : 'open'
+    }
+    list.unshift({
+      openedAt: Date.now(),
+      detail: {
+        ...mockPrDetail(pr, base, 'pending', [
+          ['rustfmt + version check', 'pending'],
+          ['clippy + test (Linux, daemon crates)', 'pending'],
+          ['desktop UI (typecheck, lint, test)', 'pending']
+        ]),
+        reviewDecision: req.draft ? null : 'reviewRequired'
+      }
     })
-    return [
-      pr(48, 'NO-TICKET/workspace-v3', 'Workspace v3 chrome', 'draft'),
-      pr(47, 'quic-resume', 'Resume QUIC sessions across network changes', 'open'),
-      pr(45, 'fix-flaky-e2e', 'Fix the flaky reconnect e2e', 'closed'),
-      pr(44, 'scrollback-paging', 'Page scrollback over the control stream', 'merged')
-    ]
+    return { ...pr }
+  }
+
+  /** The worktree (and repository) a PR request names; `unsupported` like civetd. */
+  private prWorktree(hostId: string, worktree: string): { wt: WorktreeInfo; repo: RepoInfo } {
+    const h = this.host(hostId)
+    if (!versionAtLeast(h.summary.daemonVersion ?? MOCK_VERSION, MOCK_PR_DETAIL_VERSION)) {
+      throw new CivetError(
+        'unsupported',
+        `unsupported: the daemon on ${hostId} is too old for pull request status; restart it to upgrade`
+      )
+    }
+    h.checkGit(worktree, 'pull requests')
+    const wt = h.allWorktrees().find((w) => w.id === worktree)
+    const repo = h.repos.find((r) => r.id === wt?.repo)
+    if (!wt || !repo) throw new CivetError('notFound', `not found: worktree ${worktree}`)
+    return { wt, repo }
+  }
+
+  private pullRequestsOf(hostId: string, repo: string): MockPr[] {
+    const key = `${hostId}\u0000${repo}`
+    let list = this.prs.get(key)
+    if (!list) this.prs.set(key, (list = repo === 'civet' ? seedPullRequests() : []))
+    return list
   }
 
   async worktreeLifecycle(
@@ -2152,6 +2242,133 @@ const GROWING = 'crates/civet-transport/src/session.rs'
 const fakeSha = () =>
   Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
 const gitErr = (message: string) => new CivetError('git', `git: ${message}`)
+
+/** A fake pull request; `openedAt`: opened in this mock (its checks run, then pass). */
+type MockPr = { detail: PullRequestDetail; openedAt?: number }
+
+function mockPrDetail(
+  pr: PullRequestInfo,
+  base: string,
+  checksState: PullRequestDetail['checksState'],
+  checks: [string, PullRequestDetail['checks'][number]['state']][]
+): PullRequestDetail {
+  return {
+    pr,
+    base,
+    checksState,
+    checks: checks.map(([name, state], i) => ({
+      name,
+      state,
+      url: `https://github.com/example/civet/actions/runs/${pr.number}0${i}`
+    })),
+    reviewDecision: null,
+    approvals: 0,
+    changesRequested: 0,
+    comments: 0,
+    unresolvedThreads: 0,
+    threads: []
+  }
+}
+
+/** The civet repository's PRs: one per CI / review state the UI shows. */
+function seedPullRequests(): MockPr[] {
+  const pr = (
+    number: number,
+    branch: string,
+    title: string,
+    state: PullRequestInfo['state']
+  ): PullRequestInfo => ({
+    number,
+    branch,
+    title,
+    url: `https://github.com/example/civet/pull/${number}`,
+    state
+  })
+  const ci = 'clippy + test (Linux, daemon crates)'
+  const threads = [
+    {
+      path: 'crates/civet-transport/src/session.rs',
+      line: 214,
+      outdated: false,
+      author: 'reviewer-a',
+      body: 'This retries the resume forever if the daemon keeps answering BadToken. Cap it, or fall back to a fresh session after the first rejection?',
+      url: 'https://github.com/example/civet/pull/47#discussion_r101',
+      comments: 2
+    },
+    {
+      path: 'crates/civet-transport/src/failover.rs',
+      line: null,
+      outdated: true,
+      author: 'coderabbitai',
+      body: '**Minor** · The probe interval is read once at startup, so changing CIVET_QUIC_PROBE_MS needs a restart. Worth a note in the docs.',
+      url: 'https://github.com/example/civet/pull/47#discussion_r102',
+      comments: 1
+    }
+  ]
+  return [
+    {
+      detail: {
+        ...mockPrDetail(
+          pr(48, 'NO-TICKET/workspace-v3', 'Workspace v3 chrome', 'draft'),
+          'main',
+          'pending',
+          [
+            ['rustfmt + version check', 'passed'],
+            [ci, 'pending'],
+            ['desktop UI (typecheck, lint, test)', 'passed']
+          ]
+        ),
+        comments: 1
+      }
+    },
+    {
+      detail: {
+        ...mockPrDetail(
+          pr(47, 'quic-resume', 'Resume QUIC sessions across network changes', 'open'),
+          'main',
+          'failed',
+          [
+            ['rustfmt + version check', 'passed'],
+            [ci, 'failed'],
+            ['clippy + test (macOS, all crates)', 'passed'],
+            ['desktop UI (typecheck, lint, test)', 'passed'],
+            ['CodeRabbit', 'cancelled']
+          ]
+        ),
+        reviewDecision: 'changesRequested',
+        approvals: 1,
+        changesRequested: 1,
+        comments: 3,
+        unresolvedThreads: threads.length,
+        threads
+      }
+    },
+    {
+      detail: mockPrDetail(
+        pr(45, 'fix-flaky-e2e', 'Fix the flaky reconnect e2e', 'closed'),
+        'main',
+        null,
+        []
+      )
+    },
+    {
+      detail: {
+        ...mockPrDetail(
+          pr(44, 'scrollback-paging', 'Page scrollback over the control stream', 'merged'),
+          'main',
+          'passed',
+          [
+            ['rustfmt + version check', 'passed'],
+            [ci, 'passed']
+          ]
+        ),
+        reviewDecision: 'approved',
+        approvals: 2,
+        comments: 2
+      }
+    }
+  ]
+}
 
 type Lists = Pick<GitStatusInfo, 'staged' | 'unstaged' | 'untracked' | 'conflicted'>
 const cloneLists = (l: Lists): Lists => ({
