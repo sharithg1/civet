@@ -33,6 +33,8 @@
     "allow-create-pull-request",
     "allow-git-status",
     "allow-git-diff",
+    "allow-agent-activity",
+    "allow-turn-diff",
     "allow-git-branch",
     "allow-git-action",
     "allow-worktree-lifecycle",

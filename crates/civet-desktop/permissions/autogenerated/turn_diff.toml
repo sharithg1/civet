@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-turn-diff"
+description = "Enables the turn_diff command without any pre-configured scope."
+commands.allow = ["turn_diff"]
+
+[[permission]]
+identifier = "deny-turn-diff"
+description = "Denies the turn_diff command without any pre-configured scope."
+commands.deny = ["turn_diff"]
