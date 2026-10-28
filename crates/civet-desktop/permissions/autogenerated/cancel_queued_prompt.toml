@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-queued-prompt"
+description = "Enables the cancel_queued_prompt command without any pre-configured scope."
+commands.allow = ["cancel_queued_prompt"]
+
+[[permission]]
+identifier = "deny-cancel-queued-prompt"
+description = "Denies the cancel_queued_prompt command without any pre-configured scope."
+commands.deny = ["cancel_queued_prompt"]

@@ -3,6 +3,7 @@ import { getBackend } from './backend'
 import { ConnectScreen } from './components/ConnectScreen'
 import { AddProjectDialog, ConfirmDialog } from './components/Dialogs'
 import { NewWorktreeDialog } from './components/NewWorktreeDialog'
+import { PromptDialog } from './components/PromptDialog'
 import { RemoveWorktreeDialog } from './components/RemoveWorktreeDialog'
 import { CleanupWorktreesDialog } from './components/CleanupWorktreesDialog'
 import { RightPanel } from './components/RightPanel'
@@ -34,6 +35,7 @@ import {
 } from './state/store'
 import { initPorts } from './state/ports'
 import { initStats } from './state/stats'
+import { initPrompts, openSendPrompt } from './state/prompts'
 
 export function App() {
   const [ready, setReady] = useState(false)
@@ -51,7 +53,9 @@ export function App() {
         const app = await initApp(b)
         const ports = await initPorts(b)
         const stats = initStats(b)
+        const prompts = await initPrompts(b)
         return () => {
+          prompts()
           stats()
           ports()
           app()
@@ -110,6 +114,7 @@ export function App() {
       <CleanupWorktreesDialog />
       <AddProjectDialog />
       <ConfirmDialog />
+      <PromptDialog />
       <Toasts />
     </div>
   )
@@ -131,7 +136,8 @@ function isOptionShortcut(e: KeyboardEvent): boolean {
 
 /**
  * Cmd/Ctrl+T new terminal, +D split right, +Shift+D split down, +W close
- * focused pane, +K / +P switcher, +, settings; ⌥` previous worktree, ⌥↑↓
+ * focused pane, +K / +P switcher, +, settings, +Shift+B send prompt to
+ * agents; ⌥` previous worktree, ⌥↑↓
  * next/previous worktree, ⌥1-9 tab, ⌥C Claude tab, ⌥X Codex tab, ⌥T terminal
  * tab, ⌥N new worktree, ⌥B sidebar, ⌥E right panel.
  */
@@ -141,6 +147,13 @@ function useShortcuts() {
       const state = useStore.getState()
       const mod = isMac() ? e.metaKey : e.ctrlKey && e.shiftKey
       const overlay = !!document.querySelector('[role=dialog],[role=alertdialog]')
+      if (mod && e.shiftKey && e.code === 'KeyB') {
+        if (!state.hostOrder.length) return
+        e.preventDefault()
+        useStore.setState({ switcherOpen: false, settings: null })
+        openSendPrompt()
+        return
+      }
       if (mod && (e.code === 'KeyK' || e.code === 'KeyP')) {
         if (!state.hostOrder.length) return
         e.preventDefault()
