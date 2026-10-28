@@ -35,6 +35,7 @@ mod pane;
 mod status;
 mod subscription;
 mod sys;
+mod templates;
 mod watch;
 
 use std::path::PathBuf;
@@ -64,7 +65,8 @@ pub const ENV_WORKTREE: &str = "CIVET_WORKTREE";
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     /// `~/.civet` (or `$CIVET_STATE_DIR`). Holds `repos.json`, `status/`,
-    /// `hooks/` and `trash/`.
+    /// `hooks/`, `trash/`, `setup/`, `worktree-templates.json` and
+    /// `worktree-ports.json`.
     pub state_dir: PathBuf,
     /// Shell for panes without a command and for `-lc` wrapping.
     /// Default (None): `$SHELL`, else `/bin/bash`, else `/bin/sh`.

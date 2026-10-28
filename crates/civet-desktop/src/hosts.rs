@@ -1270,6 +1270,38 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::HostStats { since, processes }).await?, Response::HostStats(s) => s)
     }
 
+    /// `worktree_template`: a repo's template and its sources.
+    pub async fn worktree_template(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+    ) -> Result<civet_proto::WorktreeTemplateInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::GetWorktreeTemplate { repo }).await?, Response::WorktreeTemplate(t) => t)
+    }
+
+    /// `set_worktree_template`: replace the template saved on the host.
+    pub async fn set_worktree_template(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+        template: civet_proto::WorktreeTemplate,
+    ) -> Result<civet_proto::WorktreeTemplateInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::SetWorktreeTemplate { repo, template }).await?, Response::WorktreeTemplate(t) => t)
+    }
+
+    /// `setup_worktree`: apply the template to a new worktree.
+    pub async fn setup_worktree(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        size: civet_proto::TermSize,
+    ) -> Result<civet_proto::WorktreeSetup, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::SetupWorktree { worktree, size }).await?, Response::WorktreeSetUp(s) => s)
+    }
+
     /// `list_files`: one directory level of a worktree.
     pub async fn list_files(
         &self,

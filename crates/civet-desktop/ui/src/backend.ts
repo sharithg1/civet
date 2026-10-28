@@ -52,7 +52,10 @@ import type {
   HostStats,
   RepoLifecycle,
   UpdateStrategy,
-  WorktreeUpdate
+  WorktreeUpdate,
+  WorktreeTemplate,
+  WorktreeTemplateInfo,
+  WorktreeSetup
 } from './types'
 
 export type Unlisten = () => void
@@ -129,6 +132,20 @@ export interface CivetBackend {
    */
   hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
+  /** A repo's worktree template and its sources (civetd >= 0.4.2). */
+  worktreeTemplate(hostId: string, repo: RepoId): Promise<WorktreeTemplateInfo>
+  /** Replace the template saved on the host (all null: delete it). */
+  setWorktreeTemplate(
+    hostId: string,
+    repo: RepoId,
+    template: WorktreeTemplate
+  ): Promise<WorktreeTemplateInfo>
+  /**
+   * Apply the template to a new worktree: copy files from the main checkout,
+   * assign its `CIVET_PORT`, start the setup script in a pane. The caller
+   * starts the agent.
+   */
+  setupWorktree(hostId: string, worktree: WorktreeId, size: TermSize): Promise<WorktreeSetup>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
   /** `git status` of a worktree with line counts (needs civetd >= 0.1.11). */
@@ -357,6 +374,15 @@ export class TauriBackend implements CivetBackend {
   }
   listWorktrees(hostId: string, repo: RepoId) {
     return this.call<WorktreeInfo[]>('list_worktrees', { hostId, repo })
+  }
+  worktreeTemplate(hostId: string, repo: RepoId) {
+    return this.call<WorktreeTemplateInfo>('worktree_template', { hostId, repo })
+  }
+  setWorktreeTemplate(hostId: string, repo: RepoId, template: WorktreeTemplate) {
+    return this.call<WorktreeTemplateInfo>('set_worktree_template', { hostId, repo, template })
+  }
+  setupWorktree(hostId: string, worktree: WorktreeId, size: TermSize) {
+    return this.call<WorktreeSetup>('setup_worktree', { hostId, worktree, size })
   }
   listPullRequests(hostId: string, repo: RepoId) {
     return this.call<PullRequestInfo[]>('list_pull_requests', { hostId, repo })

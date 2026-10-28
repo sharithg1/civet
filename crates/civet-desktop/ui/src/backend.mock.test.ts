@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MOCK_VERSION, MockBackend } from './backend.mock'
 import { PaneStream, type TerminalSink } from './terminal/pane-stream'
 import { RecordKind, isFull, parseRecords, type TermRecord } from './terminal/records'
-import type { HostStateEvent } from './types'
+import type { DaemonEventEnvelope, HostStateEvent } from './types'
+import { termSize } from './types'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
@@ -516,5 +517,89 @@ describe('MockBackend worktree lifecycle', () => {
     await expect(settle(b.updateWorktree('devbox', wake!.id, 'merge'))).rejects.toThrow(
       /in progress/
     )
+  })
+})
+
+describe('MockBackend worktree templates', () => {
+  it('merges host fields over the repository file, copies files and runs setup', async () => {
+    const { b } = await connected()
+    const info = await b.worktreeTemplate('devbox', 'civet')
+    expect(info.filePath).toBe('/home/dev/src/civet/.civet/worktree.toml')
+    expect(info.effective.copy).toEqual(['.env'])
+    expect(info.host).toEqual({ setup: null, copy: null, agent: null, prompt: null })
+
+    const saved = await b.setWorktreeTemplate('devbox', 'civet', {
+      setup: null,
+      copy: [' .env ', '.env.local', '.env.missing', ''],
+      agent: ' codex --full-auto ',
+      prompt: null
+    })
+    expect(saved.host.copy).toEqual(['.env', '.env.local', '.env.missing'])
+    expect(saved.effective.agent).toBe('codex --full-auto')
+    expect(saved.effective.setup).toContain('pnpm install')
+
+    const wt = await b.createWorktree('devbox', 'civet', 'tmpl')
+    const events: DaemonEventEnvelope[] = []
+    await b.onDaemonEvent((e) => events.push(e))
+    const setup = await b.setupWorktree('devbox', wt.id, termSize(100, 30))
+    expect(setup.copied).toEqual(['.env', '.env.local'])
+    expect(setup.warnings).toEqual(['.env.missing: not in the main checkout'])
+    expect(setup.port).toBe(41000)
+    expect(setup.setupPane?.title).toBe('Setup')
+    expect(b.files('devbox', wt.id).files.get('.env')).toContain('DATABASE_URL')
+    await vi.runAllTimersAsync()
+    expect(events.map((e) => e.event)).toContainEqual({
+      paneExited: { pane: setup.setupPane!.id, exitCode: 0 }
+    })
+    // Same worktree: same port, nothing copied again; another worktree: the next block.
+    const again = await b.setupWorktree('devbox', wt.id, termSize(100, 30))
+    expect([again.port, again.copied]).toEqual([41000, []])
+    const other = await b.createWorktree('devbox', 'civet', 'tmpl-2')
+    expect((await b.setupWorktree('devbox', other.id, termSize(80, 24))).port).toBe(41010)
+    await vi.runAllTimersAsync()
+
+    const main = (await b.listWorktrees('devbox', 'civet'))[0]!
+    await expect(b.setupWorktree('devbox', main.id, termSize(80, 24))).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    await expect(b.worktreeTemplate('devbox', 'notes')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    // All null deletes the host template.
+    const cleared = await b.setWorktreeTemplate('devbox', 'civet', {
+      setup: null,
+      copy: null,
+      agent: null,
+      prompt: null
+    })
+    expect(cleared.effective).toEqual(cleared.file)
+  })
+
+  it('fails the setup like sh -e', async () => {
+    const { b } = await connected()
+    await b.setWorktreeTemplate('devbox', 'orca', {
+      setup: 'echo hi\nfalse\necho never',
+      copy: null,
+      agent: null,
+      prompt: null
+    })
+    const wt = await b.createWorktree('devbox', 'orca', 'broken')
+    const events: DaemonEventEnvelope[] = []
+    await b.onDaemonEvent((e) => events.push(e))
+    const s = await b.setupWorktree('devbox', wt.id, termSize(80, 24))
+    await vi.runAllTimersAsync()
+    expect(events.map((e) => e.event)).toContainEqual({
+      paneExited: { pane: s.setupPane!.id, exitCode: 1 }
+    })
+  })
+
+  it('is unsupported before civetd 0.4.2', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.worktreeTemplate('pre-git', 'civet')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
   })
 })

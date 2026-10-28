@@ -164,6 +164,40 @@ pub async fn list_pull_requests(
 }
 
 #[tauri::command]
+pub async fn worktree_template(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+) -> Res<civet_proto::WorktreeTemplateInfo> {
+    state.hosts.worktree_template(&host_id, repo).await
+}
+
+#[tauri::command]
+pub async fn set_worktree_template(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+    template: civet_proto::WorktreeTemplate,
+) -> Res<civet_proto::WorktreeTemplateInfo> {
+    state
+        .hosts
+        .set_worktree_template(&host_id, repo, template)
+        .await
+}
+
+/// Apply the repo's worktree template to a new worktree (copies, port,
+/// setup pane); the UI then starts the agent.
+#[tauri::command]
+pub async fn setup_worktree(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    size: civet_proto::TermSize,
+) -> Res<civet_proto::WorktreeSetup> {
+    state.hosts.setup_worktree(&host_id, worktree, size).await
+}
+
+#[tauri::command]
 pub async fn git_status(
     state: State<'_, AppState>,
     host_id: String,
@@ -655,6 +689,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         worktree_lifecycle,
         update_worktree,
         create_worktree,
+        worktree_template,
+        set_worktree_template,
+        setup_worktree,
         remove_worktree,
         list_files,
         read_file,

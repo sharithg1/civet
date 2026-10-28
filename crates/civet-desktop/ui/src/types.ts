@@ -72,6 +72,48 @@ export type WorktreeInfo = {
   locked: boolean
 }
 
+/**
+ * Per-project settings for new worktrees (civetd >= 0.4.2). null = not set
+ * here (the next source applies); an empty value is set and means nothing.
+ * Sources, first wins per field: saved on the host (project settings), then
+ * `.civet/worktree.toml` in the main checkout.
+ */
+export type WorktreeTemplate = {
+  /** Run in a "Setup" tab of each new worktree (`sh -e`, or its `#!` line). */
+  setup: string | null
+  /** Paths copied from the main checkout (`*` / `?` globs); existing files kept. */
+  copy: string[] | null
+  /** Command line of the first agent. */
+  agent: string | null
+  /** Default first prompt of the first agent. */
+  prompt: string | null
+}
+
+/** Reply to `worktree_template` / `set_worktree_template`. */
+export type WorktreeTemplateInfo = {
+  repo: RepoId
+  /** Saved on the host. */
+  host: WorktreeTemplate
+  /** `<main>/.civet/worktree.toml`. */
+  filePath: string
+  /** The parsed repository file; null if missing or broken. */
+  file: WorktreeTemplate | null
+  fileError: string | null
+  /** `host` fields over `file` fields. */
+  effective: WorktreeTemplate
+}
+
+/** Reply to `setup_worktree`. */
+export type WorktreeSetup = {
+  template: WorktreeTemplate
+  /** Paths copied from the main checkout. */
+  copied: string[]
+  warnings: string[]
+  /** The worktree's `CIVET_PORT` (set in all of its panes). */
+  port: number | null
+  setupPane: PaneInfo | null
+}
+
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
 
 export type PullRequestInfo = {

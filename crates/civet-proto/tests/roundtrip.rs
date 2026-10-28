@@ -297,6 +297,17 @@ fn all_requests() -> Vec<Request> {
             worktree: WorktreeId::from("/w"),
             strategy: UpdateStrategy::Merge,
         },
+        Request::GetWorktreeTemplate {
+            repo: RepoId::from("r1"),
+        },
+        Request::SetWorktreeTemplate {
+            repo: RepoId::from("r1"),
+            template: template(),
+        },
+        Request::SetupWorktree {
+            worktree: WorktreeId::from("/w"),
+            size: TermSize::new(120, 36),
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -540,6 +551,14 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             base: "main".into(),
             outcome: UpdateOutcome::UpToDate,
             conflicts: vec![],
+        })),
+        Ok(Response::WorktreeTemplate(template_info())),
+        Ok(Response::WorktreeSetUp(WorktreeSetup {
+            template: template(),
+            copied: vec![".env".into()],
+            warnings: vec![".env.local: not in the main checkout".into()],
+            port: Some(41_010),
+            setup_pane: Some(pane_info()),
         })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
@@ -1039,6 +1058,82 @@ fn host_stats_is_appended() {
     assert_eq!(v["hostStats"]["samples"][0]["memUsed"], 41u64 << 30);
     assert_eq!(v["hostStats"]["load"], serde_json::json!([820, 610, 400]));
     assert_eq!(v["hostStats"]["processes"][0]["worktree"], "/w");
+}
+
+fn template() -> WorktreeTemplate {
+    WorktreeTemplate {
+        setup: Some("pnpm install\n".into()),
+        copy: Some(vec![".env".into(), "apps/*/.env".into()]),
+        agent: None,
+        prompt: Some(String::new()),
+    }
+}
+
+fn template_info() -> WorktreeTemplateInfo {
+    WorktreeTemplateInfo {
+        repo: RepoId::from("r1"),
+        host: template(),
+        file_path: "/src/r/.civet/worktree.toml".into(),
+        file: Some(WorktreeTemplate {
+            agent: Some("claude --model opus".into()),
+            ..Default::default()
+        }),
+        file_error: None,
+        effective: template(),
+    }
+}
+
+#[test]
+fn worktree_templates_are_appended() {
+    // Appended within protocol 1 after UpdateWorktree (33) / WorktreeUpdated (28).
+    let req = encode(&Request::GetWorktreeTemplate {
+        repo: RepoId::from("r"),
+    })
+    .unwrap();
+    assert_eq!(req, vec![34, 1, b'r']);
+    let req = encode(&Request::SetWorktreeTemplate {
+        repo: RepoId::from("r"),
+        template: WorktreeTemplate::default(),
+    })
+    .unwrap();
+    assert_eq!(req, vec![35, 1, b'r', 0, 0, 0, 0]);
+    let req = encode(&Request::SetupWorktree {
+        worktree: WorktreeId::from("/"),
+        size: TermSize::new(1, 1),
+    })
+    .unwrap();
+    assert_eq!(req[0], 36);
+    let resp = encode(&Response::WorktreeTemplate(template_info())).unwrap();
+    assert_eq!(resp[0], 29);
+    let resp = encode(&Response::WorktreeSetUp(WorktreeSetup {
+        template: WorktreeTemplate::default(),
+        copied: vec![],
+        warnings: vec![],
+        port: None,
+        setup_pane: None,
+    }))
+    .unwrap();
+    assert_eq!(resp[0], 30);
+    let v = serde_json::to_value(Response::WorktreeTemplate(template_info())).unwrap();
+    assert_eq!(
+        v["worktreeTemplate"]["filePath"],
+        "/src/r/.civet/worktree.toml"
+    );
+    assert_eq!(v["worktreeTemplate"]["host"]["copy"][1], "apps/*/.env");
+    assert_eq!(
+        v["worktreeTemplate"]["file"]["setup"],
+        serde_json::Value::Null
+    );
+    let v = serde_json::to_value(Response::WorktreeSetUp(WorktreeSetup {
+        template: WorktreeTemplate::default(),
+        copied: vec![],
+        warnings: vec![],
+        port: Some(41_000),
+        setup_pane: None,
+    }))
+    .unwrap();
+    assert_eq!(v["worktreeSetUp"]["port"], 41_000);
+    assert_eq!(v["worktreeSetUp"]["setupPane"], serde_json::Value::Null);
 }
 
 #[test]

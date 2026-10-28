@@ -131,6 +131,7 @@ map. Everything is re-exported from the crate root.
 | Folder completion (Add project → Folder; appended in 0.1.18 within protocol 1, after the projects: clients check `LIST_DIRS_MIN_DAEMON_VERSION` first) | `ListDirs{path}`→`Dirs(HostDirListing { path, dirs: Vec<HostDir { name, git_repo }>, truncated })`: the subdirectories of any directory on the host (absolute, `~` / `~/…`, anything else relative to the home directory; `path` is the expanded directory), hidden ones included, symlinks to directories followed, sorted by name (case-insensitive), at most `MAX_DIR_ENTRIES`. `git_repo` = has `.git` (repository or worktree root) or is a bare repository (`HEAD`, `objects/`, `refs/`); stats only, no git. A missing directory is `NotFound`, a file `InvalidArgument` |
 | Host stats (stats view; appended in 0.2.1 within protocol 1, after `ListDirs`: clients check `HOST_STATS_MIN_DAEMON_VERSION` first) | `HostStats{since, processes}`→`HostStats(HostStats { interval_ms, samples: Vec<StatsSample { seq, at_ms, cpu, mem_used, swap_used, net_rx, net_tx, disk_read, disk_write, gpus }>, cores, mem_total, swap_total, load, uptime_secs, disks, gpus, processes })`. Polled on the control stream, so it works on stream links too. The daemon samples every 2 s (sysinfo; GPUs via `nvidia-smi`) while anyone polls and stops a minute after the last request, keeping up to `MAX_STATS_SAMPLES` (10 min). `since` = newest seq the client has; a `since` newer than the newest sample (another daemon run) returns everything. CPU / GPU busy in permille, rates in bytes per second. With `processes` (sampled only while asked for in the last 10 s): every process in a pane's tree with its pane and worktree, then the busiest others, at most `MAX_STATS_PROCESSES` |
 | Worktree lifecycle (sidebar ahead / behind, Clean up worktrees, Update from main; appended in 0.4.1 within protocol 1, after `HostStats`: clients check `WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION` first) | `WorktreeLifecycle{repo, fetch, review}`→`WorktreeLifecycle(RepoLifecycle { base, worktrees: Vec<WorktreeLifecycle { worktree, branch, ahead, behind, upstream, upstream_ahead, upstream_behind, upstream_gone, unpushed, dirty, pull_request, stale: Vec<StaleReason> }>, fetch_error, pull_requests_error })`. `base` = `origin/<default>` if that remote-tracking branch exists, else `<default>`; `ahead` / `behind` are against it, from the commit `git worktree list` reports (run in the main worktree, read only). `unpushed` = commits on neither the base nor any remote-tracking branch. With `fetch`, `git fetch --prune --all` first (failure → `fetch_error`, counts from the last fetch). With `review`, `dirty` = paths in `git status` (untracked included) and `pull_request` = the branch's newest PR from `gh` (failure → `pull_requests_error`). `StaleReason::{Merged, UpstreamGone, PullRequestMerged, PullRequestClosed}`: `Merged` = the tip is in the base's history but not on its first-parent line (a fresh branch is not merged); `UpstreamGone` = commits of its own and an upstream configured but missing, only once the branch is known to have been pushed (it has a PR, or this daemon saw the upstream exist: Civet configures a new branch's upstream before its first push); the PR reasons only while HEAD is the PR's head or behind it (a reused branch name is not stale). Never stale: the main worktree, a detached HEAD, the default branch. `UpdateWorktree{worktree, strategy: UpdateStrategy::{Rebase, Merge}}`→`WorktreeUpdated(WorktreeUpdate { base, outcome: UpdateOutcome::{UpToDate, Updated, MergeConflicts, RebaseConflicts}, conflicts })`: fetches `origin <default>` (when `origin/<default>` exists), then `git rebase` / `git merge --no-edit` the base. A conflicting rebase is aborted (nothing changes); a conflicting merge is left for the Changes tab. Refused (`invalidArgument`) on a detached HEAD, the default branch, with uncommitted changes to tracked files or a merge / rebase in progress; a failed fetch is a `git` error. Emits `WorktreesChanged` unless up to date |
+| Worktree templates (appended in 0.4.2 within protocol 1, after `UpdateWorktree`: clients check `WORKTREE_TEMPLATE_MIN_DAEMON_VERSION` first; see [WORKTREE_TEMPLATES.md](WORKTREE_TEMPLATES.md)) | `GetWorktreeTemplate{repo}` / `SetWorktreeTemplate{repo, template: WorktreeTemplate { setup, copy, agent, prompt }}` (all `Option`; all None deletes the host template) → `WorktreeTemplate(WorktreeTemplateInfo { repo, host, file_path, file, file_error, effective })`, `effective` = host fields over `<main>/.civet/worktree.toml` fields; `Unsupported` for folders. `SetupWorktree{worktree, size}` (not the main worktree) → `WorktreeSetUp(WorktreeSetup { template, copied, warnings, port, setup_pane })`: copies `copy` from the main checkout keeping existing files, assigns `CIVET_PORT`, spawns the setup script (`sh -e`, or its `#!`) as a pane titled `Setup` with `CIVET_MAIN_CHECKOUT` / `CIVET_BRANCH` |
 | Info | `RepoInfo`, `ProjectInfo { repo, kind: Git \| Folder }`, `WorktreeInfo`, `PaneInfo { id, worktree, cwd, command, title, size, agent, status, exit_code, exited, created_at_ms, state }`, `DaemonInfo`, `SubscribeInfo { pane, state, size, history_lines, last_input_seq }` |
 | Events (pushed to every client) | `Event::{PaneCreated(PaneInfo), PaneExited{pane, exit_code}, PaneClosed{pane}, PaneTitle{pane, title}, PaneResized{pane, size}, AgentStatus(AgentStatusEvent), Bell{pane}, ReposChanged, WorktreesChanged{repo}, Clipboard{pane, text}}`, `Event::pane()`. `Clipboard` (OSC 52 set, appended in 0.1.1 within protocol 1) is the exception: only sent to clients subscribed to the pane whose `client_version` is at least `CLIPBOARD_EVENT_MIN_CLIENT_VERSION` (older clients cannot decode it), at most `MAX_CLIPBOARD_BYTES` (1 MiB), never replayed on resume / Full |
 | Terminal | `TermSize { cols, rows, pixel_width, pixel_height }` (`sanitized()` clamps to 1x1..=`MAX_TERM_COLS` x `MAX_TERM_ROWS` = 1000 x 500), `InputMessage { pane, seq, data }`, `ScreenUpdate { pane, state, base_state, kind: UpdateKind::{Full, Diff}, acked_input_seq, size, history_lines, history_start, payload }`, `ScreenAck { pane, state }` |
@@ -1349,7 +1350,7 @@ civetd stdio-tunnel [--state-dir DIR]
 civetd version      [--json]
 civetd handoff      (--prompt TEXT | --prompt-file FILE|-) [--agent claude|codex] [--title T]
                     [--branch B] [--base REV] [--from DIR] [--carry-changes]
-                    [--outside-pane] [--state-dir DIR] [-- CMD ARGS…]
+                    [--no-setup] [--outside-pane] [--state-dir DIR] [-- CMD ARGS…]
 civetd install-skills [--claude] [--codex]
 ```
 
@@ -1389,10 +1390,14 @@ civetd install-skills [--claude] [--codex]
   / `AddRepo` its main worktree, `CreateWorktree` from `--base` (default
   its `HEAD`) on `--branch` or a slug of the title (suffix `-2`… on
   `AlreadyExists`), optionally applies the uncommitted changes
-  (`--carry-changes`; `RemoveWorktree` if that fails), then `SpawnPane` in
-  the worktree running `<agent> <prompt>` (or `CMD ARGS… <prompt>`), titled
+  (`--carry-changes`; `RemoveWorktree` if that fails), `SetupWorktree`
+  (the repo's worktree template; skipped with `--no-setup`, a failure only
+  warns), then `SpawnPane` in the worktree running `<agent> <prompt>` (the
+  template's agent command when it runs `--agent` or none was given; the
+  template prompt before the brief; or `CMD ARGS… <prompt>`), titled
   `--title` or the prompt's first line. Prints one JSON object
-  `{repo, worktree, branch, base, pane, title, agent, carriedChanges}`.
+  `{repo, worktree, branch, base, pane, title, agent, carriedChanges,
+  setupPane, port, copied, warnings}`.
   See `docs/HANDOFF.md`.
 - **install-skills**: write the embedded `civet-handoff` `SKILL.md` to
   `~/.claude/skills/civet-handoff/` and/or
@@ -1716,6 +1721,9 @@ JSON forms unless shown. Errors reject the promise with
 | `list_dirs` | `{ hostId, path }` | `HostDirListing` (subdirectories of any host directory, for the Add project folder field; `unsupported` before civetd 0.1.18) |
 | `host_stats` | `{ hostId, since, processes }` | `HostStats` (CPU / memory / swap / network / disk I/O samples newer than `since` (`null`: the daemon's whole history, up to 10 min), cores, load, disks, GPUs, and with `processes` every pane's processes plus the busiest others; `unsupported` before civetd 0.2.1) |
 | `list_worktrees` | `{ hostId, repo }` | `WorktreeInfo[]` |
+| `worktree_template` | `{ hostId, repo }` | `WorktreeTemplateInfo` (`unsupported` before civetd 0.4.2) |
+| `set_worktree_template` | `{ hostId, repo, template }` | `WorktreeTemplateInfo` |
+| `setup_worktree` | `{ hostId, worktree, size }` | `WorktreeSetup` |
 | `create_worktree` | `{ hostId, repo, branch, base?, path? }` | `WorktreeInfo` |
 | `remove_worktree` | `{ hostId, worktree, force }` | `null` |
 | `list_files` | `{ hostId, worktree, dir, includeIgnored }` | `DirListing` (error `unsupported` before civetd 0.1.10) |
@@ -1933,6 +1941,9 @@ Remote/host side (`~/.civet`, or `$CIVET_STATE_DIR`):
 | `daemon.json` (0600) | running daemon's `BootstrapInfo`; written last when ready |
 | `civetd.sock` (0600) | unix socket: stdio-tunnel and local clients (same protocol as QUIC control stream) |
 | `cert.der`, `key.der` (0600) | daemon TLS identity |
+| `worktree-templates.json` | worktree templates saved from the desktop, by repo id |
+| `worktree-ports.json` | `CIVET_PORT` by worktree path |
+| `setup/<hash>.sh` | setup scripts run by Setup panes |
 | `repos.json` | registered projects `[{ "id", "name", "path", "kind" }]` (`kind` `"git"` or `"folder"`; missing in older files = `"git"`) |
 | `status/<pane>.status` | per-pane hook file (`CIVET_STATUS_FILE`) |
 | `trash/<id>/` | files deleted from the desktop's Files tab (`item` + `meta.json`), restorable with `FileOp::Restore`; purged after 3 days / beyond 200 entries |
@@ -1957,6 +1968,8 @@ dev; also `CIVET_DIST_DIR`).
 | `CIVET_PANE_ID` | panes | pane id |
 | `CIVET_STATUS_FILE` | panes | hook file path |
 | `CIVET_WORKTREE` | panes | worktree path (if any) |
+| `CIVET_PORT` | panes in a worktree | the worktree's port block start (41000, 41010, …; see WORKTREE_TEMPLATES.md) |
+| `CIVET_MAIN_CHECKOUT`, `CIVET_BRANCH` | setup panes | main checkout path, new branch |
 | `CIVET_SHIM_DIR` | panes | agent shim dir (first on `PATH`) |
 | `CIVET_USER_ZDOTDIR` | zsh panes | the user's `ZDOTDIR`, restored by the shim |
 | `TERM_PROGRAM` | panes | `civet` |

@@ -22,6 +22,9 @@ packet, not a new TCP + SSH + WebSocket handshake.
   state sync, reconnect cases, scrollback, prediction, failure modes.
 * [docs/INTERFACES.md](INTERFACES.md): the binding contract between
   the crates (wire types, APIs, constants, on-disk layout, env vars).
+* [docs/WORKTREE_TEMPLATES.md](WORKTREE_TEMPLATES.md): per-project setup
+  for new worktrees (setup script, copied files, `CIVET_PORT`, default agent
+  and prompt; Settings or `.civet/worktree.toml`).
 * [docs/HANDOFF.md](HANDOFF.md): hand a task from an agent to a new
   worktree + agent (`civet handoff`, the Claude Code / Codex skill).
 * [crates/civet-term/SPIKE.md](../crates/civet-term/SPIKE.md): terminal crate

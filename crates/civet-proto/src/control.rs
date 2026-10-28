@@ -596,6 +596,66 @@ pub enum GitAction {
     StashPop,
 }
 
+/// Per-project settings for new worktrees ([`Request::GetWorktreeTemplate`]).
+/// Every field is optional: None = not set here (the next source applies),
+/// while an empty value is set and means "nothing". The sources, highest
+/// first: the template saved on the host ([`Request::SetWorktreeTemplate`],
+/// from the desktop's project settings), then `.civet/worktree.toml` in
+/// the repository's main checkout (committed and shared). See
+/// `docs/WORKTREE_TEMPLATES.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeTemplate {
+    /// Script run in a "Setup" pane in every new worktree ([`Request::SetupWorktree`]):
+    /// `sh`, unless it starts with a `#!` line.
+    pub setup: Option<String>,
+    /// Paths relative to the main checkout copied into a new worktree
+    /// (files or directories; `*` and `?` match within one path component).
+    /// Files the worktree already has are kept.
+    pub copy: Option<Vec<String>>,
+    /// Command line of the first agent (e.g. `claude --model opus`).
+    pub agent: Option<String>,
+    /// Default first prompt of the first agent (prepended to a handoff's brief).
+    pub prompt: Option<String>,
+}
+
+/// The template of a repository and where its fields come from (reply to
+/// [`Request::GetWorktreeTemplate`] and [`Request::SetWorktreeTemplate`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeTemplateInfo {
+    /// Repository.
+    pub repo: RepoId,
+    /// Saved on the host (the desktop's project settings).
+    pub host: WorktreeTemplate,
+    /// Absolute path of the repository file (`<main>/.civet/worktree.toml`).
+    pub file_path: String,
+    /// Parsed repository file; None if it does not exist or does not parse.
+    pub file: Option<WorktreeTemplate>,
+    /// Why the repository file could not be read or parsed.
+    pub file_error: Option<String>,
+    /// What new worktrees use: `host` fields over `file` fields.
+    pub effective: WorktreeTemplate,
+}
+
+/// What [`Request::SetupWorktree`] did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSetup {
+    /// The effective template applied (its `agent` and `prompt` are for
+    /// the caller, who starts the agent).
+    pub template: WorktreeTemplate,
+    /// Paths copied from the main checkout (relative).
+    pub copied: Vec<String>,
+    /// Problems that did not stop the setup (a listed file missing in the
+    /// main checkout, a copy that failed, a bad repository file).
+    pub warnings: Vec<String>,
+    /// `CIVET_PORT` of the worktree (see [`crate::ENV_PORT`]).
+    pub port: Option<u16>,
+    /// The pane running the setup script, if the template has one.
+    pub setup_pane: Option<PaneInfo>,
+}
+
 /// Program + argv for a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1029,6 +1089,32 @@ pub enum Request {
         /// Rebase or merge.
         strategy: UpdateStrategy,
     },
+    /// The repository's worktree template and its sources.
+    /// -> [`Response::WorktreeTemplate`]. Clients send it (and
+    /// [`Request::SetWorktreeTemplate`], [`Request::SetupWorktree`]) only to
+    /// daemons of at least [`crate::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION`].
+    GetWorktreeTemplate {
+        /// Repository.
+        repo: RepoId,
+    },
+    /// Replace the template saved on the host for a repository (an
+    /// all-None template deletes it). -> [`Response::WorktreeTemplate`]
+    SetWorktreeTemplate {
+        /// Repository.
+        repo: RepoId,
+        /// New host template.
+        template: WorktreeTemplate,
+    },
+    /// Apply the repository's template to a new worktree: copy the listed
+    /// files from the main checkout, assign its `CIVET_PORT`, and start the
+    /// setup script in a pane. The caller then starts the agent.
+    /// -> [`Response::WorktreeSetUp`]
+    SetupWorktree {
+        /// The new worktree (not the main one).
+        worktree: WorktreeId,
+        /// Initial size of the setup pane.
+        size: TermSize,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -1107,6 +1193,11 @@ pub enum Response {
     WorktreeLifecycle(RepoLifecycle),
     /// Reply to [`Request::UpdateWorktree`].
     WorktreeUpdated(WorktreeUpdate),
+    /// Reply to [`Request::GetWorktreeTemplate`] and
+    /// [`Request::SetWorktreeTemplate`].
+    WorktreeTemplate(WorktreeTemplateInfo),
+    /// Reply to [`Request::SetupWorktree`].
+    WorktreeSetUp(WorktreeSetup),
 }
 
 /// Error category for a failed request.
