@@ -60,6 +60,7 @@ import type {
   WorktreeSetup,
   PromptTrigger,
   QueuedPrompt,
+  AgentUsage,
   AgentActivity
 } from './types'
 
@@ -136,6 +137,11 @@ export interface CivetBackend {
    * (civetd >= 0.2.1).
    */
   hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats>
+  /**
+   * Token use and estimated spend of the host's Claude Code / Codex sessions
+   * since `sinceMs`, from their own logs (civetd >= 0.4.5).
+   */
+  agentUsage(hostId: string, sinceMs: number): Promise<AgentUsage>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
   /** A repo's worktree template and its sources (civetd >= 0.4.2). */
   worktreeTemplate(hostId: string, repo: RepoId): Promise<WorktreeTemplateInfo>
@@ -174,7 +180,7 @@ export interface CivetBackend {
     path: string,
     opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
   ): Promise<GitDiffInfo>
-  /** The agent activity timeline of a worktree (needs civetd >= 0.4.5). */
+  /** The agent activity timeline of a worktree (needs civetd >= 0.4.6). */
   agentActivity(hostId: string, worktree: WorktreeId): Promise<AgentActivity>
   /** One file's diff within an agent turn: its `fromTree` → `toTree`. */
   turnDiff(
@@ -418,6 +424,9 @@ export class TauriBackend implements CivetBackend {
   }
   hostStats(hostId: string, since: number | null, processes: boolean) {
     return this.call<HostStats>('host_stats', { hostId, since, processes })
+  }
+  agentUsage(hostId: string, sinceMs: number) {
+    return this.call<AgentUsage>('agent_usage', { hostId, sinceMs })
   }
   listWorktrees(hostId: string, repo: RepoId) {
     return this.call<WorktreeInfo[]>('list_worktrees', { hostId, repo })

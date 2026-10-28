@@ -82,12 +82,16 @@ import type {
   WorktreeTemplate,
   WorktreeTemplateInfo,
   WorktreeUpdate,
+  AgentSessionUsage,
+  AgentUsage,
+  ModelPrice,
+  UsageHour,
   AgentActivity,
   AgentTurn
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.4.5'
+export const MOCK_VERSION = '0.4.6'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -112,8 +116,47 @@ const PROMPT_FIRE_SETTLE_MS = 750
 const PROMPT_SUBMIT_MS = 400
 /** A mock agent "works" this long on a prompt it was sent. */
 const MOCK_AGENT_TURN_MS = 6000
+/** Mock daemons report agent usage from this version on (AGENT_USAGE_MIN_DAEMON_VERSION). */
+const MOCK_AGENT_USAGE_VERSION = '0.4.5'
+
+/** A few rows of the daemon's price table (civetd/src/daemon/prices.rs), µ$ per MTok. */
+const MOCK_PRICES: ModelPrice[] = [
+  {
+    model: 'claude-opus-5-5',
+    input: 4e6,
+    output: 20e6,
+    cacheWrite5m: 5e6,
+    cacheWrite1h: 8e6,
+    cacheRead: 2e5
+  },
+  {
+    model: 'claude-sonnet-5-5',
+    input: 2e6,
+    output: 10e6,
+    cacheWrite5m: 2.5e6,
+    cacheWrite1h: 4e6,
+    cacheRead: 2e5
+  },
+  {
+    model: 'claude-haiku-5-5',
+    input: 1e5,
+    output: 5e5,
+    cacheWrite5m: 1.25e5,
+    cacheWrite1h: 2e5,
+    cacheRead: 1e4
+  },
+  {
+    model: 'gpt-5-codex',
+    input: 1.25e6,
+    output: 10e6,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
+    cacheRead: 1.25e5
+  }
+]
+
 /** Mock daemons record agent activity from this version on (AGENT_ACTIVITY_MIN_DAEMON_VERSION). */
-const MOCK_AGENT_ACTIVITY_VERSION = '0.4.5'
+const MOCK_AGENT_ACTIVITY_VERSION = '0.4.6'
 
 /** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
 function versionAtLeast(version: string, min: string): boolean {
@@ -1653,6 +1696,115 @@ export class MockBackend implements CivetBackend {
     }
   }
 
+  async agentUsage(hostId: string, sinceMs: number): Promise<AgentUsage> {
+    const h = this.host(hostId)
+    const v = h.summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_AGENT_USAGE_VERSION))
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; this needs v${MOCK_AGENT_USAGE_VERSION} or newer (restart the daemon to upgrade)`
+      )
+    if (h.summary.state !== 'connected')
+      throw new CivetError('notConnected', `${hostId} is not connected`)
+    await sleep(30)
+    const HOUR = 3_600_000
+    const now = Date.now()
+    const thisHour = Math.floor(now / HOUR) * HOUR
+    const price = (m: string) => MOCK_PRICES.find((p) => p.model === m)
+    // Deterministic per worktree: a hash picks how busy it was and when.
+    const hash = (s: string) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7)
+    const session = (
+      agent: 'claude' | 'codex',
+      id: string,
+      cwd: string,
+      worktree: string | null,
+      repo: string | null,
+      model: string,
+      seed: number
+    ): AgentSessionUsage | null => {
+      // Active a few hours a day over the last couple of weeks, the busiest
+      // worktrees most recently (today included).
+      const startDay = seed % 12
+      const days = 1 + (seed % 4)
+      const hours: UsageHour[] = []
+      for (let d = startDay; d < startDay + days; d++)
+        for (let k = 0; k < 2 + ((seed >>> d) % 4); k++) {
+          const hourMs = thisHour - d * 24 * HOUR - k * HOUR
+          if (hourMs < sinceMs - HOUR || hourMs > now) continue
+          const scale = 0.5 + ((seed >>> k) % 7) / 4
+          const tokens = {
+            input: Math.round(400 * scale),
+            output: Math.round(28_000 * scale),
+            cacheWrite: agent === 'claude' ? Math.round(160_000 * scale) : 0,
+            cacheRead: Math.round(6_500_000 * scale)
+          }
+          const p = price(model)
+          const costMicros = p
+            ? Math.round(
+                (tokens.input * p.input +
+                  tokens.output * p.output +
+                  tokens.cacheWrite * p.cacheWrite1h +
+                  tokens.cacheRead * p.cacheRead) /
+                  1e6
+              )
+            : 0
+          hours.push({ hourMs, tokens, costMicros })
+        }
+      if (!hours.length) return null
+      hours.sort((a, b) => a.hourMs - b.hourMs)
+      const tokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }
+      for (const x of hours) {
+        tokens.input += x.tokens.input
+        tokens.output += x.tokens.output
+        tokens.cacheWrite += x.tokens.cacheWrite
+        tokens.cacheRead += x.tokens.cacheRead
+      }
+      const total = tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead
+      return {
+        agent,
+        sessionId: id,
+        cwd,
+        worktree,
+        repo,
+        models: [model],
+        firstMs: hours[0]!.hourMs + 7 * 60_000,
+        lastMs: Math.min(now, hours.at(-1)!.hourMs + 41 * 60_000),
+        tokens,
+        costMicros: hours.reduce((n, x) => n + x.costMicros, 0),
+        unpricedTokens: price(model) ? 0 : total,
+        hours
+      }
+    }
+    const sessions: AgentSessionUsage[] = []
+    for (const repo of h.repos.filter((r) => r.kind === 'git'))
+      for (const w of h.worktrees.get(repo.id) ?? []) {
+        const seed = hash(w.id)
+        const n = w.isMain ? 1 : 1 + (seed % 3)
+        for (let i = 0; i < n; i++) {
+          const codex = (seed + i) % 5 === 0
+          const model = codex ? 'gpt-5-codex' : i === 2 ? 'claude-sonnet-5-5' : 'claude-opus-5-5'
+          const s = session(
+            codex ? 'codex' : 'claude',
+            `${(seed + i * 977).toString(16).padStart(8, '0')}-mock`,
+            i === 1 ? `${w.path}/crates` : w.path,
+            w.id,
+            repo.id,
+            model,
+            hash(`${w.id}#${i}`)
+          )
+          if (s) sessions.push(s)
+        }
+      }
+    // Outside every project, and a model without a price.
+    for (const s of [
+      session('claude', 'home-mock', '/home/dev', null, null, 'claude-haiku-5-5', 5),
+      session('codex', 'rollout-mock', '/home/dev/scratch', null, null, 'gpt-6-astra', 1)
+    ])
+      if (s) sessions.push(s)
+    sessions.sort((a, b) => b.lastMs - a.lastMs)
+    return { sinceMs, scannedAtMs: now, sessions, prices: MOCK_PRICES, pricesAsOf: '2026-10-27' }
+  }
+
   /** A few processes per live pane (agents build things), then some host daemons. */
   private mockProcesses(h: MockHost, seq: number): ProcessUsage[] {
     const MiB = 2 ** 20
@@ -1787,7 +1939,7 @@ export class MockBackend implements CivetBackend {
     if (v && !versionAtLeast(v, MOCK_AGENT_ACTIVITY_VERSION)) {
       throw new CivetError(
         'unsupported',
-        `${hostId} runs civetd ${v}; agent activity needs v0.4.5 or newer (restart the daemon to upgrade)`
+        `${hostId} runs civetd ${v}; agent activity needs v0.4.6 or newer (restart the daemon to upgrade)`
       )
     }
   }

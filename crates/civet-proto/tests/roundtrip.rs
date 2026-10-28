@@ -335,6 +335,9 @@ fn all_requests() -> Vec<Request> {
         },
         Request::CancelQueuedPrompt { id: 9 },
         Request::ListQueuedPrompts,
+        Request::AgentUsage {
+            since_ms: 1_700_000_000_000,
+        },
         Request::AgentActivity {
             worktree: WorktreeId::from("/w"),
         },
@@ -656,6 +659,7 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             queued_prompt(),
         ])),
         Ok(Response::QueuedPrompts(vec![])),
+        Ok(Response::AgentUsage(agent_usage())),
         Ok(Response::AgentActivity(agent_activity())),
         Ok(Response::AgentActivity(AgentActivity::default())),
         Err(RpcError::not_found(PaneId(3))),
@@ -1204,13 +1208,12 @@ fn worktree_lifecycle_is_appended() {
 
 #[test]
 fn agent_activity_is_appended() {
-    // Appended within protocol 1 after ListQueuedPrompts (43) /
-    // QueuedPrompts (34).
+    // Appended within protocol 1 after AgentUsage (44) / AgentUsage (35).
     let req = encode(&Request::AgentActivity {
         worktree: WorktreeId::from("/w"),
     })
     .unwrap();
-    assert_eq!(req, vec![44, 2, b'/', b'w']);
+    assert_eq!(req, vec![45, 2, b'/', b'w']);
     let req = encode(&Request::TurnDiff {
         worktree: WorktreeId::from("/w"),
         from: "a".into(),
@@ -1220,9 +1223,9 @@ fn agent_activity_is_appended() {
         context_lines: 3,
     })
     .unwrap();
-    assert_eq!(req[0], 45);
+    assert_eq!(req[0], 46);
     let resp = encode(&Response::AgentActivity(agent_activity())).unwrap();
-    assert_eq!(resp[0], 35);
+    assert_eq!(resp[0], 36);
     let v = serde_json::to_value(Response::AgentActivity(agent_activity())).unwrap();
     let turn = &v["agentActivity"]["turns"][0];
     assert_eq!(turn["startedMs"], 1_700_000_000_000u64);
@@ -1272,6 +1275,46 @@ fn template_info() -> WorktreeTemplateInfo {
         }),
         file_error: None,
         effective: template(),
+    }
+}
+
+fn agent_usage() -> AgentUsage {
+    let tokens = TokenCounts {
+        input: 1200,
+        output: 3400,
+        cache_write: 50_000,
+        cache_read: 900_000,
+    };
+    AgentUsage {
+        since_ms: 1_699_000_000_000,
+        scanned_at_ms: 1_700_000_100_000,
+        sessions: vec![AgentSessionUsage {
+            agent: UsageAgent::Claude,
+            session_id: "a6cd0e7b".into(),
+            cwd: "/w/crates".into(),
+            worktree: Some(WorktreeId::from("/w")),
+            repo: Some(RepoId("r".into())),
+            models: vec!["claude-opus-5-5".into()],
+            first_ms: 1_700_000_000_000,
+            last_ms: 1_700_000_090_000,
+            tokens,
+            cost_micros: 1_234_567,
+            unpriced_tokens: 0,
+            hours: vec![UsageHour {
+                hour_ms: 1_699_999_200_000,
+                tokens,
+                cost_micros: 1_234_567,
+            }],
+        }],
+        prices: vec![ModelPrice {
+            model: "claude-opus-5-5".into(),
+            input: 4_000_000,
+            output: 20_000_000,
+            cache_write_5m: 5_000_000,
+            cache_write_1h: 8_000_000,
+            cache_read: 200_000,
+        }],
+        prices_as_of: "2026-10-27".into(),
     }
 }
 
@@ -1368,6 +1411,26 @@ fn prompts_are_appended() {
         "doneOrNeedsInput"
     );
     assert_eq!(v["promptQueue"]["sent"], 4);
+}
+
+#[test]
+fn agent_usage_is_appended() {
+    // Appended within protocol 1 after ListQueuedPrompts (43) / QueuedPrompts (34).
+    let req = encode(&Request::AgentUsage { since_ms: 5 }).unwrap();
+    assert_eq!(req, vec![44, 5]);
+    let resp = encode(&Response::AgentUsage(agent_usage())).unwrap();
+    assert_eq!(resp[0], 35);
+    let v = serde_json::to_value(Response::AgentUsage(agent_usage())).unwrap();
+    assert_eq!(v["agentUsage"]["sessions"][0]["agent"], "claude");
+    assert_eq!(
+        v["agentUsage"]["sessions"][0]["tokens"]["cacheRead"],
+        900_000
+    );
+    assert_eq!(
+        v["agentUsage"]["sessions"][0]["hours"][0]["costMicros"],
+        1_234_567
+    );
+    assert_eq!(v["agentUsage"]["prices"][0]["cacheWrite1h"], 8_000_000);
 }
 
 #[test]

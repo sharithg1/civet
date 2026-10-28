@@ -74,6 +74,8 @@ export type Prefs = {
   showHostStats: boolean
   /** The indicator's CPU sparkline. */
   hostStatsSparkline: boolean
+  /** Each worktree's estimated agent spend in its sidebar row. */
+  sidebarSpend: boolean
 }
 
 /** Agent CLIs with their own tab command (⌥C / ⌥X) and on-create step kind. */
@@ -132,7 +134,8 @@ export const DEFAULT_PREFS: Prefs = {
   showIgnoredFiles: false,
   pasteAsFileTipShown: false,
   showHostStats: true,
-  hostStatsSparkline: true
+  hostStatsSparkline: true,
+  sidebarSpend: true
 }
 
 const KEY = 'civet.prefs.v1'

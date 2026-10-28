@@ -118,6 +118,12 @@ const SECTIONS: { title: string; rows: Row[] }[] = [
         kind: 'switch',
         label: 'CPU graph in the title bar',
         desc: 'The last minute of CPU use next to the numbers.'
+      },
+      {
+        id: 'sidebarSpend',
+        kind: 'switch',
+        label: 'Agent spend in the sidebar',
+        desc: "Each worktree's Claude Code and Codex spend over the last 30 days, estimated from the agents' logs at list prices. The stats view has the details."
       }
     ]
   },

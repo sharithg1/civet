@@ -25,6 +25,7 @@
     "allow-worktree-template",
     "allow-set-worktree-template",
     "allow-setup-worktree",
+    "allow-agent-usage",
     "allow-prepare-file-drop",
     "allow-upload-file",
     "allow-list-worktrees",
