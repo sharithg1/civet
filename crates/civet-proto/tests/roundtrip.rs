@@ -1087,11 +1087,11 @@ fn agent_usage() -> AgentUsage {
 
 #[test]
 fn agent_usage_is_appended() {
-    // Appended within protocol 1 after HostStats (31) / HostStats (26).
+    // Appended within protocol 1 after UpdateWorktree (33) / WorktreeUpdated (28).
     let req = encode(&Request::AgentUsage { since_ms: 5 }).unwrap();
-    assert_eq!(req, vec![32, 5]);
+    assert_eq!(req, vec![34, 5]);
     let resp = encode(&Response::AgentUsage(agent_usage())).unwrap();
-    assert_eq!(resp[0], 27);
+    assert_eq!(resp[0], 29);
     let v = serde_json::to_value(Response::AgentUsage(agent_usage())).unwrap();
     assert_eq!(v["agentUsage"]["sessions"][0]["agent"], "claude");
     assert_eq!(

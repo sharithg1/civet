@@ -80,7 +80,7 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.4.1'
+export const MOCK_VERSION = '0.4.2'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -91,7 +91,7 @@ const MOCK_LIST_DIRS_VERSION = '0.1.18'
 /** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
 const MOCK_HOST_STATS_VERSION = '0.2.1'
 /** Mock daemons report agent usage from this version on (AGENT_USAGE_MIN_DAEMON_VERSION). */
-const MOCK_AGENT_USAGE_VERSION = '0.4.1'
+const MOCK_AGENT_USAGE_VERSION = '0.4.2'
 
 /** A few rows of the daemon's price table (civetd/src/daemon/prices.rs), µ$ per MTok. */
 const MOCK_PRICES: ModelPrice[] = [

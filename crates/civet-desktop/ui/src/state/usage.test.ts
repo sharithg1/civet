@@ -50,7 +50,7 @@ describe('agent usage polling', () => {
   it('polls only while the sidebar or the stats view shows usage', async () => {
     vi.useFakeTimers()
     setPrefs({ sidebarSpend: false })
-    useStore.setState({ hosts: { devbox: host('0.4.1') }, statsOpen: false })
+    useStore.setState({ hosts: { devbox: host('0.4.2') }, statsOpen: false })
     const { be, agentUsage } = fakeBackend()
     cleanup = initUsage(be)
     await vi.advanceTimersByTimeAsync(120_000)
@@ -74,7 +74,7 @@ describe('agent usage polling', () => {
   it('leaves daemons without agent usage alone', async () => {
     vi.useFakeTimers()
     setPrefs({ sidebarSpend: true })
-    useStore.setState({ hosts: { devbox: host('0.4.0') }, statsOpen: false })
+    useStore.setState({ hosts: { devbox: host('0.4.1') }, statsOpen: false })
     const { be, agentUsage } = fakeBackend()
     cleanup = initUsage(be)
     await vi.advanceTimersByTimeAsync(120_000)

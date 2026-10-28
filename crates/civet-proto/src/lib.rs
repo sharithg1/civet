@@ -182,8 +182,8 @@ pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
 pub const WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION: &str = "0.4.1";
 
 /// Oldest daemon that understands [`Request::AgentUsage`] (appended within
-/// protocol 1 after [`Request::HostStats`]).
-pub const AGENT_USAGE_MIN_DAEMON_VERSION: &str = "0.4.1";
+/// protocol 1 after [`Request::UpdateWorktree`]).
+pub const AGENT_USAGE_MIN_DAEMON_VERSION: &str = "0.4.2";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

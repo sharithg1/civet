@@ -570,7 +570,7 @@ export type ModelPrice = {
 }
 
 /**
- * Reply to `agent_usage` (civetd >= 0.4.1): agent sessions with usage since
+ * Reply to `agent_usage` (civetd >= 0.4.2): agent sessions with usage since
  * `sinceMs`, newest first, read from the host's Claude Code and Codex logs.
  * Costs are estimates at the list prices in `prices`.
  */

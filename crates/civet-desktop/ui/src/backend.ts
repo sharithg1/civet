@@ -131,7 +131,7 @@ export interface CivetBackend {
   hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats>
   /**
    * Token use and estimated spend of the host's Claude Code / Codex sessions
-   * since `sinceMs`, from their own logs (civetd >= 0.4.1).
+   * since `sinceMs`, from their own logs (civetd >= 0.4.2).
    */
   agentUsage(hostId: string, sinceMs: number): Promise<AgentUsage>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>

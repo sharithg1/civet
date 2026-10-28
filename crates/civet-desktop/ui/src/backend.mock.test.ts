@@ -340,7 +340,7 @@ describe('MockBackend agent usage', () => {
     expect(last).toEqual([...last].sort((x, y) => y - x))
   })
 
-  it('is unsupported before civetd 0.4.1', async () => {
+  it('is unsupported before civetd 0.4.2', async () => {
     const b = new MockBackend()
     const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
     await vi.runAllTimersAsync()
