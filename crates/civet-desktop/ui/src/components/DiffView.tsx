@@ -18,7 +18,7 @@ import {
 } from '@/state/store'
 import { CHANGES_POLL_MS, findChange, useChanges, useChangesPolling } from '@/state/changes'
 import { useActivity } from '@/state/activity'
-import { turnTimes } from '@/lib/activity'
+import { isTurn, turnTimes } from '@/lib/activity'
 import { parseUnifiedDiff, type DiffLine, type ParsedDiff } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 import { useWorktreeInfo } from './chrome'
@@ -150,7 +150,7 @@ export function TurnDiffView({
 }) {
   const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
   const turn = useActivity((s) =>
-    s.byWorktree[wsKey(hostId, worktree)]?.activity?.turns.find((t) => t.id === target.turn.id)
+    s.byWorktree[wsKey(hostId, worktree)]?.activity?.turns.find((t) => isTurn(target.turn, t))
   )
   const [state, setState] = useState<DiffState | null>(null)
   const [reload, setReload] = useState(0)

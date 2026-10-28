@@ -408,6 +408,35 @@ describe('MockBackend agent activity', () => {
     expect(await turns(scroll!.id)).toHaveLength(1)
   })
 
+  it('records folder turns without snapshots', async () => {
+    const { b } = await connected()
+    const [root] = await b.listWorktrees('devbox', 'notes')
+    const pane = await b.spawnPane('devbox', {
+      worktree: root!.id,
+      cwd: null,
+      command: { program: 'claude', args: [] },
+      env: [],
+      size: { cols: 80, rows: 24, pixelWidth: 0, pixelHeight: 0 },
+      title: 'Tidy notes',
+      agent: 'claude'
+    })
+    await b.setAgentStatus('devbox', pane.id, 'done')
+    expect((await b.agentActivity('devbox', root!.id)).turns).toMatchObject([
+      { status: 'done', files: [], fromTree: null, toTree: null }
+    ])
+  })
+
+  it('keeps timelines across a daemon restart', async () => {
+    const { b } = await connected()
+    const [, quic] = await b.listWorktrees('devbox', 'civet')
+    const before = (await b.agentActivity('devbox', quic!.id)).turns
+    expect(before.length).toBeGreaterThan(0)
+    const restarted = b.restartDaemon('devbox')
+    await vi.runAllTimersAsync()
+    await restarted
+    expect((await b.agentActivity('devbox', quic!.id)).turns).toEqual(before)
+  })
+
   it('is unsupported on an old civetd', async () => {
     const b = new MockBackend()
     const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })

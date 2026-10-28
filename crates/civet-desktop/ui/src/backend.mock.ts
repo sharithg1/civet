@@ -645,7 +645,16 @@ class MockHost {
   private beginTurn(pane: MockPane): void {
     const { id, worktree, agent, title } = pane.info
     if (!worktree || !agent || this.openTurn(id)) return
-    this.pushTurn(worktree, this.newTurn(id, agent, title, Date.now()))
+    const turn = this.newTurn(id, agent, title, Date.now())
+    // A folder has no git: civetd keeps the turn without snapshots.
+    if (this.folderOf(worktree)) turn.fromTree = null
+    this.pushTurn(worktree, turn)
+  }
+
+  /** Take over the timelines of the host this one replaces (civetd keeps them on disk). */
+  keepActivity(old: MockHost): void {
+    this.activity = old.activity
+    this.nextTurnId = old.nextTurnId
   }
 
   private openTurn(pane: PaneId): { worktree: string; index: number } | null {
@@ -661,14 +670,17 @@ class MockHost {
     const open = this.openTurn(pane)
     if (!open) return
     const turns = [...this.activity.get(open.worktree)!]
+    const git = !this.folderOf(open.worktree)
     const { staged, unstaged, untracked } = mockGitStatus(open.worktree)
     turns[open.index] = {
       ...turns[open.index]!,
       endedMs: Date.now(),
       status,
       message,
-      files: [...staged, ...unstaged, ...untracked].sort((a, b) => a.path.localeCompare(b.path)),
-      toTree: fakeSha()
+      files: git
+        ? [...staged, ...unstaged, ...untracked].sort((a, b) => a.path.localeCompare(b.path))
+        : [],
+      toTree: git ? fakeSha() : null
     }
     this.activity.set(open.worktree, turns)
   }
@@ -1296,7 +1308,9 @@ export class MockBackend implements CivetBackend {
       for (const id of [...old.panes.keys()]) old.killPane(id)
       this.hosts.delete(hostId)
     }
-    return this.connect(t.target, t.transport, true)
+    const summary = await this.connect(t.target, t.transport, true)
+    if (old) this.hosts.get(hostId)?.keepActivity(old)
+    return summary
   }
 
   private async connect(target: HostTarget, transport: TransportChoice, replace: boolean) {

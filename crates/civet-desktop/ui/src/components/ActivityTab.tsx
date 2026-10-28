@@ -9,7 +9,7 @@ import { History } from 'lucide-react'
 import type { AgentTurn, GitFileChange } from '@/types'
 import { openDiffTab, useStore, wsKey } from '@/state/store'
 import { ACTIVITY_POLL_MS, useActivity, useActivityPolling } from '@/state/activity'
-import { TURN_STATUS, turnLength, turnLines, turnsByDay, turnTimes } from '@/lib/activity'
+import { isTurn, TURN_STATUS, turnLength, turnLines, turnsByDay, turnTimes } from '@/lib/activity'
 import { promptLabel } from '@/lib/worktree-view'
 import { splitPath } from '@/lib/diff'
 import { cn } from '@/lib/utils'
@@ -102,7 +102,7 @@ function TurnRow({
   const openPath = useStore((s) => {
     const ws = s.workspaces[wsKey(hostId, worktree)]
     const tab = ws?.tabs.find((x) => x.id === openTab)
-    return tab?.kind === 'file' && tab.diff?.side === 'turn' && tab.diff.turn.id === turn.id
+    return tab?.kind === 'file' && tab.diff?.side === 'turn' && isTurn(tab.diff.turn, turn)
       ? tab.path
       : null
   })

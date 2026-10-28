@@ -13,6 +13,14 @@ export const TURN_STATUS: Record<AgentStatus, [label: string, dot: DotKind]> = {
   unknown: ['Interrupted', 'err']
 }
 
+/**
+ * Whether a turn diff tab's `target` is `turn`. civetd numbers turns again
+ * once it drops an old timeline, so the snapshots must match too.
+ */
+export function isTurn(target: { id: number; from: string; to: string }, turn: AgentTurn): boolean {
+  return target.id === turn.id && target.from === turn.fromTree && target.to === turn.toTree
+}
+
 /** Length of a span: 45s, 3m 12s, 1h 4m. */
 export function spanLength(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))

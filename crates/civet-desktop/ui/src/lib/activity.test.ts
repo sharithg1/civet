@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentTurn } from '../types'
-import { dayLabel, spanLength, turnLength, turnLines, turnsByDay, turnTimes } from './activity'
+import {
+  dayLabel,
+  isTurn,
+  spanLength,
+  turnLength,
+  turnLines,
+  turnsByDay,
+  turnTimes
+} from './activity'
 
 const turn = (
   id: number,
@@ -27,6 +35,14 @@ const turn = (
 const at = (h: number, m = 0, day = 27) => new Date(2026, 9, day, h, m).getTime()
 
 describe('activity view helpers', () => {
+  it('matches a diff tab to its turn by id and snapshots', () => {
+    const t = turn(3, at(9), at(10), { fromTree: 'a', toTree: 'b' })
+    expect(isTurn({ id: 3, from: 'a', to: 'b' }, t)).toBe(true)
+    // The same id in a timeline started over.
+    expect(isTurn({ id: 3, from: 'c', to: 'd' }, t)).toBe(false)
+    expect(isTurn({ id: 4, from: 'a', to: 'b' }, t)).toBe(false)
+  })
+
   it('formats span lengths', () => {
     expect(spanLength(0)).toBe('0s')
     expect(spanLength(44_600)).toBe('45s')
