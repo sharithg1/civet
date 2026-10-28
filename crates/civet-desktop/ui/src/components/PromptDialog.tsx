@@ -276,20 +276,26 @@ function EditForm({ req }: { req: Extract<DialogRequest, { kind: 'edit' }> }) {
   const [text, setText] = useState(req.prompt.text)
   const [when, setWhen] = useState<PromptWhen>(req.prompt.trigger)
   const [busy, setBusy] = useState(false)
+  // Taken off the queue for "Send now" but not sent: Save queues it anew.
+  const [dequeued, setDequeued] = useState(false)
   const canSubmit = !busy && !!text.trim()
+  const target = [{ hostId: req.hostId, pane: req.prompt.pane }]
 
   async function save() {
     if (!canSubmit) return
     setBusy(true)
     try {
       if (when === 'now') {
-        // "Now": send it at once instead of waiting.
-        const outcome = await broadcastPrompt(
-          [{ hostId: req.hostId, pane: req.prompt.pane }],
-          text,
-          'now'
-        )
-        if (outcome.ok) await cancelQueuedPrompt(req.hostId, req.prompt)
+        // Off the queue first, so it can never go out twice; if that fails
+        // the daemon has (most likely) just sent it.
+        if (!dequeued) {
+          if (!(await cancelQueuedPrompt(req.hostId, req.prompt))) return
+          setDequeued(true)
+        }
+        // A failed send keeps the dialog (and the text) open.
+        if (!(await broadcastPrompt(target, text, 'now')).ok) return
+      } else if (dequeued) {
+        if (!(await broadcastPrompt(target, text, when)).ok) return
       } else {
         await editQueuedPrompt(req.hostId, req.prompt.id, text, when as PromptTrigger)
       }
@@ -329,7 +335,7 @@ function EditForm({ req }: { req: Extract<DialogRequest, { kind: 'edit' }> }) {
           className="mr-auto text-status-err-text"
           disabled={busy}
           onClick={() => {
-            void cancelQueuedPrompt(req.hostId, req.prompt)
+            if (!dequeued) void cancelQueuedPrompt(req.hostId, req.prompt)
             closePromptDialog()
           }}
         >

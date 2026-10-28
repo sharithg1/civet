@@ -241,7 +241,8 @@ export async function editQueuedPrompt(
   }
 }
 
-export async function cancelQueuedPrompt(hostId: string, prompt: QueuedPrompt): Promise<void> {
+/** Resolves to false (after an error toast) if it could not be cancelled, e.g. it was just sent. */
+export async function cancelQueuedPrompt(hostId: string, prompt: QueuedPrompt): Promise<boolean> {
   try {
     await b().cancelQueuedPrompt(hostId, prompt.id)
     const cur = usePrompts.getState().queues[hostId]?.[prompt.pane] ?? []
@@ -250,7 +251,9 @@ export async function cancelQueuedPrompt(hostId: string, prompt: QueuedPrompt): 
       prompt.pane,
       cur.filter((q) => q.id !== prompt.id)
     )
+    return true
   } catch (err) {
     reportError('Could not cancel the queued prompt', err)
+    return false
   }
 }

@@ -446,6 +446,10 @@ mod tests {
         assert_eq!(q.due_submits(t0), [PaneId(2)]);
         assert_eq!(q.due_submits(t0 + SUBMIT_DELAY), [P]);
         assert!(q.due_submits(t0 + SUBMIT_DELAY).is_empty());
+        // A busy pane's Enter is retried later (the ticker re-adds it).
+        q.submit_at(P, t0 + FIRE_RETRY);
+        assert!(q.due_submits(t0).is_empty());
+        assert_eq!(q.due_submits(t0 + FIRE_RETRY), [P]);
         q.submit_at(P, t0);
         q.drop_pane(P);
         assert!(q.due_submits(t0).is_empty());

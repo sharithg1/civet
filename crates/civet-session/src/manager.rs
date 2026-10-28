@@ -1504,8 +1504,13 @@ fn run_prompts(inner: &Inner, panes: &[Arc<Pane>], now: Instant) {
         }
     }
     for pane in submits {
-        if let Some(Err(e)) = by_id.get(&pane).map(|p| p.press_enter()) {
-            tracing::debug!(pane = pane.0, error = %e, "prompt submit dropped");
+        match by_id.get(&pane).map(|p| p.press_enter()) {
+            // The paste is in; the Enter must follow once the PTY drains.
+            Some(Err(SessionError::Busy(_))) => {
+                lock(&inner.prompts).submit_at(pane, now + prompts::FIRE_RETRY);
+            }
+            Some(Err(e)) => tracing::debug!(pane = pane.0, error = %e, "prompt submit dropped"),
+            _ => {}
         }
     }
 }
