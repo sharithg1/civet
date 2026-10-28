@@ -16,6 +16,10 @@
 //!   newest-wins diffs, coalescing, a bounded in-flight window and echo acks.
 //! * **Agent status detection** (process exit, hook file, OSC 9/777/133, BEL
 //!   and idle heuristics), pushed as [`civet_proto::Event::AgentStatus`].
+//! * **Prompts** typed into panes for the user: sent now (broadcast) or
+//!   queued until the agent is next done
+//!   ([`SessionManager::queue_prompt`]), pushed as
+//!   [`civet_proto::Event::PromptQueue`].
 //!
 //! There is no networking here; `civetd` wires this to the transport.
 //! See `docs/INTERFACES.md` (section 4) for the contract and `HOOKS.md` in
@@ -32,6 +36,7 @@ mod hooks;
 mod lifecycle;
 mod manager;
 mod pane;
+mod prompts;
 mod status;
 mod subscription;
 mod sys;

@@ -319,6 +319,22 @@ fn all_requests() -> Vec<Request> {
             base: Some("main".into()),
             draft: true,
         }),
+        Request::SendPrompt {
+            pane: PaneId(3),
+            text: "run the tests\nthen commit".into(),
+        },
+        Request::QueuePrompt {
+            pane: PaneId(3),
+            text: "now open a PR".into(),
+            trigger: PromptTrigger::Done,
+        },
+        Request::EditQueuedPrompt {
+            id: 9,
+            text: "yes".into(),
+            trigger: PromptTrigger::DoneOrNeedsInput,
+        },
+        Request::CancelQueuedPrompt { id: 9 },
+        Request::ListQueuedPrompts,
         Request::AgentUsage {
             since_ms: 1_700_000_000_000,
         },
@@ -626,6 +642,12 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             url: "https://github.com/o/r/pull/43".into(),
             state: PullRequestState::Draft,
         })),
+        Ok(Response::QueuedPrompt(queued_prompt())),
+        Ok(Response::QueuedPrompts(vec![
+            queued_prompt(),
+            queued_prompt(),
+        ])),
+        Ok(Response::QueuedPrompts(vec![])),
         Ok(Response::AgentUsage(agent_usage())),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
@@ -669,7 +691,27 @@ fn all_events() -> Vec<Event> {
             pane: PaneId(1),
             text: "copied ✓".into(),
         },
+        Event::PromptQueue {
+            pane: PaneId(7),
+            prompts: vec![queued_prompt()],
+            sent: None,
+        },
+        Event::PromptQueue {
+            pane: PaneId(7),
+            prompts: vec![],
+            sent: Some(4),
+        },
     ]
+}
+
+fn queued_prompt() -> QueuedPrompt {
+    QueuedPrompt {
+        id: 4,
+        pane: PaneId(7),
+        text: "now run the e2e tests".into(),
+        trigger: PromptTrigger::DoneOrNeedsInput,
+        created_at_ms: 1_700_000_000_000,
+    }
 }
 
 #[test]
@@ -1244,12 +1286,54 @@ fn worktree_templates_are_appended() {
 }
 
 #[test]
+fn prompts_are_appended() {
+    // Appended within protocol 1 after CreatePullRequest (request 38) /
+    // PullRequestCreated (response 32) and Clipboard (event 9).
+    let req = encode(&Request::SendPrompt {
+        pane: PaneId(2),
+        text: "hi".into(),
+    })
+    .unwrap();
+    assert_eq!(req, vec![39, 2, 2, b'h', b'i']);
+    assert_eq!(encode(&Request::ListQueuedPrompts).unwrap(), vec![43]);
+    let resp = encode(&Response::QueuedPrompts(vec![])).unwrap();
+    assert_eq!(resp, vec![34, 0]);
+    let ev = encode(&Event::PromptQueue {
+        pane: PaneId(2),
+        prompts: vec![],
+        sent: None,
+    })
+    .unwrap();
+    assert_eq!(ev, vec![10, 2, 0, 0]);
+    assert_eq!(
+        Event::PromptQueue {
+            pane: PaneId(2),
+            prompts: vec![],
+            sent: None
+        }
+        .pane(),
+        Some(PaneId(2))
+    );
+    let v = serde_json::to_value(Event::PromptQueue {
+        pane: PaneId(7),
+        prompts: vec![queued_prompt()],
+        sent: Some(4),
+    })
+    .unwrap();
+    assert_eq!(
+        v["promptQueue"]["prompts"][0]["trigger"],
+        "doneOrNeedsInput"
+    );
+    assert_eq!(v["promptQueue"]["sent"], 4);
+}
+
+#[test]
 fn agent_usage_is_appended() {
-    // Appended within protocol 1 after CreatePullRequest (38) / PullRequestCreated (32).
+    // Appended within protocol 1 after ListQueuedPrompts (43) / QueuedPrompts (34).
     let req = encode(&Request::AgentUsage { since_ms: 5 }).unwrap();
-    assert_eq!(req, vec![39, 5]);
+    assert_eq!(req, vec![44, 5]);
     let resp = encode(&Response::AgentUsage(agent_usage())).unwrap();
-    assert_eq!(resp[0], 33);
+    assert_eq!(resp[0], 35);
     let v = serde_json::to_value(Response::AgentUsage(agent_usage())).unwrap();
     assert_eq!(v["agentUsage"]["sessions"][0]["agent"], "claude");
     assert_eq!(

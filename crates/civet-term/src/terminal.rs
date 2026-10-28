@@ -458,6 +458,11 @@ impl PaneTerminal {
         self.current.modes.alt_screen
     }
 
+    /// True while the program has bracketed paste (`?2004`) on.
+    pub fn bracketed_paste(&self) -> bool {
+        self.current.modes.bracketed_paste
+    }
+
     /// Total lines ever scrolled off the primary screen (absolute counter).
     pub fn history_lines(&self) -> u64 {
         self.store.end()

@@ -9,6 +9,8 @@
 // that finishes after a while, agents waiting for input / stopped with an
 // error (to show every v3 status dot), and an echo shell per pane. Shell commands:
 // help, seq N, status <running|needs|done|idle>, title T, drop, fail, replaced, exit.
+// A prompt sent to a mock agent pane (broadcast, or a queued prompt firing
+// when it is done) makes it "work" for a few seconds and finish again.
 // A host whose name contains "old" runs an older civetd with live panes (the
 // "upgrade available" flow; Restart daemon starts a fresh one), "pre-git" runs
 // a civetd that reports changes but takes no git actions, "fail" never
@@ -44,6 +46,8 @@ import type {
   PaneId,
   PaneInfo,
   PortsEvent,
+  PromptTrigger,
+  QueuedPrompt,
   RepoInfo,
   ScrollbackPageView,
   ScrollbackQuery,
@@ -85,7 +89,7 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.4.4'
+export const MOCK_VERSION = '0.4.5'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -103,8 +107,15 @@ const MOCK_PORT_FIRST = 41000
 const MOCK_PR_DETAIL_VERSION = '0.4.3'
 /** How long the checks of a PR opened in the mock stay pending. */
 export const MOCK_NEW_PR_CHECKS_MS = 8000
+/** Mock daemons take prompts (send / queue) from this version on (PROMPTS_MIN_DAEMON_VERSION). */
+const MOCK_PROMPTS_VERSION = '0.4.4'
+/** Like civetd's prompts::FIRE_SETTLE / SUBMIT_DELAY. */
+const PROMPT_FIRE_SETTLE_MS = 750
+const PROMPT_SUBMIT_MS = 400
+/** A mock agent "works" this long on a prompt it was sent. */
+const MOCK_AGENT_TURN_MS = 6000
 /** Mock daemons report agent usage from this version on (AGENT_USAGE_MIN_DAEMON_VERSION). */
-const MOCK_AGENT_USAGE_VERSION = '0.4.4'
+const MOCK_AGENT_USAGE_VERSION = '0.4.5'
 
 /** A few rows of the daemon's price table (civetd/src/daemon/prices.rs), µ$ per MTok. */
 const MOCK_PRICES: ModelPrice[] = [
@@ -425,6 +436,11 @@ class MockHost {
   /** `CIVET_PORT` by worktree id. */
   ports = new Map<string, number>()
   private nextPaneId = 1
+  /** pane → queued prompts, oldest first (civetd's PromptQueues) */
+  prompts = new Map<PaneId, QueuedPrompt[]>()
+  private nextPromptId = 1
+  /** pane → pending "fire the first queued prompt" timer */
+  private armed = new Map<PaneId, ReturnType<typeof setTimeout>>()
 
   constructor(
     readonly backend: MockBackend,
@@ -534,21 +550,123 @@ class MockHost {
     }
     const pane = new MockPane(this, info, p.banner)
     this.panes.set(id, pane)
-    if (p.agent && info.status === 'running') {
-      // Fake agent run: some output, then done.
-      const tick = setInterval(() => {
-        if (!this.panes.has(id) || pane.info.status !== 'running') return clearInterval(tick)
-        pane.shell.output(`\x1b[2m  … ${randomStep()}\x1b[0m\r\n`)
-      }, 1500)
-      setTimeout(() => {
-        clearInterval(tick)
-        if (!this.panes.has(id) || pane.info.status !== 'running') return
-        pane.shell.output('\r\n\x1b[1;32m✓ Done.\x1b[0m All tasks complete.\r\n')
-        pane.shell.showPrompt()
-        this.setStatus(id, 'done', 'Agent finished: all tasks complete')
-      }, 12_000)
-    }
+    if (p.agent && info.status === 'running') this.fakeTurn(pane, 12_000)
     return pane
+  }
+
+  /** Fake agent run: some output, then done. */
+  private fakeTurn(pane: MockPane, ms: number): void {
+    const id = pane.info.id
+    const tick = setInterval(() => {
+      if (!this.panes.has(id) || pane.info.status !== 'running') return clearInterval(tick)
+      pane.shell.output(`\x1b[2m  … ${randomStep()}\x1b[0m\r\n`)
+    }, 1500)
+    setTimeout(() => {
+      clearInterval(tick)
+      if (!this.panes.has(id) || pane.info.status !== 'running') return
+      pane.shell.output('\r\n\x1b[1;32m✓ Done.\x1b[0m All tasks complete.\r\n')
+      pane.shell.showPrompt()
+      this.setStatus(id, 'done', 'Agent finished: all tasks complete')
+    }, ms)
+  }
+
+  /**
+   * A prompt typed and submitted into a pane (civetd: bracketed paste, then
+   * Enter). A mock agent shows it and works on it; a shell runs it.
+   */
+  deliverPrompt(id: PaneId, text: string): void {
+    const pane = this.pane(id)
+    if (pane.info.exited) throw new CivetError('invalidArgument', `pane ${id} has exited`)
+    if (!pane.info.agent) {
+      pane.shell.input(text.replace(/\n/g, '\r'))
+      setTimeout(() => this.panes.has(id) && pane.shell.input('\r'), PROMPT_SUBMIT_MS)
+      return
+    }
+    const quoted = text
+      .split('\n')
+      .map((l, i) => `${i ? '  ' : '\x1b[1m> '}${l}`)
+      .join('\r\n')
+    pane.shell.output(`\r\n${quoted}\x1b[0m\r\n`)
+    this.setStatus(id, 'running', text)
+    this.fakeTurn(pane, MOCK_AGENT_TURN_MS)
+  }
+
+  queuePrompt(pane: PaneId, text: string, trigger: PromptTrigger): QueuedPrompt {
+    const p = this.pane(pane)
+    if (p.info.exited) throw new CivetError('invalidArgument', `pane ${pane} has exited`)
+    const queue = this.prompts.get(pane) ?? []
+    if (queue.length >= 20)
+      throw new CivetError('invalidArgument', `pane ${pane} already has 20 queued prompts`)
+    const prompt: QueuedPrompt = {
+      id: this.nextPromptId++,
+      pane,
+      text,
+      trigger,
+      createdAtMs: Date.now()
+    }
+    this.prompts.set(pane, [...queue, prompt])
+    this.promptQueueChanged(pane, null)
+    return prompt
+  }
+
+  editPrompt(id: number, text: string, trigger: PromptTrigger): QueuedPrompt {
+    for (const [pane, queue] of this.prompts) {
+      const i = queue.findIndex((p) => p.id === id)
+      if (i < 0) continue
+      const next = { ...queue[i]!, text, trigger }
+      this.prompts.set(
+        pane,
+        queue.map((p, j) => (j === i ? next : p))
+      )
+      this.promptQueueChanged(pane, null)
+      return next
+    }
+    throw new CivetError('notFound', `queued prompt ${id} not found`)
+  }
+
+  cancelPrompt(id: number, sent = false): void {
+    for (const [pane, queue] of this.prompts) {
+      if (!queue.some((p) => p.id === id)) continue
+      const rest = queue.filter((p) => p.id !== id)
+      if (rest.length) this.prompts.set(pane, rest)
+      else this.dropPrompts(pane)
+      this.promptQueueChanged(pane, sent ? id : null)
+      return
+    }
+    throw new CivetError('notFound', `queued prompt ${id} not found`)
+  }
+
+  private dropPrompts(pane: PaneId): void {
+    this.prompts.delete(pane)
+    clearTimeout(this.armed.get(pane))
+    this.armed.delete(pane)
+  }
+
+  private promptQueueChanged(pane: PaneId, sent: number | null): void {
+    this.event({ promptQueue: { pane, prompts: this.prompts.get(pane) ?? [], sent } })
+  }
+
+  /** civetd's ticker: a change into the first prompt's trigger status sends it after a settle. */
+  private onStatusForPrompts(id: PaneId, status: AgentStatus): void {
+    const head = this.prompts.get(id)?.[0]
+    if (!head) return
+    if (!triggerFires(head.trigger, status)) {
+      clearTimeout(this.armed.get(id))
+      this.armed.delete(id)
+      return
+    }
+    if (this.armed.has(id)) return
+    this.armed.set(
+      id,
+      setTimeout(() => {
+        this.armed.delete(id)
+        const pane = this.panes.get(id)
+        const first = this.prompts.get(id)?.[0]
+        if (!pane || !first || !triggerFires(first.trigger, pane.info.status)) return
+        this.cancelPrompt(first.id, true)
+        this.deliverPrompt(id, first.text)
+      }, PROMPT_FIRE_SETTLE_MS)
+    )
   }
 
   event(event: DaemonEvent): void {
@@ -567,6 +685,7 @@ class MockHost {
     this.event({
       agentStatus: { pane: id, status, previous, source: 'client', message, atMs: Date.now() }
     })
+    if (!pane.info.exited) this.onStatusForPrompts(id, status)
     // Like the Rust core: only agent panes ask for attention.
     if ((status === 'done' || status === 'needsInput') && pane.info.agent) {
       const wt = this.allWorktrees().find((w) => w.id === pane.info.worktree)
@@ -589,6 +708,10 @@ class MockHost {
     pane.info = { ...pane.info, exited: true, exitCode: code }
     this.event({ paneExited: { pane: id, exitCode: code } })
     this.setStatus(id, 'done', `exit ${code}`)
+    if (this.prompts.has(id)) {
+      this.dropPrompts(id)
+      this.promptQueueChanged(id, null)
+    }
   }
 
   killPane(id: PaneId): void {
@@ -596,6 +719,7 @@ class MockHost {
     if (!pane) throw new CivetError('notFound', `pane ${id} not found`)
     pane.shell.closed()
     this.panes.delete(id)
+    this.dropPrompts(id)
     this.event({ paneClosed: { pane: id } })
   }
 
@@ -625,6 +749,10 @@ class MockHost {
     if (!p) throw new CivetError('notFound', `pane ${id} not found`)
     return p
   }
+}
+
+function triggerFires(trigger: PromptTrigger, status: AgentStatus): boolean {
+  return status === 'done' || (trigger === 'doneOrNeedsInput' && status === 'needsInput')
 }
 
 const STEPS = [
@@ -2259,6 +2387,52 @@ export class MockBackend implements CivetBackend {
 
   async setAgentStatus(hostId: string, pane: PaneId, status: AgentStatus) {
     this.host(hostId).setStatus(pane, status, null)
+  }
+
+  /** `unsupported` like the Rust core before civetd 0.4.4. */
+  private promptsHost(hostId: string): MockHost {
+    const h = this.host(hostId)
+    const v = h.summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_PROMPTS_VERSION))
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; this needs v${MOCK_PROMPTS_VERSION} or newer (restart the daemon to upgrade)`
+      )
+    return h
+  }
+
+  /** civetd's clean_prompt: CR / CRLF → LF, controls dropped, trailing whitespace trimmed. */
+  private cleanPrompt(text: string): string {
+    const t = text
+      .replace(/\r\n?/g, '\n')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: dropping them is the point
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+      .trimEnd()
+    if (!t.trim()) throw new CivetError('invalidArgument', 'empty prompt')
+    return t
+  }
+
+  async sendPrompt(hostId: string, pane: PaneId, text: string) {
+    this.promptsHost(hostId).deliverPrompt(pane, this.cleanPrompt(text))
+  }
+
+  async queuePrompt(hostId: string, pane: PaneId, text: string, trigger: PromptTrigger) {
+    return this.promptsHost(hostId).queuePrompt(pane, this.cleanPrompt(text), trigger)
+  }
+
+  async editQueuedPrompt(hostId: string, id: number, text: string, trigger: PromptTrigger) {
+    return this.promptsHost(hostId).editPrompt(id, this.cleanPrompt(text), trigger)
+  }
+
+  async cancelQueuedPrompt(hostId: string, id: number) {
+    this.promptsHost(hostId).cancelPrompt(id)
+  }
+
+  async listQueuedPrompts(hostId: string) {
+    const h = this.host(hostId)
+    const v = h.summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_PROMPTS_VERSION)) return []
+    return [...h.prompts.values()].flat()
   }
 
   async setPrediction(_enabled: boolean) {}

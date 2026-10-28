@@ -331,6 +331,25 @@ impl Raw {
     }
 }
 
+/// A raw connection over the daemon's unix socket that says it is client
+/// `version` (decides which newer events it gets).
+async fn raw(daemon: &Daemon, info: &BootstrapInfo, version: &str) -> Raw {
+    let sock = tokio::net::UnixStream::connect(daemon.socket_path())
+        .await
+        .unwrap();
+    let hello = ClientHello::new(
+        info.session_key.clone(),
+        ClientId::generate().unwrap(),
+        "e2e-raw",
+        version,
+    );
+    Raw::new(
+        civet_transport::connect_stream(sock, hello, vec![])
+            .await
+            .unwrap(),
+    )
+}
+
 fn hello(info: &BootstrapInfo, client: ClientId) -> ClientHello {
     ClientHello::new(info.session_key.clone(), client, "e2e-raw", "0")
 }
@@ -1187,22 +1206,6 @@ async fn bootstrap_local_mode() {
 async fn osc52_clipboard_event_reaches_subscribed_clients_only() {
     let (daemon, dir) = start_daemon().await;
     let info = daemon.info().clone();
-    async fn raw(daemon: &Daemon, info: &BootstrapInfo, version: &str) -> Raw {
-        let sock = tokio::net::UnixStream::connect(daemon.socket_path())
-            .await
-            .unwrap();
-        let hello = ClientHello::new(
-            info.session_key.clone(),
-            ClientId::generate().unwrap(),
-            "e2e-clip",
-            version,
-        );
-        Raw::new(
-            civet_transport::connect_stream(sock, hello, vec![])
-                .await
-                .unwrap(),
-        )
-    }
     let mut a = raw(&daemon, &info, civetd::VERSION).await;
     let mut b = raw(&daemon, &info, civetd::VERSION).await; // not subscribed
     let mut old = raw(&daemon, &info, "0.1.0").await; // subscribed, too old
@@ -1270,6 +1273,102 @@ async fn osc52_clipboard_event_reaches_subscribed_clients_only() {
     ));
     assert_eq!(clip(&a).len(), 1);
     for c in [a, b, old] {
+        c.conn.close().await;
+    }
+    daemon.shutdown("test done").await;
+}
+
+/// Prompts over the wire: a queued prompt is listed and announced to
+/// clients new enough for `Event::PromptQueue` (not to older ones), can be
+/// cancelled, and `SendPrompt` types a command into a shell and runs it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prompts_over_the_control_stream() {
+    use civet_proto::{ErrorCode, PromptTrigger};
+    let (daemon, dir) = start_daemon().await;
+    let info = daemon.info().clone();
+    let mut a = raw(&daemon, &info, civetd::VERSION).await;
+    let mut old = raw(&daemon, &info, "0.4.3").await;
+    let pane = match a.request(sh_pane(dir.path())).await.unwrap() {
+        Response::PaneSpawned(p) => p.id,
+        other => panic!("{other:?}"),
+    };
+    let queued = match a
+        .request(Request::QueuePrompt {
+            pane,
+            text: "later".into(),
+            trigger: PromptTrigger::Done,
+        })
+        .await
+    {
+        Ok(Response::QueuedPrompt(p)) => p,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!((queued.pane, queued.text.as_str()), (pane, "later"));
+    let queue_events = |c: &Raw| {
+        c.events
+            .iter()
+            .filter(|e| matches!(e, Event::PromptQueue { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while queue_events(&a).is_empty() {
+        assert!(a.pump(deadline).await, "connection closed");
+    }
+    assert_eq!(
+        queue_events(&a),
+        vec![Event::PromptQueue {
+            pane,
+            prompts: vec![queued.clone()],
+            sent: None
+        }]
+    );
+    assert_eq!(
+        old.request(Request::ListQueuedPrompts).await,
+        Ok(Response::QueuedPrompts(vec![queued.clone()]))
+    );
+    assert!(queue_events(&old).is_empty(), "{:?}", old.events);
+    assert_eq!(
+        a.request(Request::CancelQueuedPrompt { id: queued.id })
+            .await,
+        Ok(Response::Ok)
+    );
+    let err = a
+        .request(Request::CancelQueuedPrompt { id: queued.id })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+
+    // `sh` has no bracketed paste: typed as is, then Enter runs it.
+    let subscribed = a
+        .request(Request::SubscribePane {
+            pane,
+            known_state: None,
+        })
+        .await;
+    assert!(matches!(subscribed, Ok(Response::Subscribed(_))));
+    a.wait_screen(pane, Mirror::has_prompt).await;
+    assert_eq!(
+        a.request(Request::SendPrompt {
+            pane,
+            text: "echo prompt-$((40 + 2))\n".into(),
+        })
+        .await,
+        Ok(Response::Ok)
+    );
+    a.wait_screen(pane, |m| {
+        m.rows().iter().any(|r| r.trim_end() == "prompt-42")
+    })
+    .await;
+    let err = a
+        .request(Request::SendPrompt {
+            pane,
+            text: "\n".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    for c in [a, old] {
         c.conn.close().await;
     }
     daemon.shutdown("test done").await;

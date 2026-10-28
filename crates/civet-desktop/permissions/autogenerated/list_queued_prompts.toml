@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-queued-prompts"
+description = "Enables the list_queued_prompts command without any pre-configured scope."
+commands.allow = ["list_queued_prompts"]
+
+[[permission]]
+identifier = "deny-list-queued-prompts"
+description = "Denies the list_queued_prompts command without any pre-configured scope."
+commands.deny = ["list_queued_prompts"]

@@ -283,6 +283,20 @@ fn every_command_through_ipc() {
             "set_agent_status",
             json!({ "hostId": "x", "pane": 1, "status": "needsInput" }),
         ),
+        (
+            "send_prompt",
+            json!({ "hostId": "x", "pane": 1, "text": "run the tests" }),
+        ),
+        (
+            "queue_prompt",
+            json!({ "hostId": "x", "pane": 1, "text": "then commit", "trigger": "doneOrNeedsInput" }),
+        ),
+        (
+            "edit_queued_prompt",
+            json!({ "hostId": "x", "id": 3, "text": "then push", "trigger": "done" }),
+        ),
+        ("cancel_queued_prompt", json!({ "hostId": "x", "id": 3 })),
+        ("list_queued_prompts", json!({ "hostId": "x" })),
     ];
     for (cmd, args) in calls {
         let err = invoke(&w, cmd, args).unwrap_err();

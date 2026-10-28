@@ -20,6 +20,8 @@
 //!   their own QUIC streams.
 //! * [`stats`]: host resource stats ([`HostStats`]), polled by the
 //!   stats view.
+//! * [`prompts`]: prompts the daemon types into agent panes (broadcast and
+//!   queued follow-ups, [`QueuedPrompt`]).
 //! * [`usage`]: agent token use and estimated spend ([`AgentUsage`]), read
 //!   from the agents' session logs.
 //! * [`term`]: terminal traffic: [`InputMessage`] (client keystrokes with
@@ -58,6 +60,7 @@ pub mod ids;
 pub mod keys;
 pub mod messages;
 pub mod ports;
+pub mod prompts;
 pub mod stats;
 pub mod term;
 pub mod usage;
@@ -87,6 +90,7 @@ pub use ids::{ClientId, PaneId, RepoId, RequestId, WorktreeId};
 pub use keys::{CertFingerprint, ResumeToken, SessionKey};
 pub use messages::{ClientMessage, ServerMessage, StreamOpen};
 pub use ports::{ForwardReply, ListeningPort, MAX_PORT_COMMAND_CHARS, PortsUpdate};
+pub use prompts::{MAX_PROMPT_BYTES, MAX_QUEUED_PROMPTS, PromptTrigger, QueuedPrompt};
 pub use stats::{
     DiskSpace, GpuInfo, HostStats, MAX_STATS_COMMAND_CHARS, MAX_STATS_PROCESSES, MAX_STATS_SAMPLES,
     ProcessUsage, StatsSample,
@@ -196,9 +200,19 @@ pub const PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION: &str = "0.4.3";
 /// Longest [`ReviewThread::body`], in characters.
 pub const MAX_REVIEW_COMMENT_CHARS: usize = 600;
 
+/// Oldest daemon that understands [`Request::SendPrompt`] and the prompt
+/// queue requests (appended within protocol 1 after
+/// [`Request::CreatePullRequest`]).
+pub const PROMPTS_MIN_DAEMON_VERSION: &str = "0.4.4";
+
+/// Oldest client (`ClientHello::client_version`) that can decode
+/// [`Event::PromptQueue`] (appended within protocol 1 after
+/// [`Event::Clipboard`]; gated like [`CLIPBOARD_EVENT_MIN_CLIENT_VERSION`]).
+pub const PROMPT_QUEUE_EVENT_MIN_CLIENT_VERSION: &str = "0.4.4";
+
 /// Oldest daemon that understands [`Request::AgentUsage`] (appended within
-/// protocol 1 after [`Request::CreatePullRequest`]).
-pub const AGENT_USAGE_MIN_DAEMON_VERSION: &str = "0.4.4";
+/// protocol 1 after [`Request::ListQueuedPrompts`]).
+pub const AGENT_USAGE_MIN_DAEMON_VERSION: &str = "0.4.5";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
