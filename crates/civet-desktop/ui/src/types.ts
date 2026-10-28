@@ -276,7 +276,7 @@ export type GitDiffInfo = {
 
 /**
  * One stretch of an agent working in a worktree (`agent_activity`, civetd >=
- * 0.4.4): from its status turning `running` until it left it.
+ * 0.4.5): from its status turning `running` until it left it.
  */
 export type AgentTurn = {
   /** Increases by one per turn within the worktree. */
