@@ -1033,20 +1033,23 @@ impl SessionManager {
         let template = templates::normalize(template);
         {
             let mut all = self.inner.templates.lock().await;
+            // Saved first: a failed write must not leave the change applied.
+            let mut next = all.clone();
             if templates::is_unset(&template) {
-                all.remove(&r.id);
+                next.remove(&r.id);
             } else {
-                all.insert(r.id.clone(), template.clone());
+                next.insert(r.id.clone(), template.clone());
             }
             let path = self
                 .inner
                 .config
                 .state_dir
                 .join(templates::HOST_TEMPLATES_FILE);
-            let data = serde_json::to_vec_pretty(&*all).map_err(std::io::Error::other)?;
+            let data = serde_json::to_vec_pretty(&next).map_err(std::io::Error::other)?;
             tokio::task::spawn_blocking(move || hooks::write_atomic(&path, &data))
                 .await
                 .map_err(std::io::Error::other)??;
+            *all = next;
         }
         tracing::info!(repo = %r.id, "worktree template saved");
         Ok(self.template_info(&r, template).await)

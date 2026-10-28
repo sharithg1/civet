@@ -412,18 +412,7 @@ export function onDaemonEvent(hostId: string, event: DaemonEvent): void {
     const setup = setupPanes.get(wsKey(hostId, String(pane)))
     if (setup !== undefined) {
       setupPanes.delete(wsKey(hostId, String(pane)))
-      // Why only failures: a shell pane exiting is not news, but a setup
-      // script failing is easy to miss behind the agent's tab.
-      if (exitCode !== 0)
-        pushToast(
-          {
-            kind: 'error',
-            title: `Setup failed in ${setup.branch}`,
-            body: exitCode === null ? 'killed by a signal' : `exit ${exitCode}; see its Setup tab`,
-            target: { hostId, worktree: setup.worktree, pane }
-          },
-          12_000
-        )
+      setupExited(hostId, pane, exitCode, setup)
     }
   } else if ('paneClosed' in event) {
     removePaneEverywhere(hostId, event.paneClosed.pane)
@@ -1345,6 +1334,28 @@ export async function newAgentTab(
 /** Setup panes started from this window, by `wsKey(hostId, pane)`: a failure toasts. */
 const setupPanes = new Map<string, { worktree: string; branch: string }>()
 
+/**
+ * A setup pane exited. Why only failures toast: a shell pane exiting is not
+ * news, but a setup script failing is easy to miss behind the agent's tab.
+ */
+function setupExited(
+  hostId: string,
+  pane: PaneId,
+  exitCode: number | null,
+  setup: { worktree: string; branch: string }
+): void {
+  if (exitCode === 0) return
+  pushToast(
+    {
+      kind: 'error',
+      title: `Setup failed in ${setup.branch}`,
+      body: exitCode === null ? 'killed by a signal' : `exit ${exitCode}; see its Setup tab`,
+      target: { hostId, worktree: setup.worktree, pane }
+    },
+    12_000
+  )
+}
+
 export async function createWorktreeWithSteps(p: {
   hostId: string
   repo: string
@@ -1394,11 +1405,13 @@ export async function createWorktreeWithSteps(p: {
         return null
       })
     if (setup?.setupPane) {
+      const id = setup.setupPane.id
       addPaneSnapshot(p.hostId, setup.setupPane)
-      setupPanes.set(wsKey(p.hostId, String(setup.setupPane.id)), {
-        worktree: worktree.id,
-        branch
-      })
+      // Why: a quick script can exit before this reply arrives; its
+      // PaneExited (already applied to the pane) found no entry here.
+      const now = get().panes[p.hostId]?.[id] ?? setup.setupPane
+      if (now.exited) setupExited(p.hostId, id, now.exitCode, { worktree: worktree.id, branch })
+      else setupPanes.set(wsKey(p.hostId, String(id)), { worktree: worktree.id, branch })
     }
     if (setup?.warnings.length)
       pushToast(

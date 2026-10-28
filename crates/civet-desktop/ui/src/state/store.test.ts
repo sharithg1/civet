@@ -345,6 +345,49 @@ describe('store', () => {
         useStore.getState().toasts.filter((t) => t.title.startsWith('Setup failed'))
       ).toHaveLength(1)
     })
+
+    it('toasts a setup that failed before the setup reply arrived, once', async () => {
+      const setupPane = pane(7, { worktree: '/feat', agent: null, title: 'Setup', command: ['sh'] })
+      const backend = fakeBackend({
+        createWorktree: vi.fn(async () => feat),
+        setupWorktree: vi.fn(async () => {
+          // The daemon's events, before the reply.
+          store.onDaemonEvent('h', { paneCreated: setupPane })
+          store.onDaemonEvent('h', { paneExited: { pane: 7, exitCode: 1 } })
+          return {
+            template: { setup: 'false', copy: null, agent: null, prompt: null },
+            copied: [],
+            warnings: [],
+            port: 41000,
+            setupPane
+          }
+        }),
+        spawnPane: vi.fn(async () => pane(8, { worktree: '/feat' })),
+        writeInput: vi.fn(async () => {})
+      } as Partial<CivetBackend>)
+      useStore.setState({
+        backend,
+        repos: { h: [{ id: 'r', name: 'r', path: '/m', defaultBranch: 'main' }] },
+        worktrees: { [store.wtKey('h', 'r')]: [main] },
+        panes: {},
+        workspaces: {},
+        removing: {},
+        toasts: []
+      })
+      await store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'r',
+        branch: 'feat',
+        base: null,
+        steps: [{ kind: 'agent', cmd: '' }],
+        prompt: '',
+        setup: true
+      })
+      store.onDaemonEvent('h', { paneExited: { pane: 7, exitCode: 1 } })
+      const failed = useStore.getState().toasts.filter((t) => t.title === 'Setup failed in feat')
+      expect(failed).toHaveLength(1)
+      expect(useStore.getState().panes.h?.[7]?.exited).toBe(true)
+    })
   })
 
   describe('removeWorktree', () => {

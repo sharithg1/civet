@@ -221,10 +221,12 @@ async fn run(
         _ => false,
     };
 
-    let setup = if opts.setup {
-        setup_worktree(session, &wt).await
-    } else {
-        None
+    let (setup, setup_error) = match opts.setup {
+        true => match setup_worktree(session, &wt).await {
+            Ok(s) => (Some(s), None),
+            Err(e) => (None, Some(e)),
+        },
+        false => (None, None),
     };
     let template = setup.as_ref().map(|s| &s.template);
     let (mut argv, agent) = agent_argv(
@@ -272,33 +274,39 @@ async fn run(
             .map(|p| p.id.0),
         port: setup.as_ref().and_then(|s| s.port),
         copied: setup.as_ref().map(|s| s.copied.clone()).unwrap_or_default(),
-        warnings: setup.map(|s| s.warnings).unwrap_or_default(),
+        warnings: setup
+            .map(|s| s.warnings)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(setup_error)
+            .collect(),
     })
 }
 
-/// `SetupWorktree` for the new worktree. A failure is printed and the
-/// handoff goes on without the template: the agent matters more.
-async fn setup_worktree(session: &ClientSession, wt: &WorktreeInfo) -> Option<WorktreeSetup> {
+/// `SetupWorktree` for the new worktree. A failure is printed (and ends up
+/// in the result's `warnings`) and the handoff goes on without the
+/// template: the agent matters more.
+async fn setup_worktree(
+    session: &ClientSession,
+    wt: &WorktreeInfo,
+) -> Result<WorktreeSetup, String> {
     let req = Request::SetupWorktree {
         worktree: wt.id.clone(),
         size: PANE_SIZE,
     };
-    match request_within(session, req, SETUP_TIMEOUT).await {
+    let r = match request_within(session, req, SETUP_TIMEOUT).await {
         Ok(Response::WorktreeSetUp(s)) => {
             for w in &s.warnings {
                 eprintln!("civet handoff: worktree template: {w}");
             }
-            Some(s)
+            Ok(s)
         }
-        Ok(other) => {
-            eprintln!("civet handoff: unexpected response to the worktree setup: {other:?}");
-            None
-        }
-        Err(e) => {
-            eprintln!("civet handoff: the worktree template was not applied: {e}");
-            None
-        }
-    }
+        Ok(other) => Err(format!(
+            "unexpected response to the worktree setup: {other:?}"
+        )),
+        Err(e) => Err(format!("the worktree template was not applied: {e}")),
+    };
+    r.inspect_err(|e| eprintln!("civet handoff: {e}"))
 }
 
 /// argv (without the prompt) and the agent name: the command after `--`;
