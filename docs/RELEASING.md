@@ -27,10 +27,12 @@ prerelease, type an exact version (`0.2.0-rc.1`, no leading `v`) in the
 optional version field; it overrides the bump. Tick "Dry run" to only see
 the bump; the run summary shows the resolved version either way. It runs
 `scripts/release.sh` on `main`, pushes the "Release vX.Y.Z" commit and the
-tag, and starts the Release workflow on the tag (a tag pushed by a workflow
-does not trigger `push: tags` itself, so it is dispatched explicitly). If
-`main` gets branch protection that blocks pushes from Actions, this needs a
-bypass for the workflow or a personal token instead of `GITHUB_TOKEN`.
+tag; the tag push starts the Release workflow. `main` has a ruleset
+requiring pull requests and green CI, so the workflow pushes with the
+`RELEASE_DEPLOY_KEY` secret, a write deploy key the ruleset lets bypass
+(`GITHUB_TOKEN` cannot bypass rulesets on a personal repo, and its pushes
+would not trigger Release either). Pushing from a laptop works as a repo
+admin, who also bypasses.
 
 **From a laptop**, on an up-to-date, clean `main` with green CI:
 
@@ -57,9 +59,8 @@ The workflow then:
    tag, `Cargo.toml` and `tauri.conf.json` all say `X.Y.Z`, and decides the
    signing policy (see [Signing and notarization](#signing-and-notarization)).
 2. **CI**: the whole CI workflow (`ci.yml`, called as a reusable workflow)
-   on the release commit. A tag, or a commit pushed by Cut release, does not
-   trigger CI by itself, so this is the only CI run that commit gets;
-   nothing is published unless it passes.
+   on the release commit (tags do not trigger CI by themselves); nothing is
+   published unless it passes.
 3. **daemons**: one job per `civetd` target, in parallel (Linux musl on
    Ubuntu via `cargo-zigbuild`, macOS on a macOS runner), each running
    `scripts/build-remote.sh` (`dist` profile, `--locked`) and checking the

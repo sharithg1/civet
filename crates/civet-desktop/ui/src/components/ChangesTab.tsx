@@ -7,7 +7,8 @@
 // Git actions (state/git-actions.ts): a commit box on top (⌘↵, Amend, "Commit
 // all" when nothing is staged), the branch with ahead / behind and
 // Pull / Push / Fetch, stage / unstage / discard per row, per selection and
-// per group, conflict resolution, and a menu with stash, undo last commit and
+// per group, conflict resolution, "Update from main" while the branch is
+// behind the default branch, and a menu with stash, undo last commit and
 // "Discard all". Discards are undone from their toast, so only "Discard all"
 // asks first. Everything is greyed out while an action runs, and on a civetd
 // too old for git actions.
@@ -31,6 +32,7 @@ import {
 } from 'lucide-react'
 import type { GitBranchInfo, GitFileChange, GitStatusInfo } from '@/types'
 import { openDiffTab, useStore, wsKey } from '@/state/store'
+import { UpdateFromMainButton } from './UpdateFromMain'
 import {
   CHANGES_BACKGROUND_POLL_MS,
   CHANGES_POLL_MS,
@@ -454,6 +456,7 @@ function BranchBar({
         </span>
       )}
       <span className="flex-1" />
+      {!busy && <UpdateFromMainButton hostId={hostId} worktree={worktree} disabled={!canAct} />}
       {busy ? (
         <span className="flex shrink-0 items-center gap-1.5 px-1 text-xs text-quiet">
           <Spinner className="size-3" />

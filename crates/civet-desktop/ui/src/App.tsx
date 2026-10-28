@@ -4,6 +4,7 @@ import { ConnectScreen } from './components/ConnectScreen'
 import { AddProjectDialog, ConfirmDialog } from './components/Dialogs'
 import { NewWorktreeDialog } from './components/NewWorktreeDialog'
 import { RemoveWorktreeDialog } from './components/RemoveWorktreeDialog'
+import { CleanupWorktreesDialog } from './components/CleanupWorktreesDialog'
 import { RightPanel } from './components/RightPanel'
 import { SettingsView } from './components/SettingsView'
 import { Sidebar } from './components/Sidebar'
@@ -106,6 +107,7 @@ export function App() {
       )}
       {newWorktree && <NewWorktreeDialog key={`${newWorktree.hostId}:${newWorktree.repo ?? ''}`} />}
       <RemoveWorktreeDialog />
+      <CleanupWorktreesDialog />
       <AddProjectDialog />
       <ConfirmDialog />
       <Toasts />

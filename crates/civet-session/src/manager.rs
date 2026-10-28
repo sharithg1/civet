@@ -88,6 +88,7 @@ struct Inner {
     panes: Mutex<BTreeMap<PaneId, Arc<Pane>>>,
     next_pane: AtomicU64,
     repos: tokio::sync::Mutex<Vec<StoredRepo>>,
+    pushed_branches: crate::lifecycle::PushedBranches,
     /// Host-saved worktree templates by repo id (`worktree-templates.json`).
     templates: tokio::sync::Mutex<BTreeMap<String, WorktreeTemplate>>,
     /// `CIVET_PORT` by worktree id (`worktree-ports.json`).
@@ -204,6 +205,7 @@ impl SessionManager {
             panes: Mutex::new(BTreeMap::new()),
             next_pane: AtomicU64::new(1),
             repos: tokio::sync::Mutex::new(repos),
+            pushed_branches: Default::default(),
             templates: tokio::sync::Mutex::new(host_templates),
             ports: Mutex::new(ports),
             shutdown: AtomicBool::new(false),
@@ -588,6 +590,53 @@ impl SessionManager {
             crate::git_actions::ActionOutcome::Done => None,
             crate::git_actions::ActionOutcome::Discarded(s) => Some(s),
         })
+    }
+
+    /// Ahead / behind and staleness of every worktree of the repository
+    /// (see [`crate::lifecycle::repo_lifecycle`]).
+    pub async fn worktree_lifecycle(
+        &self,
+        repo: &RepoId,
+        fetch: bool,
+        review: bool,
+    ) -> Result<civet_proto::RepoLifecycle, SessionError> {
+        let r = self.find_repo(repo).await?;
+        r.require_git("worktree lifecycle")?;
+        let worktrees = self.worktrees_of(&r, false).await?;
+        crate::lifecycle::repo_lifecycle(
+            &self.inner.git,
+            Path::new(&r.path),
+            &worktrees,
+            fetch,
+            review,
+            &self.inner.pushed_branches,
+        )
+        .await
+    }
+
+    /// Bring the default branch into the worktree's branch (see
+    /// [`crate::lifecycle::update`]). Emits WorktreesChanged when HEAD
+    /// moved, so every client re-lists (and recounts).
+    pub async fn update_worktree(
+        &self,
+        worktree: &WorktreeId,
+        strategy: civet_proto::UpdateStrategy,
+    ) -> Result<civet_proto::WorktreeUpdate, SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("updates")?;
+        let out = crate::lifecycle::update(
+            &self.inner.git,
+            Path::new(&r.path),
+            Path::new(&w.path),
+            strategy,
+        )
+        .await?;
+        if out.outcome != civet_proto::UpdateOutcome::UpToDate {
+            self.emit(Event::WorktreesChanged {
+                repo: RepoId(r.id.clone()),
+            });
+        }
+        Ok(out)
     }
 
     /// `git worktree add [-b branch] -- <path> [base]`. Default path:

@@ -197,6 +197,14 @@ fn every_command_through_ipc() {
             json!({ "hostId": "x", "worktree": "/w", "action": { "discard": { "paths": ["a"], "staged": false } } }),
         ),
         (
+            "worktree_lifecycle",
+            json!({ "hostId": "x", "repo": "r", "fetch": true, "review": false }),
+        ),
+        (
+            "update_worktree",
+            json!({ "hostId": "x", "worktree": "/w", "strategy": "rebase" }),
+        ),
+        (
             "create_worktree",
             json!({ "hostId": "x", "repo": "r", "branch": "b", "base": null, "path": null }),
         ),

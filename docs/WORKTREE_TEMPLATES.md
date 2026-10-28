@@ -79,7 +79,7 @@ that moment. Use it in scripts or tell agents about it, e.g.
 ## Protocol
 
 Appended within protocol 1 (clients check
-`WORKTREE_TEMPLATE_MIN_DAEMON_VERSION` = 0.4.1 first):
+`WORKTREE_TEMPLATE_MIN_DAEMON_VERSION` = 0.4.2 first):
 `GetWorktreeTemplate{repo}` / `SetWorktreeTemplate{repo, template}` →
 `WorktreeTemplate(WorktreeTemplateInfo{repo, host, filePath, file,
 fileError, effective})`; `SetupWorktree{worktree, size}` →

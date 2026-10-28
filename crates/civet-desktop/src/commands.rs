@@ -223,6 +223,33 @@ pub async fn git_diff(
 }
 
 #[tauri::command]
+pub async fn worktree_lifecycle(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+    fetch: bool,
+    review: bool,
+) -> Res<civet_proto::RepoLifecycle> {
+    state
+        .hosts
+        .worktree_lifecycle(&host_id, repo, fetch, review)
+        .await
+}
+
+#[tauri::command]
+pub async fn update_worktree(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    strategy: civet_proto::UpdateStrategy,
+) -> Res<civet_proto::WorktreeUpdate> {
+    state
+        .hosts
+        .update_worktree(&host_id, worktree, strategy)
+        .await
+}
+
+#[tauri::command]
 pub async fn git_branch(
     state: State<'_, AppState>,
     host_id: String,
@@ -659,6 +686,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         git_diff,
         git_branch,
         git_action,
+        worktree_lifecycle,
+        update_worktree,
         create_worktree,
         worktree_template,
         set_worktree_template,

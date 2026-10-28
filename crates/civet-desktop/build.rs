@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "git_diff",
     "git_branch",
     "git_action",
+    "worktree_lifecycle",
+    "update_worktree",
     "create_worktree",
     "remove_worktree",
     "list_files",

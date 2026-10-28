@@ -50,6 +50,9 @@ import type {
   GitAction,
   GitDiscardSnapshot,
   HostStats,
+  RepoLifecycle,
+  UpdateStrategy,
+  WorktreeUpdate,
   WorktreeTemplate,
   WorktreeTemplateInfo,
   WorktreeSetup
@@ -129,7 +132,7 @@ export interface CivetBackend {
    */
   hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
-  /** A repo's worktree template and its sources (civetd >= 0.4.1). */
+  /** A repo's worktree template and its sources (civetd >= 0.4.2). */
   worktreeTemplate(hostId: string, repo: RepoId): Promise<WorktreeTemplateInfo>
   /** Replace the template saved on the host (all null: delete it). */
   setWorktreeTemplate(
@@ -162,6 +165,22 @@ export interface CivetBackend {
     worktree: WorktreeId,
     action: GitAction
   ): Promise<GitDiscardSnapshot | null>
+  /**
+   * Every worktree's ahead / behind vs. the default branch and its upstream,
+   * and which look stale (civetd >= 0.4.1). `fetch`: `git fetch --prune`
+   * first; `review`: also uncommitted changes and pull requests (slower).
+   */
+  worktreeLifecycle(
+    hostId: string,
+    repo: RepoId,
+    opts: { fetch: boolean; review: boolean }
+  ): Promise<RepoLifecycle>
+  /** Fetch the default branch, then rebase onto it or merge it in (civetd >= 0.4.1). */
+  updateWorktree(
+    hostId: string,
+    worktree: WorktreeId,
+    strategy: UpdateStrategy
+  ): Promise<WorktreeUpdate>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -391,6 +410,12 @@ export class TauriBackend implements CivetBackend {
   }
   gitAction(hostId: string, worktree: WorktreeId, action: GitAction) {
     return this.call<GitDiscardSnapshot | null>('git_action', { hostId, worktree, action })
+  }
+  worktreeLifecycle(hostId: string, repo: RepoId, opts: { fetch: boolean; review: boolean }) {
+    return this.call<RepoLifecycle>('worktree_lifecycle', { hostId, repo, ...opts })
+  }
+  updateWorktree(hostId: string, worktree: WorktreeId, strategy: UpdateStrategy) {
+    return this.call<WorktreeUpdate>('update_worktree', { hostId, worktree, strategy })
   }
   createWorktree(
     hostId: string,

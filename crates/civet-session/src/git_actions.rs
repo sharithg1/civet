@@ -815,7 +815,7 @@ async fn default_remote(git: &Git, dir: &Path) -> Result<String, SessionError> {
 }
 
 /// A command that talks to a remote: bounded by [`NETWORK_TIMEOUT`].
-async fn network(git: &Git, dir: &Path, args: &[&str]) -> Result<String, SessionError> {
+pub(crate) async fn network(git: &Git, dir: &Path, args: &[&str]) -> Result<String, SessionError> {
     match tokio::time::timeout(NETWORK_TIMEOUT, with_lock_retry(|| git.output(dir, args))).await {
         Ok(r) => r,
         Err(_) => Err(SessionError::Git(format!(

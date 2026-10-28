@@ -64,7 +64,8 @@ export async function runGitAction(
   }
 }
 
-function setBusy(key: string, label: string | null): void {
+/** Label (or clear, with null) the git action running in a worktree. */
+export function setBusy(key: string, label: string | null): void {
   useChanges.setState((s) => {
     const busy = { ...s.busy }
     if (label) busy[key] = label

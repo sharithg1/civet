@@ -562,6 +562,18 @@ impl Server {
                     self.stats.request(since, processes).await,
                 ));
             }
+            Request::WorktreeLifecycle {
+                repo,
+                fetch,
+                review,
+            } => s
+                .worktree_lifecycle(&repo, fetch, review)
+                .await
+                .map(Response::WorktreeLifecycle),
+            Request::UpdateWorktree { worktree, strategy } => s
+                .update_worktree(&worktree, strategy)
+                .await
+                .map(Response::WorktreeUpdated),
             Request::GetWorktreeTemplate { repo } => s
                 .worktree_template(&repo)
                 .await

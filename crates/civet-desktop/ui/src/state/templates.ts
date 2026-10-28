@@ -1,4 +1,4 @@
-// Worktree templates (civetd >= 0.4.1): per-project setup script, files
+// Worktree templates (civetd >= 0.4.2): per-project setup script, files
 // copied from the main checkout, default agent command and first prompt.
 // Saved on the host (so `civet handoff` uses them too) and merged there
 // with the repository's `.civet/worktree.toml`; this keeps the last reply
@@ -12,7 +12,7 @@ import type { StepKind } from './prefs'
 import { useStore, wtKey } from './store'
 
 /** Oldest civetd with worktree templates (civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION). */
-export const WORKTREE_TEMPLATE_MIN_DAEMON_VERSION = '0.4.1'
+export const WORKTREE_TEMPLATE_MIN_DAEMON_VERSION = '0.4.2'
 
 export const EMPTY_TEMPLATE: WorktreeTemplate = {
   setup: null,

@@ -1191,6 +1191,35 @@ impl HostManager {
         )
     }
 
+    /// `worktree_lifecycle`: ahead / behind and staleness of a repo's
+    /// worktrees.
+    pub async fn worktree_lifecycle(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+        fetch: bool,
+        review: bool,
+    ) -> Result<civet_proto::RepoLifecycle, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION)?;
+        let request = Request::WorktreeLifecycle {
+            repo,
+            fetch,
+            review,
+        };
+        expect_response!(self.request(host_id, request).await?, Response::WorktreeLifecycle(l) => l)
+    }
+
+    /// `update_worktree`: bring the default branch into the worktree.
+    pub async fn update_worktree(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        strategy: civet_proto::UpdateStrategy,
+    ) -> Result<civet_proto::WorktreeUpdate, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::UpdateWorktree { worktree, strategy }).await?, Response::WorktreeUpdated(u) => u)
+    }
+
     /// `create_worktree`
     pub async fn create_worktree(
         &self,

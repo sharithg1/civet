@@ -100,6 +100,118 @@ pub struct PullRequestInfo {
     pub state: PullRequestState,
 }
 
+/// Why a worktree looks finished with ([`WorktreeLifecycle::stale`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StaleReason {
+    /// The branch was merged into the default branch: its tip is in the
+    /// default branch's history without being on its first-parent line
+    /// (a fresh branch that never left the default branch is not merged).
+    Merged,
+    /// The branch has commits of its own and an upstream that is configured
+    /// but no longer on the remote (deleted after its PR, `fetch --prune`d).
+    /// Only once the branch is known to have been pushed (it has a PR, or
+    /// this daemon saw the upstream exist): Civet configures the upstream of
+    /// a new branch before its first push.
+    UpstreamGone,
+    /// The branch's newest pull request was merged.
+    PullRequestMerged,
+    /// The branch's newest pull request was closed without merging.
+    PullRequestClosed,
+}
+
+/// Where a worktree's branch stands against the default branch and its
+/// upstream, and whether it looks stale ([`Request::WorktreeLifecycle`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeLifecycle {
+    /// Worktree.
+    pub worktree: WorktreeId,
+    /// Checked-out branch; None if detached.
+    pub branch: Option<String>,
+    /// Commits on HEAD that [`RepoLifecycle::base`] lacks (0 without a base).
+    pub ahead: u64,
+    /// Commits on the base that HEAD lacks.
+    pub behind: u64,
+    /// Remote-tracking branch of the upstream (`origin/feat`), also when it
+    /// is gone.
+    pub upstream: Option<String>,
+    /// Commits on HEAD the upstream lacks (0 if there is none or it is gone).
+    pub upstream_ahead: u64,
+    /// Commits on the upstream HEAD lacks.
+    pub upstream_behind: u64,
+    /// The upstream is configured but its remote-tracking branch is missing.
+    pub upstream_gone: bool,
+    /// Commits on HEAD that neither the base nor any remote-tracking branch
+    /// has (would be lost with the branch).
+    pub unpushed: u64,
+    /// Paths with uncommitted changes, untracked files included; None unless
+    /// `review` was asked.
+    pub dirty: Option<u64>,
+    /// The branch's newest pull request; None unless `review` was asked and
+    /// `gh` answered.
+    pub pull_request: Option<PullRequestInfo>,
+    /// Why the worktree looks stale; empty if it does not. Always empty for
+    /// the main worktree, a detached HEAD and the default branch itself.
+    pub stale: Vec<StaleReason>,
+}
+
+/// Every worktree of a repository with its [`WorktreeLifecycle`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLifecycle {
+    /// What `ahead` / `behind` and `Merged` are measured against: the
+    /// default branch's remote-tracking branch (`origin/main`) if it exists,
+    /// else the local one (`main`); None if there is no default branch.
+    pub base: Option<String>,
+    /// One per worktree, in `git worktree list` order.
+    pub worktrees: Vec<WorktreeLifecycle>,
+    /// `fetch` was asked and failed (offline...): the counts are from the
+    /// last fetch.
+    pub fetch_error: Option<String>,
+    /// `review` was asked but `gh` could not list pull requests (not
+    /// installed, not logged in, not a GitHub repository).
+    pub pull_requests_error: Option<String>,
+}
+
+/// How [`Request::UpdateWorktree`] brings in the default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateStrategy {
+    /// `git rebase <base>`: linear history, but a pushed branch then needs
+    /// a force push.
+    Rebase,
+    /// `git merge <base>`: a merge commit; safe for a pushed branch.
+    Merge,
+}
+
+/// What [`Request::UpdateWorktree`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateOutcome {
+    /// HEAD already contained the base; nothing changed.
+    UpToDate,
+    /// Rebased onto / merged the base.
+    Updated,
+    /// The merge stopped with conflicts, left in the worktree to resolve
+    /// (Changes tab) and commit, or `git merge --abort`.
+    MergeConflicts,
+    /// The rebase hit conflicts and was aborted: nothing changed.
+    RebaseConflicts,
+}
+
+/// Result of [`Request::UpdateWorktree`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeUpdate {
+    /// What the worktree was updated from (`origin/main`).
+    pub base: String,
+    /// What happened.
+    pub outcome: UpdateOutcome,
+    /// Conflicting paths (for either conflict outcome); empty otherwise.
+    pub conflicts: Vec<String>,
+}
+
 /// Kind of a [`FileEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -952,6 +1064,31 @@ pub enum Request {
         /// the daemon samples processes only while someone asks for them).
         processes: bool,
     },
+    /// Every worktree's ahead / behind against the default branch and its
+    /// upstream, and which look stale. -> [`Response::WorktreeLifecycle`].
+    /// Clients send it only to daemons of at least
+    /// [`crate::WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION`] (also
+    /// [`Request::UpdateWorktree`]).
+    WorktreeLifecycle {
+        /// Repository.
+        repo: RepoId,
+        /// `git fetch --prune` first, so merged and deleted branches show.
+        fetch: bool,
+        /// Also count uncommitted changes and ask `gh` for pull requests
+        /// (slower: for the clean-up review, not a sidebar refresh).
+        review: bool,
+    },
+    /// Fetch the default branch and rebase the worktree's branch onto it,
+    /// or merge it in. Refused (`InvalidArgument`) on a detached HEAD, the
+    /// default branch itself, with uncommitted changes to tracked files or
+    /// with a merge / rebase already in progress. Conflicts are an outcome,
+    /// not an error. -> [`Response::WorktreeUpdated`]
+    UpdateWorktree {
+        /// Worktree.
+        worktree: WorktreeId,
+        /// Rebase or merge.
+        strategy: UpdateStrategy,
+    },
     /// The repository's worktree template and its sources.
     /// -> [`Response::WorktreeTemplate`]. Clients send it (and
     /// [`Request::SetWorktreeTemplate`], [`Request::SetupWorktree`]) only to
@@ -1052,6 +1189,10 @@ pub enum Response {
     Dirs(HostDirListing),
     /// Reply to [`Request::HostStats`].
     HostStats(crate::stats::HostStats),
+    /// Reply to [`Request::WorktreeLifecycle`].
+    WorktreeLifecycle(RepoLifecycle),
+    /// Reply to [`Request::UpdateWorktree`].
+    WorktreeUpdated(WorktreeUpdate),
     /// Reply to [`Request::GetWorktreeTemplate`] and
     /// [`Request::SetWorktreeTemplate`].
     WorktreeTemplate(WorktreeTemplateInfo),

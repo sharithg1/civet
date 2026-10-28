@@ -67,14 +67,19 @@ import type {
   GitStatusInfo,
   HostStats,
   ProcessUsage,
+  RepoLifecycle,
+  StaleReason,
+  StatsSample,
+  UpdateStrategy,
+  WorktreeLifecycle,
   WorktreeSetup,
   WorktreeTemplate,
   WorktreeTemplateInfo,
-  StatsSample
+  WorktreeUpdate
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.4.1'
+export const MOCK_VERSION = '0.4.2'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -85,7 +90,7 @@ const MOCK_LIST_DIRS_VERSION = '0.1.18'
 /** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
 const MOCK_HOST_STATS_VERSION = '0.2.1'
 /** Mock daemons have worktree templates from this version on (WORKTREE_TEMPLATE_MIN_DAEMON_VERSION). */
-const MOCK_TEMPLATES_VERSION = '0.4.1'
+const MOCK_TEMPLATES_VERSION = '0.4.2'
 /** First mock `CIVET_PORT`; blocks of ten, like civetd. */
 const MOCK_PORT_FIRST = 41000
 
@@ -1530,6 +1535,51 @@ export class MockBackend implements CivetBackend {
     ]
   }
 
+  async worktreeLifecycle(
+    hostId: string,
+    repo: string,
+    opts: { fetch: boolean; review: boolean }
+  ): Promise<RepoLifecycle> {
+    this.checkGitActions(hostId)
+    const list = this.host(hostId).worktrees.get(repo)
+    if (!list) throw new CivetError('notFound', `repo ${repo} not found`)
+    if (list[0]) this.host(hostId).checkGit(list[0].id, 'worktree lifecycle')
+    // A fetch and gh take a moment, so the dialog's loading state shows.
+    if (opts.fetch || opts.review) await sleep(500)
+    const prs = new Map<string, PullRequestInfo>()
+    if (opts.review) {
+      for (const pr of await this.listPullRequests(hostId, repo)) {
+        if (!prs.has(pr.branch)) prs.set(pr.branch, pr)
+      }
+    }
+    return {
+      base: 'origin/main',
+      worktrees: list.map((w) =>
+        this.git(hostId, w.id).lifecycle(w, opts.review, w.branch ? prs.get(w.branch) : undefined)
+      ),
+      fetchError: null,
+      pullRequestsError: null
+    }
+  }
+
+  async updateWorktree(
+    hostId: string,
+    worktree: string,
+    strategy: UpdateStrategy
+  ): Promise<WorktreeUpdate> {
+    this.checkGitActions(hostId)
+    this.host(hostId).checkGit(worktree, 'updates')
+    await sleep(700)
+    const out = this.git(hostId, worktree).updateFromBase(strategy)
+    if (out.outcome !== 'upToDate') {
+      const repo = [...this.host(hostId).worktrees].find(([, l]) =>
+        l.some((w) => w.id === worktree)
+      )?.[0]
+      if (repo) this.host(hostId).event({ worktreesChanged: { repo } })
+    }
+    return out
+  }
+
   async createWorktree(
     hostId: string,
     repo: string,
@@ -2053,7 +2103,8 @@ function mockGitStatus(worktree: string): GitStatusInfo {
     conflicted: [],
     truncated: false
   }
-  if (worktree.endsWith('/civet')) return empty
+  // Clean: the merged one (removable without force) and one to update.
+  if (worktree.endsWith('/civet') || MOCK_CLEAN.some((n) => worktree.endsWith(n))) return empty
   if (worktree.endsWith('fix-flaky-e2e')) {
     return { ...empty, conflicted: [change('tests/e2e/src/reconnect.rs', 'conflicted', 6, 2)] }
   }
@@ -2076,6 +2127,25 @@ function mockGitStatus(worktree: string): GitStatusInfo {
     ],
     untracked: [change('crates/civet-transport/tests/resume.rs', 'untracked', 4, 0)]
   }
+}
+
+const MOCK_CLEAN = ['/scrollback-paging', '/fix-wake-reconnect']
+
+/**
+ * Seeded counts vs. origin/main per mock branch (worktreeLifecycle): a
+ * merged one, one whose remote branch was deleted after its PR closed, one
+ * behind main whose rebase conflicts. Others start even with main.
+ */
+const MOCK_LIFECYCLE: Record<
+  string,
+  { ahead: number; behind: number; gone?: boolean; merged?: boolean; conflicts?: string[] }
+> = {
+  'quic-resume': { ahead: 5, behind: 3 },
+  'scrollback-paging': { ahead: 0, behind: 12, merged: true },
+  // Keyed by the path's last segment (MockGit's branch).
+  'workspace-v3': { ahead: 8, behind: 0 },
+  'fix-flaky-e2e': { ahead: 1, behind: 4, gone: true },
+  'fix-wake-reconnect': { ahead: 2, behind: 6, conflicts: ['src/main/reconnect.ts'] }
 }
 
 const GROWING = 'crates/civet-transport/src/session.rs'
@@ -2105,6 +2175,8 @@ class MockGit {
   private discarded = new WeakMap<GitDiscardSnapshot, Lists>()
   /** The session.rs edit grows while the "agent" keeps writing (until touched). */
   private growing = true
+  /** vs. origin/main (worktreeLifecycle, updateFromBase) */
+  base: { ahead: number; behind: number; gone: boolean; merged: boolean; conflicts: string[] }
 
   constructor(
     worktree: string,
@@ -2126,6 +2198,79 @@ class MockGit {
       hasRemote: true
     }
     if (name === 'quic-resume') this.commits = [[], []]
+    const seed = MOCK_LIFECYCLE[branch]
+    this.base = {
+      ahead: seed?.ahead ?? 0,
+      behind: seed?.behind ?? 0,
+      gone: seed?.gone ?? false,
+      merged: seed?.merged ?? false,
+      conflicts: seed?.conflicts ?? []
+    }
+  }
+
+  /** This worktree's lifecycle; `pr` is its branch's newest PR (review only). */
+  lifecycle(w: WorktreeInfo, review: boolean, pr: PullRequestInfo | undefined): WorktreeLifecycle {
+    const b = this.branch
+    const exempt = w.isMain || !w.branch || w.branch === 'main'
+    const stale: StaleReason[] = []
+    if (!exempt) {
+      if (this.base.merged && this.base.ahead === 0) stale.push('merged')
+      if (this.base.gone && this.base.ahead > 0) stale.push('upstreamGone')
+      if (pr?.state === 'merged') stale.push('pullRequestMerged')
+      if (pr?.state === 'closed') stale.push('pullRequestClosed')
+    }
+    const l = this.lists
+    const dirty = new Set(
+      [...l.staged, ...l.unstaged, ...l.untracked, ...l.conflicted].map((c) => c.path)
+    ).size
+    return {
+      worktree: w.id,
+      branch: w.branch,
+      ahead: this.base.ahead,
+      behind: this.base.behind,
+      upstream: b.upstream,
+      upstreamAhead: this.base.gone ? 0 : b.ahead,
+      upstreamBehind: this.base.gone ? 0 : b.behind,
+      upstreamGone: this.base.gone,
+      unpushed: b.upstream && !this.base.gone ? b.ahead : this.base.ahead,
+      dirty: review ? dirty : null,
+      pullRequest: review ? (pr ?? null) : null,
+      stale
+    }
+  }
+
+  /** Rebase onto / merge origin/main, refused the way civetd refuses. */
+  updateFromBase(strategy: UpdateStrategy): WorktreeUpdate {
+    const refuse = (m: string) => new CivetError('invalidArgument', `invalid argument: ${m}`)
+    if (this.branch.branch === 'main') throw refuse('main is the default branch; use Pull instead')
+    if (this.lists.conflicted.length)
+      throw refuse('a merge is already in progress here; finish or abort it first')
+    if (this.lists.staged.length || this.lists.unstaged.length)
+      throw refuse('there are uncommitted changes; commit or stash them first')
+    const base = 'origin/main'
+    if (this.base.behind === 0) return { base, outcome: 'upToDate', conflicts: [] }
+    const conflicts = this.base.conflicts
+    if (conflicts.length && strategy === 'rebase') {
+      return { base, outcome: 'rebaseConflicts', conflicts: [...conflicts] }
+    }
+    if (conflicts.length) {
+      this.put(
+        'conflicted',
+        conflicts.map((p) => change(p, 'conflicted', 3, 3))
+      )
+      return { base, outcome: 'mergeConflicts', conflicts: [...conflicts] }
+    }
+    this.base.behind = 0
+    if (strategy === 'merge') {
+      this.base.ahead += 1
+      this.branch.ahead += 1
+      this.commits.push([])
+    } else if (this.branch.upstream) {
+      // Rewritten history: the upstream now has all of them "behind".
+      this.branch.behind += this.branch.ahead
+    }
+    this.branch.head = fakeSha()
+    return { base, outcome: 'updated', conflicts: [] }
   }
 
   status(polls: number): GitStatusInfo {
