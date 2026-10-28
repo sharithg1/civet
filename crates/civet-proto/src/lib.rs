@@ -70,7 +70,8 @@ pub use control::{
     FilePreview, GitAction, GitBlobRef, GitBranchInfo, GitChangeKind, GitDiffInfo, GitDiscardEntry,
     GitDiscardSnapshot, GitFileChange, GitStatusInfo, HostDir, HostDirListing, KillSignal,
     LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind, PullRequestInfo, PullRequestState,
-    RepoInfo, Request, Response, RpcError, SpawnPaneRequest, SubscribeInfo, WorktreeInfo,
+    RepoInfo, RepoLifecycle, Request, Response, RpcError, SpawnPaneRequest, StaleReason,
+    SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle, WorktreeUpdate,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -167,6 +168,11 @@ pub const LIST_DIRS_MIN_DAEMON_VERSION: &str = "0.1.18";
 /// Oldest daemon that understands [`Request::HostStats`] (appended within
 /// protocol 1 after [`Request::ListDirs`]).
 pub const HOST_STATS_MIN_DAEMON_VERSION: &str = "0.2.1";
+
+/// Oldest daemon that understands [`Request::WorktreeLifecycle`] and
+/// [`Request::UpdateWorktree`] (appended within protocol 1 after
+/// [`Request::HostStats`]).
+pub const WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION: &str = "0.4.1";
 
 /// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;

@@ -284,6 +284,19 @@ fn all_requests() -> Vec<Request> {
             since: Some(41),
             processes: true,
         },
+        Request::WorktreeLifecycle {
+            repo: RepoId("abcd".into()),
+            fetch: true,
+            review: false,
+        },
+        Request::UpdateWorktree {
+            worktree: WorktreeId::from("/w"),
+            strategy: UpdateStrategy::Rebase,
+        },
+        Request::UpdateWorktree {
+            worktree: WorktreeId::from("/w"),
+            strategy: UpdateStrategy::Merge,
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -517,6 +530,17 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
             truncated: false,
         })),
         Ok(Response::HostStats(host_stats())),
+        Ok(Response::WorktreeLifecycle(repo_lifecycle())),
+        Ok(Response::WorktreeUpdated(WorktreeUpdate {
+            base: "origin/main".into(),
+            outcome: UpdateOutcome::RebaseConflicts,
+            conflicts: vec!["src/a.rs".into()],
+        })),
+        Ok(Response::WorktreeUpdated(WorktreeUpdate {
+            base: "main".into(),
+            outcome: UpdateOutcome::UpToDate,
+            conflicts: vec![],
+        })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -916,6 +940,88 @@ fn host_stats() -> HostStats {
             worktree: Some(WorktreeId::from("/w")),
         }],
     }
+}
+
+fn repo_lifecycle() -> RepoLifecycle {
+    let pr = PullRequestInfo {
+        number: 9,
+        branch: "feat/x".into(),
+        title: "X".into(),
+        url: "https://github.com/o/r/pull/9".into(),
+        state: PullRequestState::Merged,
+    };
+    RepoLifecycle {
+        base: Some("origin/main".into()),
+        worktrees: vec![
+            WorktreeLifecycle {
+                worktree: WorktreeId::from("/r"),
+                branch: Some("main".into()),
+                ahead: 0,
+                behind: 3,
+                upstream: Some("origin/main".into()),
+                upstream_ahead: 0,
+                upstream_behind: 3,
+                upstream_gone: false,
+                unpushed: 0,
+                dirty: None,
+                pull_request: None,
+                stale: vec![],
+            },
+            WorktreeLifecycle {
+                worktree: WorktreeId::from("/w"),
+                branch: Some("feat/x".into()),
+                ahead: 2,
+                behind: 1,
+                upstream: Some("origin/feat/x".into()),
+                upstream_ahead: 0,
+                upstream_behind: 0,
+                upstream_gone: true,
+                unpushed: 2,
+                dirty: Some(4),
+                pull_request: Some(pr),
+                stale: vec![StaleReason::UpstreamGone, StaleReason::PullRequestMerged],
+            },
+        ],
+        fetch_error: Some("could not resolve host".into()),
+        pull_requests_error: None,
+    }
+}
+
+#[test]
+fn worktree_lifecycle_is_appended() {
+    // Appended within protocol 1 after HostStats (31) / HostStats (26).
+    let req = encode(&Request::WorktreeLifecycle {
+        repo: RepoId("r".into()),
+        fetch: false,
+        review: true,
+    })
+    .unwrap();
+    assert_eq!(req, vec![32, 1, b'r', 0, 1]);
+    let req = encode(&Request::UpdateWorktree {
+        worktree: WorktreeId::from("/"),
+        strategy: UpdateStrategy::Merge,
+    })
+    .unwrap();
+    assert_eq!(req, vec![33, 1, b'/', 1]);
+    assert_eq!(
+        encode(&Response::WorktreeLifecycle(repo_lifecycle())).unwrap()[0],
+        27
+    );
+    let v = serde_json::to_value(Response::WorktreeLifecycle(repo_lifecycle())).unwrap();
+    let w = &v["worktreeLifecycle"]["worktrees"][1];
+    assert_eq!(w["upstreamGone"], true);
+    assert_eq!(
+        w["stale"],
+        serde_json::json!(["upstreamGone", "pullRequestMerged"])
+    );
+    assert_eq!(w["pullRequest"]["state"], "merged");
+    let v = serde_json::to_value(Response::WorktreeUpdated(WorktreeUpdate {
+        base: "origin/main".into(),
+        outcome: UpdateOutcome::MergeConflicts,
+        conflicts: vec!["a".into()],
+    }))
+    .unwrap();
+    assert_eq!(v["worktreeUpdated"]["outcome"], "mergeConflicts");
 }
 
 #[test]

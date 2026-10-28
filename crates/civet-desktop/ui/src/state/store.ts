@@ -1422,15 +1422,17 @@ export async function createWorktreeWithSteps(p: {
  * Failures are reported as a toast; git's refusal is kept so reopening the
  * dialog offers "Remove anyway". A worktree the host no longer knows
  * (removed from a terminal meanwhile) counts as removed. Either way the
- * repo is re-listed so the sidebar matches git.
+ * repo is re-listed so the sidebar matches git. Resolves true once removed;
+ * `quiet` leaves out the success toast (Clean up sums several up).
  */
 export async function removeWorktree(
   hostId: string,
   worktree: string,
-  force: boolean
-): Promise<void> {
+  force: boolean,
+  opts: { quiet?: boolean } = {}
+): Promise<boolean> {
   const key = wsKey(hostId, worktree)
-  if (get().removing[key]) return
+  if (get().removing[key]) return false
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   const name = wt?.branch ?? worktree
   set((s) => ({ removing: { ...s.removing, [key]: true } }))
@@ -1464,7 +1466,7 @@ export async function removeWorktree(
       settle(e.message)
       reportError(`Could not remove ${name}`, err)
       if (wt) void refreshWorktrees(hostId, wt.repo)
-      return
+      return false
     }
   }
   settle(null)
@@ -1492,10 +1494,13 @@ export async function removeWorktree(
     else set({ active: null })
   }
   if (wt) void refreshWorktrees(hostId, wt.repo)
-  pushToast(
-    { kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` },
-    3200
-  )
+  if (!opts.quiet) {
+    pushToast(
+      { kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` },
+      3200
+    )
+  }
+  return true
 }
 
 /**

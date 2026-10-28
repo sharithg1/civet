@@ -201,6 +201,56 @@ export type GitBranchInfo = {
   hasRemote: boolean
 }
 
+/** Why a worktree looks finished with (`worktree_lifecycle`). */
+export type StaleReason = 'merged' | 'upstreamGone' | 'pullRequestMerged' | 'pullRequestClosed'
+
+/** A worktree's branch vs. the default branch and its upstream (civetd >= 0.4.1). */
+export type WorktreeLifecycle = {
+  worktree: WorktreeId
+  branch: string | null
+  /** Commits on HEAD that `RepoLifecycle.base` lacks. */
+  ahead: number
+  /** Commits on the base that HEAD lacks. */
+  behind: number
+  /** `origin/feat`, also when it is gone. */
+  upstream: string | null
+  upstreamAhead: number
+  upstreamBehind: number
+  /** Configured, but the remote-tracking branch is missing. */
+  upstreamGone: boolean
+  /** Commits on neither the base nor any remote branch. */
+  unpushed: number
+  /** Paths with uncommitted changes; null unless asked with `review`. */
+  dirty: number | null
+  /** The branch's newest PR; null unless asked with `review` (and gh answered). */
+  pullRequest: PullRequestInfo | null
+  /** Empty if it does not look stale. */
+  stale: StaleReason[]
+}
+
+export type RepoLifecycle = {
+  /** `origin/main` (or `main` without the remote branch); null without a default branch. */
+  base: string | null
+  worktrees: WorktreeLifecycle[]
+  /** `fetch` failed: counts are from the last fetch. */
+  fetchError: string | null
+  /** `review` asked, but gh could not list pull requests. */
+  pullRequestsError: string | null
+}
+
+export type UpdateStrategy = 'rebase' | 'merge'
+
+export type UpdateOutcome = 'upToDate' | 'updated' | 'mergeConflicts' | 'rebaseConflicts'
+
+/** What `update_worktree` did. */
+export type WorktreeUpdate = {
+  /** What it was updated from: `origin/main`. */
+  base: string
+  outcome: UpdateOutcome
+  /** Conflicting paths (either conflict outcome). */
+  conflicts: string[]
+}
+
 /** A blob in the object database and the git mode to restore it with. */
 export type GitBlobRef = { oid: string; mode: number }
 

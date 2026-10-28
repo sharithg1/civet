@@ -30,6 +30,8 @@
     "allow-git-diff",
     "allow-git-branch",
     "allow-git-action",
+    "allow-worktree-lifecycle",
+    "allow-update-worktree",
     "allow-create-worktree",
     "allow-remove-worktree",
     "allow-list-files",

@@ -49,7 +49,10 @@ import type {
   GitBranchInfo,
   GitAction,
   GitDiscardSnapshot,
-  HostStats
+  HostStats,
+  RepoLifecycle,
+  UpdateStrategy,
+  WorktreeUpdate
 } from './types'
 
 export type Unlisten = () => void
@@ -145,6 +148,22 @@ export interface CivetBackend {
     worktree: WorktreeId,
     action: GitAction
   ): Promise<GitDiscardSnapshot | null>
+  /**
+   * Every worktree's ahead / behind vs. the default branch and its upstream,
+   * and which look stale (civetd >= 0.4.1). `fetch`: `git fetch --prune`
+   * first; `review`: also uncommitted changes and pull requests (slower).
+   */
+  worktreeLifecycle(
+    hostId: string,
+    repo: RepoId,
+    opts: { fetch: boolean; review: boolean }
+  ): Promise<RepoLifecycle>
+  /** Fetch the default branch, then rebase onto it or merge it in (civetd >= 0.4.1). */
+  updateWorktree(
+    hostId: string,
+    worktree: WorktreeId,
+    strategy: UpdateStrategy
+  ): Promise<WorktreeUpdate>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -365,6 +384,12 @@ export class TauriBackend implements CivetBackend {
   }
   gitAction(hostId: string, worktree: WorktreeId, action: GitAction) {
     return this.call<GitDiscardSnapshot | null>('git_action', { hostId, worktree, action })
+  }
+  worktreeLifecycle(hostId: string, repo: RepoId, opts: { fetch: boolean; review: boolean }) {
+    return this.call<RepoLifecycle>('worktree_lifecycle', { hostId, repo, ...opts })
+  }
+  updateWorktree(hostId: string, worktree: WorktreeId, strategy: UpdateStrategy) {
+    return this.call<WorktreeUpdate>('update_worktree', { hostId, worktree, strategy })
   }
   createWorktree(
     hostId: string,

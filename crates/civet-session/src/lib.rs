@@ -29,6 +29,7 @@ mod git;
 mod git_actions;
 mod github;
 mod hooks;
+mod lifecycle;
 mod manager;
 mod pane;
 mod status;
