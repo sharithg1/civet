@@ -4,10 +4,10 @@ name: Cut release
 # version is computed from [workspace.package] in Cargo.toml), or type an
 # exact version to override it (e.g. a prerelease). Then does what
 # `scripts/release.sh X.Y.Z` plus the push do on a laptop (bump Cargo.toml / tauri.conf.json /
-# Cargo.lock, commit "Release vX.Y.Z" on main, tag, push both), then starts
-# the Release workflow on the new tag. A tag pushed with GITHUB_TOKEN does
-# not trigger other workflows; a workflow_dispatch does, so Release is
-# dispatched explicitly. See docs/RELEASING.md.
+# Cargo.lock, commit "Release vX.Y.Z" on main, tag, push both). The push uses
+# the RELEASE_DEPLOY_KEY deploy key, which bypasses the main ruleset (PRs and
+# checks required) and, unlike GITHUB_TOKEN, triggers workflows: the tag push
+# starts Release. See docs/RELEASING.md.
 
 on:
   workflow_dispatch:
@@ -35,8 +35,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # push the release commit and tag
-  actions: write # dispatch the Release workflow
+  contents: read # pushes go through RELEASE_DEPLOY_KEY
 
 jobs:
   cut:
@@ -52,6 +51,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
       - name: Rust (rust-toolchain.toml) # cargo, to refresh Cargo.lock
         run: rustup toolchain install
       - name: git identity
@@ -108,13 +108,4 @@ jobs:
         run: |
           tag="v${VERSION#v}"
           git push --atomic origin main "$tag"
-          echo "Pushed main and $tag." >> "$GITHUB_STEP_SUMMARY"
-      - name: start the Release workflow
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          tag="v${VERSION#v}"
-          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag"
-          echo "Started Release on $tag: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pushed main and $tag; the tag push starts Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"

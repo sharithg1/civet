@@ -72,6 +72,48 @@ export type WorktreeInfo = {
   locked: boolean
 }
 
+/**
+ * Per-project settings for new worktrees (civetd >= 0.4.2). null = not set
+ * here (the next source applies); an empty value is set and means nothing.
+ * Sources, first wins per field: saved on the host (project settings), then
+ * `.civet/worktree.toml` in the main checkout.
+ */
+export type WorktreeTemplate = {
+  /** Run in a "Setup" tab of each new worktree (`sh -e`, or its `#!` line). */
+  setup: string | null
+  /** Paths copied from the main checkout (`*` / `?` globs); existing files kept. */
+  copy: string[] | null
+  /** Command line of the first agent. */
+  agent: string | null
+  /** Default first prompt of the first agent. */
+  prompt: string | null
+}
+
+/** Reply to `worktree_template` / `set_worktree_template`. */
+export type WorktreeTemplateInfo = {
+  repo: RepoId
+  /** Saved on the host. */
+  host: WorktreeTemplate
+  /** `<main>/.civet/worktree.toml`. */
+  filePath: string
+  /** The parsed repository file; null if missing or broken. */
+  file: WorktreeTemplate | null
+  fileError: string | null
+  /** `host` fields over `file` fields. */
+  effective: WorktreeTemplate
+}
+
+/** Reply to `setup_worktree`. */
+export type WorktreeSetup = {
+  template: WorktreeTemplate
+  /** Paths copied from the main checkout. */
+  copied: string[]
+  warnings: string[]
+  /** The worktree's `CIVET_PORT` (set in all of its panes). */
+  port: number | null
+  setupPane: PaneInfo | null
+}
+
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
 
 export type PullRequestInfo = {
@@ -80,6 +122,54 @@ export type PullRequestInfo = {
   title: string
   url: string
   state: PullRequestState
+}
+
+/** One CI check, or all of them (`checksState`). */
+export type CheckState = 'pending' | 'passed' | 'failed' | 'skipped' | 'cancelled'
+
+export type PullRequestCheck = { name: string; state: CheckState; url: string | null }
+
+export type ReviewDecision = 'approved' | 'changesRequested' | 'reviewRequired'
+
+/** An unresolved review thread: its first comment as plain text. */
+export type ReviewThread = {
+  path: string
+  /** null: outdated, or on the whole file. */
+  line: number | null
+  outdated: boolean
+  author: string
+  body: string
+  url: string
+  /** Comments in the thread. */
+  comments: number
+}
+
+/** A worktree branch's pull request with CI and reviews (`pull_request_detail`, civetd >= 0.4.3). */
+export type PullRequestDetail = {
+  pr: PullRequestInfo
+  base: string
+  /** Any failed → failed, else any pending → pending, else passed; null without checks. */
+  checksState: CheckState | null
+  checks: PullRequestCheck[]
+  reviewDecision: ReviewDecision | null
+  /** Reviewers whose latest review approves / requests changes. */
+  approvals: number
+  changesRequested: number
+  /** Conversation comments. */
+  comments: number
+  unresolvedThreads: number
+  /** Empty unless asked for (`threads`). */
+  threads: ReviewThread[]
+}
+
+/** `create_pull_request`. An empty title fills title and body from the commits. */
+export type CreatePullRequest = {
+  worktree: WorktreeId
+  title: string
+  body: string
+  /** null: the repository's default branch. */
+  base: string | null
+  draft: boolean
 }
 
 export type FileKind = 'file' | 'dir' | 'symlink'
@@ -186,7 +276,7 @@ export type GitDiffInfo = {
 
 /**
  * One stretch of an agent working in a worktree (`agent_activity`, civetd >=
- * 0.4.1): from its status turning `running` until it left it.
+ * 0.4.4): from its status turning `running` until it left it.
  */
 export type AgentTurn = {
   /** Increases by one per turn within the worktree. */
@@ -230,6 +320,56 @@ export type GitBranchInfo = {
   /** Stash entries made on this branch. */
   stashes: number
   hasRemote: boolean
+}
+
+/** Why a worktree looks finished with (`worktree_lifecycle`). */
+export type StaleReason = 'merged' | 'upstreamGone' | 'pullRequestMerged' | 'pullRequestClosed'
+
+/** A worktree's branch vs. the default branch and its upstream (civetd >= 0.4.1). */
+export type WorktreeLifecycle = {
+  worktree: WorktreeId
+  branch: string | null
+  /** Commits on HEAD that `RepoLifecycle.base` lacks. */
+  ahead: number
+  /** Commits on the base that HEAD lacks. */
+  behind: number
+  /** `origin/feat`, also when it is gone. */
+  upstream: string | null
+  upstreamAhead: number
+  upstreamBehind: number
+  /** Configured, but the remote-tracking branch is missing. */
+  upstreamGone: boolean
+  /** Commits on neither the base nor any remote branch. */
+  unpushed: number
+  /** Paths with uncommitted changes; null unless asked with `review`. */
+  dirty: number | null
+  /** The branch's newest PR; null unless asked with `review` (and gh answered). */
+  pullRequest: PullRequestInfo | null
+  /** Empty if it does not look stale. */
+  stale: StaleReason[]
+}
+
+export type RepoLifecycle = {
+  /** `origin/main` (or `main` without the remote branch); null without a default branch. */
+  base: string | null
+  worktrees: WorktreeLifecycle[]
+  /** `fetch` failed: counts are from the last fetch. */
+  fetchError: string | null
+  /** `review` asked, but gh could not list pull requests. */
+  pullRequestsError: string | null
+}
+
+export type UpdateStrategy = 'rebase' | 'merge'
+
+export type UpdateOutcome = 'upToDate' | 'updated' | 'mergeConflicts' | 'rebaseConflicts'
+
+/** What `update_worktree` did. */
+export type WorktreeUpdate = {
+  /** What it was updated from: `origin/main`. */
+  base: string
+  outcome: UpdateOutcome
+  /** Conflicting paths (either conflict outcome). */
+  conflicts: string[]
 }
 
 /** A blob in the object database and the git mode to restore it with. */

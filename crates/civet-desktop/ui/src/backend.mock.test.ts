@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MOCK_VERSION, MockBackend } from './backend.mock'
+import { MOCK_NEW_PR_CHECKS_MS, MOCK_VERSION, MockBackend } from './backend.mock'
 import { PaneStream, type TerminalSink } from './terminal/pane-stream'
 import { RecordKind, isFull, parseRecords, type TermRecord } from './terminal/records'
-import type { HostStateEvent } from './types'
+import type { DaemonEventEnvelope, HostStateEvent } from './types'
+import { termSize } from './types'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
@@ -495,6 +496,236 @@ describe('MockBackend git actions', () => {
   })
 })
 
+describe('MockBackend pull requests', () => {
+  /** Resolve a call through the mock's fake delays. */
+  async function act<T>(p: Promise<T>): Promise<T> {
+    const settled = p.then(
+      (v) => ({ ok: true as const, v }),
+      (e: unknown) => ({ ok: false as const, e })
+    )
+    await vi.runAllTimersAsync()
+    const r = await settled
+    if (!r.ok) throw r.e
+    return r.v
+  }
+
+  it('reports checks, reviews and unresolved threads of a branch', async () => {
+    const { b } = await connected()
+    const [main, quic] = await b.listWorktrees('devbox', 'civet')
+    const d = (await act(b.pullRequestDetail('devbox', quic!.id, true)))!
+    expect(d.pr).toMatchObject({ number: 47, branch: 'quic-resume', state: 'open' })
+    expect(d.checksState).toBe('failed')
+    expect(d.reviewDecision).toBe('changesRequested')
+    expect(d.threads.length).toBe(d.unresolvedThreads)
+    expect(d.unresolvedThreads).toBeGreaterThan(0)
+    // Without threads: just the count.
+    const light = (await act(b.pullRequestDetail('devbox', quic!.id, false)))!
+    expect(light.threads).toEqual([])
+    expect(light.unresolvedThreads).toBe(d.unresolvedThreads)
+    expect(await act(b.pullRequestDetail('devbox', main!.id, true))).toBeNull()
+  })
+
+  it('opens a PR for a pushed branch; its checks run, then pass', async () => {
+    const { b } = await connected()
+    const wt = (await b.listWorktrees('devbox', 'orca'))[1]!
+    expect(await act(b.pullRequestDetail('devbox', wt.id, false))).toBeNull()
+    const req = { worktree: wt.id, title: '', body: '', base: null, draft: true }
+    // Not published yet: gh refuses.
+    await expect(act(b.createPullRequest('devbox', req))).rejects.toMatchObject({ code: 'git' })
+    await act(b.gitAction('devbox', wt.id, 'push'))
+    const pr = await act(b.createPullRequest('devbox', req))
+    expect(pr).toMatchObject({
+      branch: 'fix-wake-reconnect',
+      state: 'draft',
+      title: 'Fix wake reconnect'
+    })
+    expect((await b.listPullRequests('devbox', 'orca')).map((p) => p.number)).toEqual([pr.number])
+    expect((await act(b.pullRequestDetail('devbox', wt.id, false)))?.checksState).toBe('pending')
+    await vi.advanceTimersByTimeAsync(MOCK_NEW_PR_CHECKS_MS)
+    const d = (await act(b.pullRequestDetail('devbox', wt.id, false)))!
+    expect(d.checksState).toBe('passed')
+    expect(d.checks.every((c) => c.state === 'passed')).toBe(true)
+    expect(d.base).toBe('main')
+    // One open PR per branch.
+    await expect(act(b.createPullRequest('devbox', req))).rejects.toMatchObject({
+      code: 'git',
+      message: expect.stringContaining('already exists')
+    })
+  })
+
+  it('is unsupported on folders and before civetd 0.4.3', async () => {
+    const { b } = await connected()
+    const [notes] = await b.listWorktrees('devbox', 'notes')
+    await expect(act(b.pullRequestDetail('devbox', notes!.id, false))).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    const [, wt] = await b.listWorktrees('pre-git', 'civet')
+    await expect(act(b.pullRequestDetail('pre-git', wt!.id, false))).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+  })
+})
+
 function changed(s: { staged: unknown[]; unstaged: unknown[]; untracked: unknown[] }): number {
   return s.staged.length + s.unstaged.length + s.untracked.length
 }
+
+describe('MockBackend worktree lifecycle', () => {
+  async function settle<T>(p: Promise<T>): Promise<T> {
+    const settled = p.then(
+      (v) => ({ ok: true as const, v }),
+      (e: unknown) => ({ ok: false as const, e })
+    )
+    await vi.runAllTimersAsync()
+    const r = await settled
+    if (!r.ok) throw r.e
+    return r.v
+  }
+
+  it('reports ahead / behind and stale worktrees, with PRs and changes on review', async () => {
+    const { b } = await connected()
+    const cheap = await settle(
+      b.worktreeLifecycle('devbox', 'civet', { fetch: false, review: false })
+    )
+    expect(cheap.base).toBe('origin/main')
+    const by = (l: typeof cheap) => Object.fromEntries(l.worktrees.map((w) => [w.branch, w]))
+    let w = by(cheap)
+    expect(w.main).toMatchObject({ ahead: 0, behind: 0, stale: [], dirty: null })
+    expect(w['quic-resume']).toMatchObject({ ahead: 5, behind: 3, stale: [] })
+    expect(w['scrollback-paging']!.stale).toEqual(['merged'])
+    expect(w['fix-flaky-e2e']!.stale).toEqual(['upstreamGone'])
+
+    const review = await settle(
+      b.worktreeLifecycle('devbox', 'civet', { fetch: true, review: true })
+    )
+    w = by(review)
+    expect(w['scrollback-paging']).toMatchObject({
+      stale: ['merged', 'pullRequestMerged'],
+      dirty: 0,
+      pullRequest: { number: 44 }
+    })
+    expect(w['fix-flaky-e2e']!.stale).toEqual(['upstreamGone', 'pullRequestClosed'])
+    expect(w['fix-flaky-e2e']!.dirty).toBe(1)
+    expect(w['quic-resume']!.stale).toEqual([])
+  })
+
+  it('updates from main: refusals, conflicts and a clean rebase', async () => {
+    const { b } = await connected()
+    const [main, quic, merged] = await b.listWorktrees('devbox', 'civet')
+    const [, wake] = await b.listWorktrees('devbox', 'orca')
+    await expect(settle(b.updateWorktree('devbox', main!.id, 'rebase'))).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    await expect(settle(b.updateWorktree('devbox', quic!.id, 'rebase'))).rejects.toThrow(
+      /uncommitted changes/
+    )
+    expect(await settle(b.updateWorktree('devbox', merged!.id, 'rebase'))).toEqual({
+      base: 'origin/main',
+      outcome: 'updated',
+      conflicts: []
+    })
+    expect((await settle(b.updateWorktree('devbox', merged!.id, 'merge'))).outcome).toBe('upToDate')
+
+    const rebase = await settle(b.updateWorktree('devbox', wake!.id, 'rebase'))
+    expect(rebase).toMatchObject({
+      outcome: 'rebaseConflicts',
+      conflicts: ['src/main/reconnect.ts']
+    })
+    expect((await b.gitStatus('devbox', wake!.id)).conflicted).toEqual([])
+    const merge = await settle(b.updateWorktree('devbox', wake!.id, 'merge'))
+    expect(merge.outcome).toBe('mergeConflicts')
+    expect((await b.gitStatus('devbox', wake!.id)).conflicted.map((c) => c.path)).toEqual([
+      'src/main/reconnect.ts'
+    ])
+    await expect(settle(b.updateWorktree('devbox', wake!.id, 'merge'))).rejects.toThrow(
+      /in progress/
+    )
+  })
+})
+
+describe('MockBackend worktree templates', () => {
+  it('merges host fields over the repository file, copies files and runs setup', async () => {
+    const { b } = await connected()
+    const info = await b.worktreeTemplate('devbox', 'civet')
+    expect(info.filePath).toBe('/home/dev/src/civet/.civet/worktree.toml')
+    expect(info.effective.copy).toEqual(['.env'])
+    expect(info.host).toEqual({ setup: null, copy: null, agent: null, prompt: null })
+
+    const saved = await b.setWorktreeTemplate('devbox', 'civet', {
+      setup: null,
+      copy: [' .env ', '.env.local', '.env.missing', ''],
+      agent: ' codex --full-auto ',
+      prompt: null
+    })
+    expect(saved.host.copy).toEqual(['.env', '.env.local', '.env.missing'])
+    expect(saved.effective.agent).toBe('codex --full-auto')
+    expect(saved.effective.setup).toContain('pnpm install')
+
+    const wt = await b.createWorktree('devbox', 'civet', 'tmpl')
+    const events: DaemonEventEnvelope[] = []
+    await b.onDaemonEvent((e) => events.push(e))
+    const setup = await b.setupWorktree('devbox', wt.id, termSize(100, 30))
+    expect(setup.copied).toEqual(['.env', '.env.local'])
+    expect(setup.warnings).toEqual(['.env.missing: not in the main checkout'])
+    expect(setup.port).toBe(41000)
+    expect(setup.setupPane?.title).toBe('Setup')
+    expect(b.files('devbox', wt.id).files.get('.env')).toContain('DATABASE_URL')
+    await vi.runAllTimersAsync()
+    expect(events.map((e) => e.event)).toContainEqual({
+      paneExited: { pane: setup.setupPane!.id, exitCode: 0 }
+    })
+    // Same worktree: same port, nothing copied again; another worktree: the next block.
+    const again = await b.setupWorktree('devbox', wt.id, termSize(100, 30))
+    expect([again.port, again.copied]).toEqual([41000, []])
+    const other = await b.createWorktree('devbox', 'civet', 'tmpl-2')
+    expect((await b.setupWorktree('devbox', other.id, termSize(80, 24))).port).toBe(41010)
+    await vi.runAllTimersAsync()
+
+    const main = (await b.listWorktrees('devbox', 'civet'))[0]!
+    await expect(b.setupWorktree('devbox', main.id, termSize(80, 24))).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    await expect(b.worktreeTemplate('devbox', 'notes')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    // All null deletes the host template.
+    const cleared = await b.setWorktreeTemplate('devbox', 'civet', {
+      setup: null,
+      copy: null,
+      agent: null,
+      prompt: null
+    })
+    expect(cleared.effective).toEqual(cleared.file)
+  })
+
+  it('fails the setup like sh -e', async () => {
+    const { b } = await connected()
+    await b.setWorktreeTemplate('devbox', 'orca', {
+      setup: 'echo hi\nfalse\necho never',
+      copy: null,
+      agent: null,
+      prompt: null
+    })
+    const wt = await b.createWorktree('devbox', 'orca', 'broken')
+    const events: DaemonEventEnvelope[] = []
+    await b.onDaemonEvent((e) => events.push(e))
+    const s = await b.setupWorktree('devbox', wt.id, termSize(80, 24))
+    await vi.runAllTimersAsync()
+    expect(events.map((e) => e.event)).toContainEqual({
+      paneExited: { pane: s.setupPane!.id, exitCode: 1 }
+    })
+  })
+
+  it('is unsupported before civetd 0.4.2', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.worktreeTemplate('pre-git', 'civet')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+  })
+})

@@ -4,9 +4,11 @@
 // each opens in its own tab), "Save as default for <project>", and an
 // optional first task for the first agent. The first agent step goes through `launch_agent`, so the
 // single-call "worktree + agent" path is unchanged; see
-// store.createWorktreeWithSteps.
+// store.createWorktreeWithSteps. With a worktree template (Settings →
+// Projects or `.civet/worktree.toml`) a Setup row runs it first, and its
+// agent command and prompt are the defaults (steps saved here still win).
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createWorktreeWithSteps, isFolderRepo, useStore, wtKey } from '@/state/store'
 import {
   agentCommandFor,
@@ -20,6 +22,14 @@ import { splitShellWords } from '@/lib/shell-words'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
 import { worktreeBranch } from '@/lib/worktree-view'
+import {
+  agentStepKind,
+  describeTemplate,
+  hasWorktreeTemplates,
+  loadTemplate,
+  useTemplates
+} from '@/state/templates'
+import type { WorktreeTemplate } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -54,11 +64,17 @@ function switchedCmd(from: CreateStep, to: StepKind): string {
   return next ? agentCommandFor(next) : ''
 }
 
-function defaultSteps(hostId: string, repo: string): CreateStep[] {
+/** Steps saved for the project here, else one agent: the template's command, else Settings'. */
+function defaultSteps(
+  hostId: string,
+  repo: string,
+  template?: WorktreeTemplate | null
+): CreateStep[] {
   const saved = usePrefs.getState().createSteps[wtKey(hostId, repo)]
-  return saved
-    ? saved.map((s) => ({ ...s }))
-    : [{ kind: 'agent', cmd: usePrefs.getState().agentCommand }]
+  if (saved) return saved.map((s) => ({ ...s }))
+  const agent = template?.agent?.trim()
+  if (agent) return [{ kind: agentStepKind(agent), cmd: agent }]
+  return [{ kind: 'agent', cmd: usePrefs.getState().agentCommand }]
 }
 
 export function NewWorktreeDialog() {
@@ -79,6 +95,21 @@ export function NewWorktreeDialog() {
   )
   const [save, setSave] = useState(true)
   const [prompt, setPrompt] = useState('')
+  // Template defaults arrive after the dialog opens: they replace the steps
+  // and prompt only while those are untouched.
+  const [touched, setTouched] = useState({ steps: false, prompt: false })
+  const [runSetup, setRunSetup] = useState(true)
+  const templates = req ? hasWorktreeTemplates(req.hostId) : false
+  const template = useTemplates((s) => (req ? s[wtKey(req.hostId, repoId)]?.info?.effective : null))
+  useEffect(() => {
+    if (req && repoId && templates) void loadTemplate(req.hostId, repoId)
+  }, [req, repoId, templates])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when the template arrives
+  useEffect(() => {
+    if (!req || !template) return
+    if (!touched.steps) setSteps(defaultSteps(req.hostId, repoId, template))
+    if (!touched.prompt) setPrompt(template.prompt ?? '')
+  }, [template])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mainWt = useStore((s) =>
@@ -106,8 +137,14 @@ export function NewWorktreeDialog() {
   const hasAgent = !!firstAgent
   const agentLabel = firstAgent === 'codex' ? 'Codex' : 'Claude'
   const slug = name.trim() || '<branch>'
+  const editSteps = (f: (list: CreateStep[]) => CreateStep[]) => {
+    setTouched((t) => ({ ...t, steps: true }))
+    setSteps(f)
+  }
   const update = (i: number, patch: Partial<CreateStep>) =>
-    setSteps((list) => list.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+    editSteps((list) => list.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+  const setupSummary = template ? describeTemplate(template) : ''
+  const willSetup = !useMain && runSetup && !!setupSummary
 
   async function submit() {
     if (!req || !repo || !canSubmit) return
@@ -128,7 +165,8 @@ export function NewWorktreeDialog() {
         branch: name.trim(),
         base: baseValue.trim() || null,
         steps,
-        prompt
+        prompt,
+        setup: willSetup
       })
       close()
     } catch (err) {
@@ -166,7 +204,10 @@ export function NewWorktreeDialog() {
                 onClick={() => {
                   setRepoId(r.id)
                   setBase(null)
-                  setSteps(defaultSteps(req.hostId, r.id))
+                  const t = useTemplates.getState()[wtKey(req.hostId, r.id)]?.info?.effective
+                  setSteps(defaultSteps(req.hostId, r.id, t))
+                  setPrompt(t?.prompt ?? '')
+                  setTouched({ steps: false, prompt: false })
                 }}
                 className={cn(
                   'flex h-7 cursor-pointer items-center gap-[7px] rounded-[5px] border px-2.5 text-sm',
@@ -225,6 +266,23 @@ export function NewWorktreeDialog() {
               </span>
             </div>
             <div className="overflow-hidden rounded-lg border border-border">
+              {!useMain && setupSummary && (
+                <label
+                  className="flex cursor-pointer items-center gap-2 border-b border-white/[0.08] px-2 py-1.5"
+                  title="From the project's worktree template (Settings → Projects, .civet/worktree.toml)"
+                >
+                  <Checkbox
+                    aria-label="Run worktree setup"
+                    checked={runSetup}
+                    onCheckedChange={(v) => setRunSetup(v === true)}
+                    className="size-[13px] rounded-[3px] [&_svg]:size-2.5"
+                  />
+                  <span className="shrink-0 text-xs text-body">Setup</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-2xs text-muted-foreground">
+                    {setupSummary}
+                  </span>
+                </label>
+              )}
               {steps.map((st, i) => (
                 <div
                   key={i}
@@ -275,7 +333,7 @@ export function NewWorktreeDialog() {
                     type="button"
                     title="Remove step"
                     aria-label={`Remove step ${i + 1}`}
-                    onClick={() => setSteps((list) => list.filter((_, j) => j !== i))}
+                    onClick={() => editSteps((list) => list.filter((_, j) => j !== i))}
                     className="size-[22px] cursor-pointer rounded-sm p-0 text-sm text-faint hover:bg-muted hover:text-foreground"
                   >
                     ×
@@ -285,7 +343,7 @@ export function NewWorktreeDialog() {
               <div className="flex items-center gap-2.5 px-2 py-1.5">
                 <button
                   type="button"
-                  onClick={() => setSteps((list) => [...list, { kind: 'terminal', cmd: '' }])}
+                  onClick={() => editSteps((list) => [...list, { kind: 'terminal', cmd: '' }])}
                   className="h-6 cursor-pointer rounded-[5px] border border-dashed border-white/[0.16] px-[9px] text-xs text-muted-foreground hover:border-white/30 hover:text-foreground"
                 >
                   + Add step
@@ -313,7 +371,10 @@ export function NewWorktreeDialog() {
                 ? `First task for ${agentLabel} (optional)`
                 : 'Add a Claude or Codex step to give it a first task'
             }
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(e) => {
+              setTouched((t) => ({ ...t, prompt: true }))
+              setPrompt(e.target.value)
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault()

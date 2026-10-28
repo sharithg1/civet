@@ -37,7 +37,9 @@ import type {
   TransportChoice,
   WorktreeId,
   WorktreeInfo,
+  PullRequestDetail,
   PullRequestInfo,
+  CreatePullRequest,
   DirListing,
   HostDirListing,
   FileList,
@@ -50,6 +52,12 @@ import type {
   GitAction,
   GitDiscardSnapshot,
   HostStats,
+  RepoLifecycle,
+  UpdateStrategy,
+  WorktreeUpdate,
+  WorktreeTemplate,
+  WorktreeTemplateInfo,
+  WorktreeSetup,
   AgentActivity
 } from './types'
 
@@ -127,8 +135,34 @@ export interface CivetBackend {
    */
   hostStats(hostId: string, since: number | null, processes: boolean): Promise<HostStats>
   listWorktrees(hostId: string, repo: RepoId): Promise<WorktreeInfo[]>
+  /** A repo's worktree template and its sources (civetd >= 0.4.2). */
+  worktreeTemplate(hostId: string, repo: RepoId): Promise<WorktreeTemplateInfo>
+  /** Replace the template saved on the host (all null: delete it). */
+  setWorktreeTemplate(
+    hostId: string,
+    repo: RepoId,
+    template: WorktreeTemplate
+  ): Promise<WorktreeTemplateInfo>
+  /**
+   * Apply the template to a new worktree: copy files from the main checkout,
+   * assign its `CIVET_PORT`, start the setup script in a pane. The caller
+   * starts the agent.
+   */
+  setupWorktree(hostId: string, worktree: WorktreeId, size: TermSize): Promise<WorktreeSetup>
   /** `gh pr list` on the host, newest first (needs civetd >= 0.1.5). */
   listPullRequests(hostId: string, repo: RepoId): Promise<PullRequestInfo[]>
+  /**
+   * The newest pull request of the worktree's branch with CI checks and
+   * reviews, null if none (needs civetd >= 0.4.3). `threads`: also the
+   * unresolved review threads.
+   */
+  pullRequestDetail(
+    hostId: string,
+    worktree: WorktreeId,
+    threads: boolean
+  ): Promise<PullRequestDetail | null>
+  /** `gh pr create` on the host for the worktree's (pushed) branch (needs civetd >= 0.4.3). */
+  createPullRequest(hostId: string, request: CreatePullRequest): Promise<PullRequestInfo>
   /** `git status` of a worktree with line counts (needs civetd >= 0.1.11). */
   gitStatus(hostId: string, worktree: WorktreeId): Promise<GitStatusInfo>
   /** One file's diff: index vs. HEAD if `staged`, else working tree vs. index. */
@@ -138,7 +172,7 @@ export interface CivetBackend {
     path: string,
     opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
   ): Promise<GitDiffInfo>
-  /** The agent activity timeline of a worktree (needs civetd >= 0.4.1). */
+  /** The agent activity timeline of a worktree (needs civetd >= 0.4.4). */
   agentActivity(hostId: string, worktree: WorktreeId): Promise<AgentActivity>
   /** One file's diff within an agent turn: its `fromTree` → `toTree`. */
   turnDiff(
@@ -155,6 +189,22 @@ export interface CivetBackend {
     worktree: WorktreeId,
     action: GitAction
   ): Promise<GitDiscardSnapshot | null>
+  /**
+   * Every worktree's ahead / behind vs. the default branch and its upstream,
+   * and which look stale (civetd >= 0.4.1). `fetch`: `git fetch --prune`
+   * first; `review`: also uncommitted changes and pull requests (slower).
+   */
+  worktreeLifecycle(
+    hostId: string,
+    repo: RepoId,
+    opts: { fetch: boolean; review: boolean }
+  ): Promise<RepoLifecycle>
+  /** Fetch the default branch, then rebase onto it or merge it in (civetd >= 0.4.1). */
+  updateWorktree(
+    hostId: string,
+    worktree: WorktreeId,
+    strategy: UpdateStrategy
+  ): Promise<WorktreeUpdate>
   createWorktree(
     hostId: string,
     repo: RepoId,
@@ -349,8 +399,27 @@ export class TauriBackend implements CivetBackend {
   listWorktrees(hostId: string, repo: RepoId) {
     return this.call<WorktreeInfo[]>('list_worktrees', { hostId, repo })
   }
+  worktreeTemplate(hostId: string, repo: RepoId) {
+    return this.call<WorktreeTemplateInfo>('worktree_template', { hostId, repo })
+  }
+  setWorktreeTemplate(hostId: string, repo: RepoId, template: WorktreeTemplate) {
+    return this.call<WorktreeTemplateInfo>('set_worktree_template', { hostId, repo, template })
+  }
+  setupWorktree(hostId: string, worktree: WorktreeId, size: TermSize) {
+    return this.call<WorktreeSetup>('setup_worktree', { hostId, worktree, size })
+  }
   listPullRequests(hostId: string, repo: RepoId) {
     return this.call<PullRequestInfo[]>('list_pull_requests', { hostId, repo })
+  }
+  pullRequestDetail(hostId: string, worktree: WorktreeId, threads: boolean) {
+    return this.call<PullRequestDetail | null>('pull_request_detail', {
+      hostId,
+      worktree,
+      threads
+    })
+  }
+  createPullRequest(hostId: string, request: CreatePullRequest) {
+    return this.call<PullRequestInfo>('create_pull_request', { hostId, request })
   }
   gitStatus(hostId: string, worktree: WorktreeId) {
     return this.call<GitStatusInfo>('git_status', { hostId, worktree })
@@ -394,6 +463,12 @@ export class TauriBackend implements CivetBackend {
   }
   gitAction(hostId: string, worktree: WorktreeId, action: GitAction) {
     return this.call<GitDiscardSnapshot | null>('git_action', { hostId, worktree, action })
+  }
+  worktreeLifecycle(hostId: string, repo: RepoId, opts: { fetch: boolean; review: boolean }) {
+    return this.call<RepoLifecycle>('worktree_lifecycle', { hostId, repo, ...opts })
+  }
+  updateWorktree(hostId: string, worktree: WorktreeId, strategy: UpdateStrategy) {
+    return this.call<WorktreeUpdate>('update_worktree', { hostId, worktree, strategy })
   }
   createWorktree(
     hostId: string,

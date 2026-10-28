@@ -266,6 +266,130 @@ describe('store', () => {
     })
   })
 
+  describe('createWorktreeWithSteps with a worktree template', () => {
+    const main: WorktreeInfo = {
+      id: '/m',
+      repo: 'r',
+      path: '/m',
+      branch: 'main',
+      head: null,
+      isMain: true,
+      locked: false
+    }
+    const feat: WorktreeInfo = {
+      ...main,
+      id: '/feat',
+      path: '/feat',
+      branch: 'feat',
+      isMain: false
+    }
+
+    it('sets up before starting the agent, opens a Setup tab and toasts a failed setup', async () => {
+      const calls: string[] = []
+      const setupPane = pane(5, { worktree: '/feat', agent: null, title: 'Setup', command: ['sh'] })
+      const launchAgent = vi.fn()
+      const backend = fakeBackend({
+        launchAgent,
+        createWorktree: vi.fn(async () => {
+          calls.push('create')
+          return feat
+        }),
+        setupWorktree: vi.fn(async () => {
+          calls.push('setup')
+          return {
+            template: { setup: 'make', copy: ['.env'], agent: null, prompt: null },
+            copied: ['.env'],
+            warnings: ['.env.local: not in the main checkout'],
+            port: 41000,
+            setupPane
+          }
+        }),
+        spawnPane: vi.fn(async (_h: string, req: { agent: string | null }) => {
+          calls.push(`spawn ${req.agent}`)
+          return pane(6, { worktree: '/feat', agent: req.agent })
+        }),
+        writeInput: vi.fn(async () => {})
+      } as Partial<CivetBackend>)
+      useStore.setState({
+        backend,
+        repos: { h: [{ id: 'r', name: 'r', path: '/m', defaultBranch: 'main' }] },
+        worktrees: { [store.wtKey('h', 'r')]: [main] },
+        workspaces: {},
+        removing: {},
+        toasts: []
+      })
+      await store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'r',
+        branch: 'feat',
+        base: null,
+        steps: [{ kind: 'agent', cmd: '' }],
+        prompt: 'go',
+        setup: true
+      })
+      expect(launchAgent).not.toHaveBeenCalled()
+      expect(calls).toEqual(['create', 'setup', 'spawn claude'])
+      const ws = useStore.getState().workspaces[store.wsKey('h', '/feat')]!
+      expect(ws.tabs.flatMap((t: Tab) => store.tabPanes(t))).toEqual([5, 6])
+      const titles = useStore.getState().toasts.map((t) => t.title)
+      expect(titles).toContain('Worktree template: feat')
+      expect(titles).toContain('Created feat · setup running, copied .env, opened claude')
+
+      store.onDaemonEvent('h', { paneExited: { pane: 5, exitCode: 2 } })
+      const failed = useStore.getState().toasts.find((t) => t.title === 'Setup failed in feat')
+      expect(failed).toMatchObject({ kind: 'error', target: { hostId: 'h', pane: 5 } })
+      // Only once, and not for other panes.
+      store.onDaemonEvent('h', { paneExited: { pane: 5, exitCode: 2 } })
+      store.onDaemonEvent('h', { paneExited: { pane: 6, exitCode: 1 } })
+      expect(
+        useStore.getState().toasts.filter((t) => t.title.startsWith('Setup failed'))
+      ).toHaveLength(1)
+    })
+
+    it('toasts a setup that failed before the setup reply arrived, once', async () => {
+      const setupPane = pane(7, { worktree: '/feat', agent: null, title: 'Setup', command: ['sh'] })
+      const backend = fakeBackend({
+        createWorktree: vi.fn(async () => feat),
+        setupWorktree: vi.fn(async () => {
+          // The daemon's events, before the reply.
+          store.onDaemonEvent('h', { paneCreated: setupPane })
+          store.onDaemonEvent('h', { paneExited: { pane: 7, exitCode: 1 } })
+          return {
+            template: { setup: 'false', copy: null, agent: null, prompt: null },
+            copied: [],
+            warnings: [],
+            port: 41000,
+            setupPane
+          }
+        }),
+        spawnPane: vi.fn(async () => pane(8, { worktree: '/feat' })),
+        writeInput: vi.fn(async () => {})
+      } as Partial<CivetBackend>)
+      useStore.setState({
+        backend,
+        repos: { h: [{ id: 'r', name: 'r', path: '/m', defaultBranch: 'main' }] },
+        worktrees: { [store.wtKey('h', 'r')]: [main] },
+        panes: {},
+        workspaces: {},
+        removing: {},
+        toasts: []
+      })
+      await store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'r',
+        branch: 'feat',
+        base: null,
+        steps: [{ kind: 'agent', cmd: '' }],
+        prompt: '',
+        setup: true
+      })
+      store.onDaemonEvent('h', { paneExited: { pane: 7, exitCode: 1 } })
+      const failed = useStore.getState().toasts.filter((t) => t.title === 'Setup failed in feat')
+      expect(failed).toHaveLength(1)
+      expect(useStore.getState().panes.h?.[7]?.exited).toBe(true)
+    })
+  })
+
   describe('removeWorktree', () => {
     const repo: RepoInfo = { id: 'r', name: 'r', path: '/r', defaultBranch: 'main' }
     const wt = (id: string, patch: Partial<WorktreeInfo> = {}): WorktreeInfo => ({

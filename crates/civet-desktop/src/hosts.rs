@@ -1134,6 +1134,34 @@ impl HostManager {
         expect_response!(self.request(host_id, Request::ListPullRequests { repo }).await?, Response::PullRequests(p) => p)
     }
 
+    /// `pull_request_detail`: the worktree branch's PR with checks and
+    /// reviews (`gh api graphql` on the host).
+    pub async fn pull_request_detail(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        threads: bool,
+    ) -> Result<Option<civet_proto::PullRequestDetail>, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION)?;
+        expect_response!(
+            self.request(host_id, Request::PullRequestDetail { worktree, threads }).await?,
+            Response::PullRequestDetail(d) => d
+        )
+    }
+
+    /// `create_pull_request`: `gh pr create` on the host.
+    pub async fn create_pull_request(
+        &self,
+        host_id: &str,
+        request: civet_proto::CreatePullRequest,
+    ) -> Result<civet_proto::PullRequestInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::PULL_REQUEST_DETAIL_MIN_DAEMON_VERSION)?;
+        expect_response!(
+            self.request(host_id, Request::CreatePullRequest(request)).await?,
+            Response::PullRequestCreated(p) => p
+        )
+    }
+
     /// `git_status`: the worktree's uncommitted changes.
     pub async fn git_status(
         &self,
@@ -1225,6 +1253,35 @@ impl HostManager {
         )
     }
 
+    /// `worktree_lifecycle`: ahead / behind and staleness of a repo's
+    /// worktrees.
+    pub async fn worktree_lifecycle(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+        fetch: bool,
+        review: bool,
+    ) -> Result<civet_proto::RepoLifecycle, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION)?;
+        let request = Request::WorktreeLifecycle {
+            repo,
+            fetch,
+            review,
+        };
+        expect_response!(self.request(host_id, request).await?, Response::WorktreeLifecycle(l) => l)
+    }
+
+    /// `update_worktree`: bring the default branch into the worktree.
+    pub async fn update_worktree(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        strategy: civet_proto::UpdateStrategy,
+    ) -> Result<civet_proto::WorktreeUpdate, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_LIFECYCLE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::UpdateWorktree { worktree, strategy }).await?, Response::WorktreeUpdated(u) => u)
+    }
+
     /// `create_worktree`
     pub async fn create_worktree(
         &self,
@@ -1273,6 +1330,38 @@ impl HostManager {
     ) -> Result<civet_proto::HostStats, CmdError> {
         self.check_daemon_version(host_id, civet_proto::HOST_STATS_MIN_DAEMON_VERSION)?;
         expect_response!(self.request(host_id, Request::HostStats { since, processes }).await?, Response::HostStats(s) => s)
+    }
+
+    /// `worktree_template`: a repo's template and its sources.
+    pub async fn worktree_template(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+    ) -> Result<civet_proto::WorktreeTemplateInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::GetWorktreeTemplate { repo }).await?, Response::WorktreeTemplate(t) => t)
+    }
+
+    /// `set_worktree_template`: replace the template saved on the host.
+    pub async fn set_worktree_template(
+        &self,
+        host_id: &str,
+        repo: civet_proto::RepoId,
+        template: civet_proto::WorktreeTemplate,
+    ) -> Result<civet_proto::WorktreeTemplateInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::SetWorktreeTemplate { repo, template }).await?, Response::WorktreeTemplate(t) => t)
+    }
+
+    /// `setup_worktree`: apply the template to a new worktree.
+    pub async fn setup_worktree(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        size: civet_proto::TermSize,
+    ) -> Result<civet_proto::WorktreeSetup, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKTREE_TEMPLATE_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::SetupWorktree { worktree, size }).await?, Response::WorktreeSetUp(s) => s)
     }
 
     /// `list_files`: one directory level of a worktree.

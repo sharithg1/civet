@@ -11,7 +11,11 @@
 // pane's title (see lib/worktree-view.ts). Right-clicking a worktree row
 // clears its label (branch / task name and PR badge, until they change),
 // archives it (into the project's collapsed "Archived" group) or removes it
-// (the Remove worktree dialog). While a removal runs the row is dimmed,
+// (the Remove worktree dialog), and updates it from the default branch
+// (rebase or merge, state/lifecycle.ts). Rows show how far the branch is
+// ahead of / behind the default branch; a project with stale worktrees
+// (merged, remote branch gone, PR merged or closed) shows a Clean up button
+// with their count. While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
 // (not a git repository) is a single row that selects its root: it has no
 // worktrees.
@@ -22,16 +26,16 @@ import {
   ArchiveRestore,
   ArrowLeft,
   ArrowRight,
+  Brush,
   ChevronDown,
   ChevronRight,
   Eraser,
   Folder,
   FolderPlus,
+  GitBranchPlus,
   GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
   Lock,
+  MessageSquare,
   MoreHorizontal,
   PanelLeft,
   Plus,
@@ -63,6 +67,16 @@ import {
 } from '@/state/store'
 import type { HostView } from '@/state/store'
 import { applyOrder, clampSidebarWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
+import {
+  aheadBehindLabel,
+  aheadBehindTitle,
+  updateFromMain,
+  useLifecycle,
+  useLifecycleSupported,
+  useRepoLifecycle,
+  useWorktreeLifecycle
+} from '@/state/lifecycle'
+import { useChanges } from '@/state/changes'
 import { dropLineClass, useReorder, type Reorder } from '@/lib/reorder'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { basename, cn } from '@/lib/utils'
@@ -90,7 +104,15 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  checksSummary,
+  PR_DETAIL_BACKGROUND_POLL_MS,
+  reviewSummary,
+  usePullRequestPolling,
+  usePullRequests
+} from '@/state/pull-requests'
 import { Kbd, useWorktreeTabs } from './chrome'
+import { CHECK_STATE, PR_STATE } from './PullRequestSection'
 import { IconButton } from './IconButton'
 import { PanelResizeHandle } from './PanelResizeHandle'
 import { StatusDot } from './StatusDot'
@@ -550,6 +572,8 @@ function ProjectGroup({
   const hostId = host.hostId
   const worktrees = useStore((s) => s.worktrees[wtKey(hostId, repoId)])
   const collapsed = usePrefs((s) => !!s.collapsedRepos[wtKey(hostId, repoId)])
+  useRepoLifecycle(hostId, repoId, host.state === 'connected')
+  const stale = useStaleCount(hostId, repoId)
   const archivedKeys = usePrefs((s) => s.archivedWorktrees)
   const [showArchived, setShowArchived] = useState(false)
   const list = worktrees ?? []
@@ -596,6 +620,22 @@ function ProjectGroup({
           )}
         </span>
         <span className="min-w-0 flex-1 truncate text-base text-soft">{name}</span>
+        {stale > 0 && (
+          <button
+            type="button"
+            title={`Clean up ${stale} stale worktree${stale === 1 ? '' : 's'} in ${name}`}
+            aria-label={`Clean up worktrees in ${name}`}
+            disabled={host.state !== 'connected'}
+            onClick={(e) => {
+              e.stopPropagation()
+              useLifecycle.setState({ cleanup: { hostId, repo: repoId } })
+            }}
+            className="flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-sm text-quiet hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-50 [&_svg]:size-3"
+          >
+            <Brush />
+            {stale}
+          </button>
+        )}
         <button
           type="button"
           title={`New worktree in ${name} (⌥N)`}
@@ -645,7 +685,28 @@ function ProjectGroup({
   )
 }
 
-/** Right-click menu of a worktree row: clear label, archive / unarchive, remove. */
+/**
+ * Worktrees of a project that look stale: from the daemon's lifecycle
+ * (merged, remote branch deleted) or their PR's state (merged, closed). The
+ * Clean up dialog checks again, with a fetch.
+ */
+function useStaleCount(hostId: string, repo: string): number {
+  const k = wtKey(hostId, repo)
+  const life = useLifecycle((l) => l.byRepo[k])
+  const prs = useStore((s) => s.pullRequests[k])
+  const list = useStore((s) => s.worktrees[k])
+  const defaultBranch = useStore((s) => s.repos[hostId]?.find((r) => r.id === repo)?.defaultBranch)
+  if (!life) return 0
+  return life.worktrees.filter((w) => {
+    if (w.stale.length) return true
+    if (!w.branch || w.branch === defaultBranch) return false
+    if (list?.find((x) => x.id === w.worktree)?.isMain) return false
+    const state = prs?.[w.branch]?.state
+    return state === 'merged' || state === 'closed'
+  }).length
+}
+
+/** Right-click menu of a worktree row: clear label, archive / unarchive, update, remove. */
 function WorktreeMenu({
   hostId,
   wt,
@@ -662,6 +723,17 @@ function WorktreeMenu({
   label: ClearedLabel | null
   children: ReactNode
 }) {
+  const life = useWorktreeLifecycle(hostId, wt.repo, wt.id)
+  const supported = useLifecycleSupported(hostId)
+  const busy = useChanges((c) => !!c.busy[wsKey(hostId, wt.id)])
+  const defaultBranch = useStore(
+    (s) => s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch
+  )
+  const base = life?.base ?? defaultBranch ?? 'main'
+  // Why not the main worktree: it is usually on the default branch (Pull
+  // updates that), and a feature branch there is rare.
+  const canUpdate = !!life && !!wt.branch && wt.branch !== defaultBranch && !wt.isMain && !busy
+  const behind = life?.info.behind ?? 0
   return (
     <ContextMenu>
       {/* Why: not `disabled`, which would let the webview's native menu
@@ -669,7 +741,7 @@ function WorktreeMenu({
       <ContextMenuTrigger asChild onContextMenu={(e) => removing && e.preventDefault()}>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48" onCloseAutoFocus={restoreTerminalFocus}>
+      <ContextMenuContent className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
         <ContextMenuItem
           disabled={!label}
           onSelect={() => label && setWorktreeLabelCleared(hostId, wt.id, label)}
@@ -684,6 +756,40 @@ function WorktreeMenu({
           {archived ? <ArchiveRestore /> : <Archive />}
           {archived ? 'Unarchive' : 'Archive'}
         </ContextMenuItem>
+        {supported && (
+          <>
+            <ContextMenuSeparator />
+            {canUpdate && behind === 0 ? (
+              <ContextMenuItem disabled>
+                <GitBranchPlus />
+                Up to date with {base}
+              </ContextMenuItem>
+            ) : (
+              <>
+                <ContextMenuItem
+                  disabled={!canUpdate}
+                  onSelect={() => void updateFromMain(hostId, wt.id, 'rebase')}
+                >
+                  <GitBranchPlus />
+                  Rebase onto {base}
+                </ContextMenuItem>
+                <ContextMenuItem
+                  disabled={!canUpdate}
+                  onSelect={() => void updateFromMain(hostId, wt.id, 'merge')}
+                >
+                  <GitMerge />
+                  Merge {base}
+                </ContextMenuItem>
+              </>
+            )}
+            <ContextMenuItem
+              onSelect={() => useLifecycle.setState({ cleanup: { hostId, repo: wt.repo } })}
+            >
+              <Brush />
+              Clean up worktrees…
+            </ContextMenuItem>
+          </>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
@@ -698,27 +804,54 @@ function WorktreeMenu({
   )
 }
 
-const PR_ICON = {
-  open: { Icon: GitPullRequest, className: 'text-status-ok', label: 'Open' },
-  draft: { Icon: GitPullRequestDraft, className: 'text-quiet', label: 'Draft' },
-  merged: { Icon: GitMerge, className: 'text-pr-merged', label: 'Merged' },
-  closed: { Icon: GitPullRequestClosed, className: 'text-status-err', label: 'Closed' }
-} as const
-
-/** The branch's pull request state, as in Cursor's sidebar; opens it on GitHub. */
-function PullRequestIcon({ pr }: { pr: PullRequestInfo }) {
-  const { Icon, className, label } = PR_ICON[pr.state]
+/**
+ * The branch's pull request state, as in Cursor's sidebar, with its CI state
+ * and unresolved review comments while it is open; opens it on GitHub.
+ */
+function PullRequestIcon({
+  pr,
+  hostId,
+  worktree
+}: {
+  pr: PullRequestInfo
+  hostId: string
+  worktree: string
+}) {
+  const { Icon, className, label } = PR_STATE[pr.state]
+  const live = pr.state === 'open' || pr.state === 'draft'
+  usePullRequestPolling(hostId, worktree, PR_DETAIL_BACKGROUND_POLL_MS, { enabled: live })
+  const detail = usePullRequests((s) => {
+    const d = s.byWorktree[wsKey(hostId, worktree)]?.detail
+    return live && d?.pr.number === pr.number ? d : null
+  })
+  const checks = detail?.checksState ? CHECK_STATE[detail.checksState] : null
+  const unresolved = detail?.unresolvedThreads ?? 0
+  const lines = [`#${pr.number} · ${label}`, pr.title]
+  if (detail?.checksState) lines.push(`${checks?.label}: ${checksSummary(detail)}`)
+  const review = detail && reviewSummary(detail)
+  if (review) lines.push(review)
+  if (unresolved > 0) lines.push(`${unresolved} unresolved comment${unresolved === 1 ? '' : 's'}`)
+  lines.push('Click to open on GitHub')
   return (
     <button
       type="button"
       aria-label={`Open PR #${pr.number} on GitHub`}
-      title={`#${pr.number} · ${label}\n${pr.title}\nClick to open on GitHub`}
+      title={lines.join('\n')}
       onClick={(e) => {
         e.stopPropagation()
         void openPullRequest(pr)
       }}
-      className="-mx-1 grid size-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] hover:bg-hover-strong"
+      className="-mx-1 flex h-[22px] shrink-0 cursor-pointer items-center gap-1 rounded-[4px] px-1 hover:bg-hover-strong"
     >
+      {unresolved > 0 && (
+        <span className="flex items-center gap-0.5 font-mono text-2xs text-quiet">
+          <MessageSquare className="size-3" />
+          {unresolved}
+        </span>
+      )}
+      {checks && detail?.checksState !== 'passed' && (
+        <checks.Icon aria-label={checks.label} className={cn('size-3', checks.className)} />
+      )}
       <Icon className={cn('size-3.5', className)} />
     </button>
   )
@@ -746,6 +879,8 @@ function WorktreeRow({
     if (!wt.branch || wt.branch === defaultBranch) return undefined
     return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
   })
+  const life = useWorktreeLifecycle(hostId, wt.repo, wt.id)
+  const counts = life ? aheadBehindLabel(life.info.ahead, life.info.behind) : ''
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const labelPref = usePrefs((s) => s.worktreeLabel)
   const tabsPref = usePrefs((s) => s.sidebarTabs)
@@ -838,7 +973,18 @@ function WorktreeRow({
             {title}
           </span>
           {wt.locked && <Lock aria-label="locked" className="size-3.5 shrink-0 text-dim" />}
-          {pr && !hidden.pr && !removing && <PullRequestIcon pr={pr} />}
+          {counts && life?.base && !removing && (
+            <span
+              data-ahead-behind
+              title={aheadBehindTitle(life.info.ahead, life.info.behind, life.base)}
+              className="shrink-0 font-mono text-2xs text-quiet"
+            >
+              {counts}
+            </span>
+          )}
+          {pr && !hidden.pr && !removing && (
+            <PullRequestIcon pr={pr} hostId={hostId} worktree={wt.id} />
+          )}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
           ) : wt.isMain ? (

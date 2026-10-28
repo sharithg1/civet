@@ -52,6 +52,8 @@ import type {
   TransportChoice,
   WorktreeInfo,
   PullRequestInfo,
+  PullRequestDetail,
+  CreatePullRequest,
   DirListing,
   FileEntry,
   FileList,
@@ -67,13 +69,21 @@ import type {
   GitStatusInfo,
   HostStats,
   ProcessUsage,
+  RepoLifecycle,
+  StaleReason,
   StatsSample,
+  UpdateStrategy,
+  WorktreeLifecycle,
+  WorktreeSetup,
+  WorktreeTemplate,
+  WorktreeTemplateInfo,
+  WorktreeUpdate,
   AgentActivity,
   AgentTurn
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.2.1'
+export const MOCK_VERSION = '0.4.4'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -83,11 +93,16 @@ const MOCK_PROJECTS_VERSION = '0.1.17'
 const MOCK_LIST_DIRS_VERSION = '0.1.18'
 /** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
 const MOCK_HOST_STATS_VERSION = '0.2.1'
-/**
- * Mock daemons record agent activity from this version on (civetd: 0.4.1,
- * AGENT_ACTIVITY_MIN_DAEMON_VERSION; the mock's own version predates it).
- */
-const MOCK_AGENT_ACTIVITY_VERSION = MOCK_VERSION
+/** Mock daemons have worktree templates from this version on (WORKTREE_TEMPLATE_MIN_DAEMON_VERSION). */
+const MOCK_TEMPLATES_VERSION = '0.4.2'
+/** First mock `CIVET_PORT`; blocks of ten, like civetd. */
+const MOCK_PORT_FIRST = 41000
+/** Mock daemons report PR checks / reviews and open PRs from this version on. */
+const MOCK_PR_DETAIL_VERSION = '0.4.3'
+/** How long the checks of a PR opened in the mock stay pending. */
+export const MOCK_NEW_PR_CHECKS_MS = 8000
+/** Mock daemons record agent activity from this version on (AGENT_ACTIVITY_MIN_DAEMON_VERSION). */
+const MOCK_AGENT_ACTIVITY_VERSION = '0.4.4'
 
 /** Numeric `a.b.c` comparison (state/fileops.ts imports the store, so not reused here). */
 function versionAtLeast(version: string, min: string): boolean {
@@ -269,15 +284,18 @@ class MockPane {
   shell: MockShell
   constructor(
     readonly host: MockHost,
-    public info: PaneInfo
+    public info: PaneInfo,
+    bannerText?: string
   ) {
     const cwd = info.cwd.replace(/^\/home\/dev/, '~')
     const prompt = `\x1b[32mdev@devbox\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `
-    const banner = info.agent
-      ? `\x1b[1;35m✻ ${info.agent} (mock agent)\x1b[0m\r\n` +
-        `  Working on: ${info.title}\r\n` +
-        `  This is the Civet mock backend; the agent "finishes" in ~12 s.\r\n\r\n`
-      : `\x1b[1mCivet mock shell\x1b[0m — type \x1b[33mhelp\x1b[0m for commands.\r\n`
+    const banner =
+      bannerText ??
+      (info.agent
+        ? `\x1b[1;35m✻ ${info.agent} (mock agent)\x1b[0m\r\n` +
+          `  Working on: ${info.title}\r\n` +
+          `  This is the Civet mock backend; the agent "finishes" in ~12 s.\r\n\r\n`
+        : `\x1b[1mCivet mock shell\x1b[0m — type \x1b[33mhelp\x1b[0m for commands.\r\n`)
     this.shell = new MockShell(this, prompt, banner)
   }
 
@@ -352,6 +370,22 @@ class MockHost {
   repos: RepoInfo[]
   worktrees = new Map<string, WorktreeInfo[]>()
   panes = new Map<PaneId, MockPane>()
+  /** Templates saved on the host, by repo id. */
+  templates = new Map<string, WorktreeTemplate>()
+  /** `.civet/worktree.toml` of a repo's main checkout (a string: it does not parse). */
+  templateFiles = new Map<string, WorktreeTemplate | string>([
+    [
+      'civet',
+      {
+        setup: 'pnpm install\ncp "$CIVET_MAIN_CHECKOUT/.env" .env.local',
+        copy: ['.env'],
+        agent: null,
+        prompt: null
+      }
+    ]
+  ])
+  /** `CIVET_PORT` by worktree id. */
+  ports = new Map<string, number>()
   /** worktree → agent turns, oldest first (`agentActivity`). */
   activity = new Map<string, AgentTurn[]>()
   private nextPaneId = 1
@@ -589,6 +623,8 @@ class MockHost {
     size?: TermSize
     /** Initial agent status; only a `running` agent fakes work and finishes. */
     status?: AgentStatus
+    /** Replaces the shell / agent banner. */
+    banner?: string
   }): MockPane {
     const id = this.nextPaneId++
     const info: PaneInfo = {
@@ -605,7 +641,7 @@ class MockHost {
       createdAtMs: Date.now(),
       state: 1
     }
-    const pane = new MockPane(this, info)
+    const pane = new MockPane(this, info, p.banner)
     this.panes.set(id, pane)
     if (info.status === 'running') this.beginTurn(pane)
     if (p.agent && info.status === 'running') {
@@ -833,6 +869,14 @@ export const MOCK_HOME = '/home/dev'
  * directory; `*` marks a git repository. Added repos and every ancestor
  * exist too.
  */
+const EMPTY_TEMPLATE: WorktreeTemplate = { setup: null, copy: null, agent: null, prompt: null }
+
+/** Untracked files every mock main checkout has (what templates copy). */
+const MOCK_MAIN_ONLY_FILES: Record<string, string> = {
+  '.env': 'DATABASE_URL=postgres://localhost/dev\nAPI_KEY=mock-key\n',
+  '.env.local': 'DEBUG=1\n'
+}
+
 const MOCK_HOST_DIRS = [
   '.cache',
   '.config',
@@ -998,6 +1042,8 @@ export class MockBackend implements CivetBackend {
   private gitPolls = 0
   /** wsKey-like `host\0worktree` → fake git state. */
   private gits = new Map<string, MockGit>()
+  /** `host\0repo` → its fake pull requests, newest first. */
+  private prs = new Map<string, MockPr[]>()
   readonly kind = 'mock' as const
   readonly emitter = new Emitter()
   private hosts = new Map<string, MockHost>()
@@ -1613,7 +1659,7 @@ export class MockBackend implements CivetBackend {
     if (v && !versionAtLeast(v, MOCK_AGENT_ACTIVITY_VERSION)) {
       throw new CivetError(
         'unsupported',
-        `${hostId} runs civetd ${v}; agent activity needs v0.4.1 or newer (restart the daemon to upgrade)`
+        `${hostId} runs civetd ${v}; agent activity needs v0.4.4 or newer (restart the daemon to upgrade)`
       )
     }
   }
@@ -1658,25 +1704,152 @@ export class MockBackend implements CivetBackend {
   async listPullRequests(hostId: string, repo: string): Promise<PullRequestInfo[]> {
     const main = this.host(hostId).worktrees.get(repo)?.[0]
     if (main) this.host(hostId).checkGit(main.id, 'pull requests')
-    if (repo !== 'civet') return []
-    const pr = (
-      number: number,
-      branch: string,
-      title: string,
-      state: PullRequestInfo['state']
-    ) => ({
+    return this.pullRequestsOf(hostId, repo).map((p) => ({ ...p.detail.pr }))
+  }
+
+  async pullRequestDetail(
+    hostId: string,
+    worktree: string,
+    threads: boolean
+  ): Promise<PullRequestDetail | null> {
+    const { wt } = this.prWorktree(hostId, worktree)
+    await sleep(120)
+    if (!wt.branch) return null
+    const pr = this.pullRequestsOf(hostId, wt.repo).find((p) => p.detail.pr.branch === wt.branch)
+    if (!pr) return null
+    // A PR opened here runs its CI for a while, then passes.
+    const running = pr.openedAt != null && Date.now() - pr.openedAt < MOCK_NEW_PR_CHECKS_MS
+    const checks = pr.detail.checks.map((c) => ({
+      ...c,
+      state: pr.openedAt == null ? c.state : running ? ('pending' as const) : ('passed' as const)
+    }))
+    return {
+      ...pr.detail,
+      pr: { ...pr.detail.pr },
+      checks,
+      checksState: pr.openedAt == null ? pr.detail.checksState : running ? 'pending' : 'passed',
+      threads: threads ? pr.detail.threads.map((t) => ({ ...t })) : []
+    }
+  }
+
+  async createPullRequest(hostId: string, req: CreatePullRequest): Promise<PullRequestInfo> {
+    const { wt, repo } = this.prWorktree(hostId, req.worktree)
+    if (!wt.branch) {
+      throw new CivetError(
+        'invalidArgument',
+        "invalid argument: a detached HEAD can't have a pull request"
+      )
+    }
+    const branch = this.git(hostId, wt.id).branch
+    if (!branch.upstream || branch.ahead > 0) {
+      throw new CivetError(
+        'git',
+        'git: aborted: you must first push the current branch to a remote, or use the --head flag'
+      )
+    }
+    const list = this.pullRequestsOf(hostId, wt.repo)
+    const base = req.base?.trim() || repo.defaultBranch || 'main'
+    const existing = list.find(
+      (p) => p.detail.pr.branch === wt.branch && p.detail.pr.state !== 'closed'
+    )
+    if (existing) {
+      throw new CivetError(
+        'git',
+        `git: a pull request for branch "${wt.branch}" into branch "${base}" already exists:\n${existing.detail.pr.url}`
+      )
+    }
+    await sleep(700)
+    const number = Math.max(48, ...list.map((p) => p.detail.pr.number)) + 1
+    // `--fill`: the (only) commit's subject.
+    const title =
+      req.title.trim() || wt.branch.replace(/[-_/]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+    const pr: PullRequestInfo = {
       number,
-      branch,
+      branch: wt.branch,
       title,
-      url: `https://github.com/example/civet/pull/${number}`,
-      state
+      url: `https://github.com/example/${repo.name}/pull/${number}`,
+      state: req.draft ? 'draft' : 'open'
+    }
+    list.unshift({
+      openedAt: Date.now(),
+      detail: {
+        ...mockPrDetail(pr, base, 'pending', [
+          ['rustfmt + version check', 'pending'],
+          ['clippy + test (Linux, daemon crates)', 'pending'],
+          ['desktop UI (typecheck, lint, test)', 'pending']
+        ]),
+        reviewDecision: req.draft ? null : 'reviewRequired'
+      }
     })
-    return [
-      pr(48, 'NO-TICKET/workspace-v3', 'Workspace v3 chrome', 'draft'),
-      pr(47, 'quic-resume', 'Resume QUIC sessions across network changes', 'open'),
-      pr(45, 'fix-flaky-e2e', 'Fix the flaky reconnect e2e', 'closed'),
-      pr(44, 'scrollback-paging', 'Page scrollback over the control stream', 'merged')
-    ]
+    return { ...pr }
+  }
+
+  /** The worktree (and repository) a PR request names; `unsupported` like civetd. */
+  private prWorktree(hostId: string, worktree: string): { wt: WorktreeInfo; repo: RepoInfo } {
+    const h = this.host(hostId)
+    if (!versionAtLeast(h.summary.daemonVersion ?? MOCK_VERSION, MOCK_PR_DETAIL_VERSION)) {
+      throw new CivetError(
+        'unsupported',
+        `unsupported: the daemon on ${hostId} is too old for pull request status; restart it to upgrade`
+      )
+    }
+    h.checkGit(worktree, 'pull requests')
+    const wt = h.allWorktrees().find((w) => w.id === worktree)
+    const repo = h.repos.find((r) => r.id === wt?.repo)
+    if (!wt || !repo) throw new CivetError('notFound', `not found: worktree ${worktree}`)
+    return { wt, repo }
+  }
+
+  private pullRequestsOf(hostId: string, repo: string): MockPr[] {
+    const key = `${hostId}\u0000${repo}`
+    let list = this.prs.get(key)
+    if (!list) this.prs.set(key, (list = repo === 'civet' ? seedPullRequests() : []))
+    return list
+  }
+
+  async worktreeLifecycle(
+    hostId: string,
+    repo: string,
+    opts: { fetch: boolean; review: boolean }
+  ): Promise<RepoLifecycle> {
+    this.checkGitActions(hostId)
+    const list = this.host(hostId).worktrees.get(repo)
+    if (!list) throw new CivetError('notFound', `repo ${repo} not found`)
+    if (list[0]) this.host(hostId).checkGit(list[0].id, 'worktree lifecycle')
+    // A fetch and gh take a moment, so the dialog's loading state shows.
+    if (opts.fetch || opts.review) await sleep(500)
+    const prs = new Map<string, PullRequestInfo>()
+    if (opts.review) {
+      for (const pr of await this.listPullRequests(hostId, repo)) {
+        if (!prs.has(pr.branch)) prs.set(pr.branch, pr)
+      }
+    }
+    return {
+      base: 'origin/main',
+      worktrees: list.map((w) =>
+        this.git(hostId, w.id).lifecycle(w, opts.review, w.branch ? prs.get(w.branch) : undefined)
+      ),
+      fetchError: null,
+      pullRequestsError: null
+    }
+  }
+
+  async updateWorktree(
+    hostId: string,
+    worktree: string,
+    strategy: UpdateStrategy
+  ): Promise<WorktreeUpdate> {
+    this.checkGitActions(hostId)
+    this.host(hostId).checkGit(worktree, 'updates')
+    await sleep(700)
+    const out = this.git(hostId, worktree).updateFromBase(strategy)
+    if (out.outcome !== 'upToDate') {
+      const repo = [...this.host(hostId).worktrees].find(([, l]) =>
+        l.some((w) => w.id === worktree)
+      )?.[0]
+      if (repo) this.host(hostId).event({ worktreesChanged: { repo } })
+    }
+    return out
   }
 
   async createWorktree(
@@ -1725,6 +1898,134 @@ export class MockBackend implements CivetBackend {
         h.event({ worktreesChanged: { repo } })
       }
     }
+  }
+
+  /** The host, if its daemon has worktree templates. */
+  private templatesHost(hostId: string): MockHost {
+    const h = this.host(hostId)
+    const v = h.summary.daemonVersion
+    if (v && !versionAtLeast(v, MOCK_TEMPLATES_VERSION))
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${v}; worktree templates need v${MOCK_TEMPLATES_VERSION} or newer (restart the daemon to upgrade)`
+      )
+    return h
+  }
+
+  private templateInfo(h: MockHost, repo: string): WorktreeTemplateInfo {
+    const r = h.repos.find((x) => x.id === repo)
+    if (!r) throw new CivetError('notFound', `repo ${repo} not found`)
+    if (r.kind === 'folder')
+      throw new CivetError(
+        'unsupported',
+        `unsupported: ${r.name} is a folder, not a git repository: no worktree templates`
+      )
+    const host = h.templates.get(repo) ?? EMPTY_TEMPLATE
+    const raw = h.templateFiles.get(repo)
+    const file = typeof raw === 'object' ? raw : null
+    const pick = <K extends keyof WorktreeTemplate>(k: K) => host[k] ?? file?.[k] ?? null
+    return {
+      repo,
+      host: { ...host },
+      filePath: `${r.path}/.civet/worktree.toml`,
+      file: file && { ...file },
+      fileError: typeof raw === 'string' ? `.civet/worktree.toml: ${raw}` : null,
+      effective: {
+        setup: pick('setup'),
+        copy: pick('copy'),
+        agent: pick('agent'),
+        prompt: pick('prompt')
+      }
+    }
+  }
+
+  async worktreeTemplate(hostId: string, repo: string): Promise<WorktreeTemplateInfo> {
+    return this.templateInfo(this.templatesHost(hostId), repo)
+  }
+
+  async setWorktreeTemplate(
+    hostId: string,
+    repo: string,
+    template: WorktreeTemplate
+  ): Promise<WorktreeTemplateInfo> {
+    const h = this.templatesHost(hostId)
+    this.templateInfo(h, repo)
+    const t: WorktreeTemplate = {
+      setup: template.setup,
+      copy: template.copy?.map((p) => p.trim()).filter(Boolean) ?? null,
+      agent: template.agent?.trim() ?? null,
+      prompt: template.prompt
+    }
+    if (Object.values(t).every((v) => v === null)) h.templates.delete(repo)
+    else h.templates.set(repo, t)
+    return this.templateInfo(h, repo)
+  }
+
+  async setupWorktree(hostId: string, worktree: string, size: TermSize): Promise<WorktreeSetup> {
+    const h = this.templatesHost(hostId)
+    const wt = h.allWorktrees().find((w) => w.id === worktree)
+    if (!wt) throw new CivetError('notFound', `worktree ${worktree} not found`)
+    const main = h.worktrees.get(wt.repo)?.find((w) => w.isMain)
+    if (wt.isMain || !main)
+      throw new CivetError(
+        'invalidArgument',
+        `${wt.path} is the main checkout; templates apply to new worktrees`
+      )
+    const info = this.templateInfo(h, wt.repo)
+    const template = info.effective
+    const warnings = info.fileError ? [info.fileError] : []
+    // Main checkouts also have their untracked `.env` (MOCK_MAIN_ONLY_FILES).
+    const from = this.files(hostId, main.id)
+    const to = this.files(hostId, wt.id)
+    const copied: string[] = []
+    for (const p of template.copy ?? []) {
+      const body = from.files.get(p) ?? MOCK_MAIN_ONLY_FILES[p]
+      if (body === undefined) warnings.push(`${p}: not in the main checkout`)
+      else if (!to.exists(p)) {
+        to.create(p, body)
+        copied.push(p)
+      }
+    }
+    let port = h.ports.get(wt.id)
+    if (port === undefined) {
+      const used = new Set(h.ports.values())
+      port = MOCK_PORT_FIRST
+      while (used.has(port)) port += 10
+      h.ports.set(wt.id, port)
+    }
+    const script = template.setup ?? ''
+    let setupPane: PaneInfo | null = null
+    if (script.trim()) {
+      const pane = h.addPane({
+        worktree: wt.id,
+        cwd: wt.path,
+        title: 'Setup',
+        agent: null,
+        command: ['sh', '-e', `/home/dev/.civet/setup/${wt.branch ?? 'wt'}.sh`],
+        size,
+        banner: ''
+      })
+      h.event({ paneCreated: pane.info })
+      setupPane = pane.info
+      void this.runMockSetup(h, pane, script)
+    }
+    return { template, copied, warnings, port, setupPane }
+  }
+
+  /** Echo each script line with fake output; `false` / `exit N` fail it (like `sh -e`). */
+  private async runMockSetup(h: MockHost, pane: MockPane, script: string): Promise<void> {
+    for (const line of script.split('\n').map((l) => l.trim())) {
+      if (!line || line.startsWith('#')) continue
+      await sleep(400)
+      if (!h.panes.has(pane.info.id)) return
+      pane.shell.output(`\x1b[2m+ ${line}\x1b[0m\r\n`)
+      const fail = line === 'false' ? 1 : Number(/^exit (\d+)$/.exec(line)?.[1] ?? 0)
+      if (fail) return h.exitPane(pane.info.id, fail)
+      if (/install/.test(line))
+        pane.shell.output('Lockfile is up to date\r\nPackages: +412\r\nDone in 2.1s\r\n')
+    }
+    await sleep(300)
+    h.exitPane(pane.info.id, 0)
   }
 
   private checkFiles(hostId: string, min = '0.1.10'): void {
@@ -2074,7 +2375,8 @@ function mockGitStatus(worktree: string): GitStatusInfo {
     conflicted: [],
     truncated: false
   }
-  if (worktree.endsWith('/civet')) return empty
+  // Clean: the merged one (removable without force) and one to update.
+  if (worktree.endsWith('/civet') || MOCK_CLEAN.some((n) => worktree.endsWith(n))) return empty
   if (worktree.endsWith('fix-flaky-e2e')) {
     return { ...empty, conflicted: [change('tests/e2e/src/reconnect.rs', 'conflicted', 6, 2)] }
   }
@@ -2099,10 +2401,156 @@ function mockGitStatus(worktree: string): GitStatusInfo {
   }
 }
 
+const MOCK_CLEAN = ['/scrollback-paging', '/fix-wake-reconnect']
+
+/**
+ * Seeded counts vs. origin/main per mock branch (worktreeLifecycle): a
+ * merged one, one whose remote branch was deleted after its PR closed, one
+ * behind main whose rebase conflicts. Others start even with main.
+ */
+const MOCK_LIFECYCLE: Record<
+  string,
+  { ahead: number; behind: number; gone?: boolean; merged?: boolean; conflicts?: string[] }
+> = {
+  'quic-resume': { ahead: 5, behind: 3 },
+  'scrollback-paging': { ahead: 0, behind: 12, merged: true },
+  // Keyed by the path's last segment (MockGit's branch).
+  'workspace-v3': { ahead: 8, behind: 0 },
+  'fix-flaky-e2e': { ahead: 1, behind: 4, gone: true },
+  'fix-wake-reconnect': { ahead: 2, behind: 6, conflicts: ['src/main/reconnect.ts'] }
+}
+
 const GROWING = 'crates/civet-transport/src/session.rs'
 const fakeSha = () =>
   Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
 const gitErr = (message: string) => new CivetError('git', `git: ${message}`)
+
+/** A fake pull request; `openedAt`: opened in this mock (its checks run, then pass). */
+type MockPr = { detail: PullRequestDetail; openedAt?: number }
+
+function mockPrDetail(
+  pr: PullRequestInfo,
+  base: string,
+  checksState: PullRequestDetail['checksState'],
+  checks: [string, PullRequestDetail['checks'][number]['state']][]
+): PullRequestDetail {
+  return {
+    pr,
+    base,
+    checksState,
+    checks: checks.map(([name, state], i) => ({
+      name,
+      state,
+      url: `https://github.com/example/civet/actions/runs/${pr.number}0${i}`
+    })),
+    reviewDecision: null,
+    approvals: 0,
+    changesRequested: 0,
+    comments: 0,
+    unresolvedThreads: 0,
+    threads: []
+  }
+}
+
+/** The civet repository's PRs: one per CI / review state the UI shows. */
+function seedPullRequests(): MockPr[] {
+  const pr = (
+    number: number,
+    branch: string,
+    title: string,
+    state: PullRequestInfo['state']
+  ): PullRequestInfo => ({
+    number,
+    branch,
+    title,
+    url: `https://github.com/example/civet/pull/${number}`,
+    state
+  })
+  const ci = 'clippy + test (Linux, daemon crates)'
+  const threads = [
+    {
+      path: 'crates/civet-transport/src/session.rs',
+      line: 214,
+      outdated: false,
+      author: 'reviewer-a',
+      body: 'This retries the resume forever if the daemon keeps answering BadToken. Cap it, or fall back to a fresh session after the first rejection?',
+      url: 'https://github.com/example/civet/pull/47#discussion_r101',
+      comments: 2
+    },
+    {
+      path: 'crates/civet-transport/src/failover.rs',
+      line: null,
+      outdated: true,
+      author: 'coderabbitai',
+      body: '**Minor** · The probe interval is read once at startup, so changing CIVET_QUIC_PROBE_MS needs a restart. Worth a note in the docs.',
+      url: 'https://github.com/example/civet/pull/47#discussion_r102',
+      comments: 1
+    }
+  ]
+  return [
+    {
+      detail: {
+        ...mockPrDetail(
+          pr(48, 'NO-TICKET/workspace-v3', 'Workspace v3 chrome', 'draft'),
+          'main',
+          'pending',
+          [
+            ['rustfmt + version check', 'passed'],
+            [ci, 'pending'],
+            ['desktop UI (typecheck, lint, test)', 'passed']
+          ]
+        ),
+        comments: 1
+      }
+    },
+    {
+      detail: {
+        ...mockPrDetail(
+          pr(47, 'quic-resume', 'Resume QUIC sessions across network changes', 'open'),
+          'main',
+          'failed',
+          [
+            ['rustfmt + version check', 'passed'],
+            [ci, 'failed'],
+            ['clippy + test (macOS, all crates)', 'passed'],
+            ['desktop UI (typecheck, lint, test)', 'passed'],
+            ['CodeRabbit', 'cancelled']
+          ]
+        ),
+        reviewDecision: 'changesRequested',
+        approvals: 1,
+        changesRequested: 1,
+        comments: 3,
+        unresolvedThreads: threads.length,
+        threads
+      }
+    },
+    {
+      detail: mockPrDetail(
+        pr(45, 'fix-flaky-e2e', 'Fix the flaky reconnect e2e', 'closed'),
+        'main',
+        null,
+        []
+      )
+    },
+    {
+      detail: {
+        ...mockPrDetail(
+          pr(44, 'scrollback-paging', 'Page scrollback over the control stream', 'merged'),
+          'main',
+          'passed',
+          [
+            ['rustfmt + version check', 'passed'],
+            [ci, 'passed']
+          ]
+        ),
+        reviewDecision: 'approved',
+        approvals: 2,
+        comments: 2
+      }
+    }
+  ]
+}
 
 type Lists = Pick<GitStatusInfo, 'staged' | 'unstaged' | 'untracked' | 'conflicted'>
 const cloneLists = (l: Lists): Lists => ({
@@ -2126,6 +2574,8 @@ class MockGit {
   private discarded = new WeakMap<GitDiscardSnapshot, Lists>()
   /** The session.rs edit grows while the "agent" keeps writing (until touched). */
   private growing = true
+  /** vs. origin/main (worktreeLifecycle, updateFromBase) */
+  base: { ahead: number; behind: number; gone: boolean; merged: boolean; conflicts: string[] }
 
   constructor(
     worktree: string,
@@ -2147,6 +2597,79 @@ class MockGit {
       hasRemote: true
     }
     if (name === 'quic-resume') this.commits = [[], []]
+    const seed = MOCK_LIFECYCLE[branch]
+    this.base = {
+      ahead: seed?.ahead ?? 0,
+      behind: seed?.behind ?? 0,
+      gone: seed?.gone ?? false,
+      merged: seed?.merged ?? false,
+      conflicts: seed?.conflicts ?? []
+    }
+  }
+
+  /** This worktree's lifecycle; `pr` is its branch's newest PR (review only). */
+  lifecycle(w: WorktreeInfo, review: boolean, pr: PullRequestInfo | undefined): WorktreeLifecycle {
+    const b = this.branch
+    const exempt = w.isMain || !w.branch || w.branch === 'main'
+    const stale: StaleReason[] = []
+    if (!exempt) {
+      if (this.base.merged && this.base.ahead === 0) stale.push('merged')
+      if (this.base.gone && this.base.ahead > 0) stale.push('upstreamGone')
+      if (pr?.state === 'merged') stale.push('pullRequestMerged')
+      if (pr?.state === 'closed') stale.push('pullRequestClosed')
+    }
+    const l = this.lists
+    const dirty = new Set(
+      [...l.staged, ...l.unstaged, ...l.untracked, ...l.conflicted].map((c) => c.path)
+    ).size
+    return {
+      worktree: w.id,
+      branch: w.branch,
+      ahead: this.base.ahead,
+      behind: this.base.behind,
+      upstream: b.upstream,
+      upstreamAhead: this.base.gone ? 0 : b.ahead,
+      upstreamBehind: this.base.gone ? 0 : b.behind,
+      upstreamGone: this.base.gone,
+      unpushed: b.upstream && !this.base.gone ? b.ahead : this.base.ahead,
+      dirty: review ? dirty : null,
+      pullRequest: review ? (pr ?? null) : null,
+      stale
+    }
+  }
+
+  /** Rebase onto / merge origin/main, refused the way civetd refuses. */
+  updateFromBase(strategy: UpdateStrategy): WorktreeUpdate {
+    const refuse = (m: string) => new CivetError('invalidArgument', `invalid argument: ${m}`)
+    if (this.branch.branch === 'main') throw refuse('main is the default branch; use Pull instead')
+    if (this.lists.conflicted.length)
+      throw refuse('a merge is already in progress here; finish or abort it first')
+    if (this.lists.staged.length || this.lists.unstaged.length)
+      throw refuse('there are uncommitted changes; commit or stash them first')
+    const base = 'origin/main'
+    if (this.base.behind === 0) return { base, outcome: 'upToDate', conflicts: [] }
+    const conflicts = this.base.conflicts
+    if (conflicts.length && strategy === 'rebase') {
+      return { base, outcome: 'rebaseConflicts', conflicts: [...conflicts] }
+    }
+    if (conflicts.length) {
+      this.put(
+        'conflicted',
+        conflicts.map((p) => change(p, 'conflicted', 3, 3))
+      )
+      return { base, outcome: 'mergeConflicts', conflicts: [...conflicts] }
+    }
+    this.base.behind = 0
+    if (strategy === 'merge') {
+      this.base.ahead += 1
+      this.branch.ahead += 1
+      this.commits.push([])
+    } else if (this.branch.upstream) {
+      // Rewritten history: the upstream now has all of them "behind".
+      this.branch.behind += this.branch.ahead
+    }
+    this.branch.head = fakeSha()
+    return { base, outcome: 'updated', conflicts: [] }
   }
 
   status(polls: number): GitStatusInfo {

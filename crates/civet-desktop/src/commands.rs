@@ -164,6 +164,62 @@ pub async fn list_pull_requests(
 }
 
 #[tauri::command]
+pub async fn worktree_template(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+) -> Res<civet_proto::WorktreeTemplateInfo> {
+    state.hosts.worktree_template(&host_id, repo).await
+}
+
+#[tauri::command]
+pub async fn set_worktree_template(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+    template: civet_proto::WorktreeTemplate,
+) -> Res<civet_proto::WorktreeTemplateInfo> {
+    state
+        .hosts
+        .set_worktree_template(&host_id, repo, template)
+        .await
+}
+
+/// Apply the repo's worktree template to a new worktree (copies, port,
+/// setup pane); the UI then starts the agent.
+#[tauri::command]
+pub async fn setup_worktree(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    size: civet_proto::TermSize,
+) -> Res<civet_proto::WorktreeSetup> {
+    state.hosts.setup_worktree(&host_id, worktree, size).await
+}
+
+#[tauri::command]
+pub async fn pull_request_detail(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    threads: bool,
+) -> Res<Option<civet_proto::PullRequestDetail>> {
+    state
+        .hosts
+        .pull_request_detail(&host_id, worktree, threads)
+        .await
+}
+
+#[tauri::command]
+pub async fn create_pull_request(
+    state: State<'_, AppState>,
+    host_id: String,
+    request: civet_proto::CreatePullRequest,
+) -> Res<civet_proto::PullRequestInfo> {
+    state.hosts.create_pull_request(&host_id, request).await
+}
+
+#[tauri::command]
 pub async fn git_status(
     state: State<'_, AppState>,
     host_id: String,
@@ -214,6 +270,33 @@ pub async fn turn_diff(
     state
         .hosts
         .turn_diff(&host_id, worktree, from, to, path, old_path, context_lines)
+        .await
+}
+
+#[tauri::command]
+pub async fn worktree_lifecycle(
+    state: State<'_, AppState>,
+    host_id: String,
+    repo: RepoId,
+    fetch: bool,
+    review: bool,
+) -> Res<civet_proto::RepoLifecycle> {
+    state
+        .hosts
+        .worktree_lifecycle(&host_id, repo, fetch, review)
+        .await
+}
+
+#[tauri::command]
+pub async fn update_worktree(
+    state: State<'_, AppState>,
+    host_id: String,
+    worktree: WorktreeId,
+    strategy: civet_proto::UpdateStrategy,
+) -> Res<civet_proto::WorktreeUpdate> {
+    state
+        .hosts
+        .update_worktree(&host_id, worktree, strategy)
         .await
 }
 
@@ -650,13 +733,20 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         upload_file,
         list_worktrees,
         list_pull_requests,
+        pull_request_detail,
+        create_pull_request,
         git_status,
         git_diff,
         agent_activity,
         turn_diff,
         git_branch,
         git_action,
+        worktree_lifecycle,
+        update_worktree,
         create_worktree,
+        worktree_template,
+        set_worktree_template,
+        setup_worktree,
         remove_worktree,
         list_files,
         read_file,

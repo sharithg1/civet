@@ -48,7 +48,8 @@ import type {
   RepoInfo,
   TermSize,
   TransportChoice,
-  WorktreeInfo
+  WorktreeInfo,
+  WorktreeSetup
 } from '../types'
 import { termSize } from '../types'
 
@@ -413,7 +414,13 @@ export function onDaemonEvent(hostId: string, event: DaemonEvent): void {
     const p = event.paneCreated
     set((s) => ({ panes: { ...s.panes, [hostId]: { ...s.panes[hostId], [p.id]: p } } }))
   } else if ('paneExited' in event) {
-    patchPane(hostId, event.paneExited.pane, { exited: true, exitCode: event.paneExited.exitCode })
+    const { pane, exitCode } = event.paneExited
+    patchPane(hostId, pane, { exited: true, exitCode })
+    const setup = setupPanes.get(wsKey(hostId, String(pane)))
+    if (setup !== undefined) {
+      setupPanes.delete(wsKey(hostId, String(pane)))
+      setupExited(hostId, pane, exitCode, setup)
+    }
   } else if ('paneClosed' in event) {
     removePaneEverywhere(hostId, event.paneClosed.pane)
   } else if ('paneTitle' in event) {
@@ -1334,6 +1341,31 @@ export async function newAgentTab(
  * terminal steps are login shells that get the command typed into them.
  * Without an agent step the worktree is created with `create_worktree`.
  */
+/** Setup panes started from this window, by `wsKey(hostId, pane)`: a failure toasts. */
+const setupPanes = new Map<string, { worktree: string; branch: string }>()
+
+/**
+ * A setup pane exited. Why only failures toast: a shell pane exiting is not
+ * news, but a setup script failing is easy to miss behind the agent's tab.
+ */
+function setupExited(
+  hostId: string,
+  pane: PaneId,
+  exitCode: number | null,
+  setup: { worktree: string; branch: string }
+): void {
+  if (exitCode === 0) return
+  pushToast(
+    {
+      kind: 'error',
+      title: `Setup failed in ${setup.branch}`,
+      body: exitCode === null ? 'killed by a signal' : `exit ${exitCode}; see its Setup tab`,
+      target: { hostId, worktree: setup.worktree, pane }
+    },
+    12_000
+  )
+}
+
 export async function createWorktreeWithSteps(p: {
   hostId: string
   repo: string
@@ -1341,6 +1373,12 @@ export async function createWorktreeWithSteps(p: {
   base: string | null
   steps: CreateStep[]
   prompt: string
+  /**
+   * Apply the project's worktree template first (`setup_worktree`: copied
+   * files, `CIVET_PORT`, a Setup tab). The agents then start after the
+   * copies, so it is create + setup + spawn rather than `launch_agent`.
+   */
+  setup?: boolean
 }): Promise<void> {
   checkGitRepo(p.hostId, p.repo)
   const steps = p.steps
@@ -1361,11 +1399,35 @@ export async function createWorktreeWithSteps(p: {
   let worktree: WorktreeInfo
   const opened: PaneId[] = []
   const branch = p.branch.trim()
+  let launched = false
+  let setup: WorktreeSetup | null = null
   if (!branch) {
     // No branch name: no new worktree, the steps run in the main checkout.
     const main = worktreesOf(p.hostId).find((w) => w.repo === p.repo && w.isMain)
     if (!main) throw new Error("This project's main checkout was not found")
     worktree = main
+  } else if (p.setup) {
+    worktree = await backend().createWorktree(p.hostId, p.repo, branch, p.base, null)
+    setup = await backend()
+      .setupWorktree(p.hostId, worktree.id, DEFAULT_SPAWN_SIZE)
+      .catch((err) => {
+        reportError(`Worktree setup failed for ${branch}`, err)
+        return null
+      })
+    if (setup?.setupPane) {
+      const id = setup.setupPane.id
+      addPaneSnapshot(p.hostId, setup.setupPane)
+      // Why: a quick script can exit before this reply arrives; its
+      // PaneExited (already applied to the pane) found no entry here.
+      const now = get().panes[p.hostId]?.[id] ?? setup.setupPane
+      if (now.exited) setupExited(p.hostId, id, now.exitCode, { worktree: worktree.id, branch })
+      else setupPanes.set(wsKey(p.hostId, String(id)), { worktree: worktree.id, branch })
+    }
+    if (setup?.warnings.length)
+      pushToast(
+        { kind: 'error', title: `Worktree template: ${branch}`, body: setup.warnings.join('\n') },
+        12_000
+      )
   } else if (firstAgent >= 0) {
     const command = specs[firstAgent]!
     const res = await backend().launchAgent(p.hostId, {
@@ -1382,14 +1444,14 @@ export async function createWorktreeWithSteps(p: {
     worktree = res.worktree
     addPaneSnapshot(p.hostId, res.pane)
     opened[firstAgent] = res.pane.id
+    launched = true
   } else {
     worktree = await backend().createWorktree(p.hostId, p.repo, branch, p.base, null)
   }
   if (branch) applyCreatedWorktree(p.hostId, worktree)
 
   for (const [i, st] of steps.entries()) {
-    // With a new worktree the first agent was started by launch_agent.
-    if (i === firstAgent && branch) continue
+    if (i === firstAgent && launched) continue
     try {
       const pane = await backend().spawnPane(p.hostId, {
         worktree: worktree.id,
@@ -1397,7 +1459,8 @@ export async function createWorktreeWithSteps(p: {
         command: st.agent ? specs[i]! : null,
         env: [],
         size: DEFAULT_SPAWN_SIZE,
-        title: i === firstAgent && prompt ? prompt.slice(0, 80) : null,
+        // Like launch_agent: the first agent of a new worktree is named after it.
+        title: i === firstAgent ? (prompt ? prompt.slice(0, 80) : branch || null) : null,
         agent: st.agent ? agentOf(specs[i]!, st.agent) : null
       })
       addPaneSnapshot(p.hostId, pane)
@@ -1413,13 +1476,20 @@ export async function createWorktreeWithSteps(p: {
   }
 
   selectWorktree(p.hostId, worktree.id)
+  // The Setup tab comes first, left of the agents it prepares for.
+  if (setup?.setupPane)
+    openPaneInTab(p.hostId, worktree.id, setup.setupPane.id, { activate: false })
   for (const pane of opened)
     if (pane !== undefined) openPaneInTab(p.hostId, worktree.id, pane, { activate: false })
   const focus = opened[firstAgent >= 0 ? firstAgent : 0] ?? opened.find((x) => x !== undefined)
   if (focus !== undefined) openPaneInTab(p.hostId, worktree.id, focus)
-  const label = steps.length
-    ? steps.map((st) => (st.agent ? `opened ${st.cmd}` : `ran ${st.cmd}`)).join(', ')
-    : 'no on-create steps'
+  const done = steps.map((st) => (st.agent ? `opened ${st.cmd}` : `ran ${st.cmd}`))
+  if (setup?.copied.length)
+    done.unshift(
+      `copied ${setup.copied.length === 1 ? setup.copied[0] : `${setup.copied.length} files`}`
+    )
+  if (setup?.setupPane) done.unshift('setup running')
+  const label = done.length ? done.join(', ') : 'no on-create steps'
   const what = branch ? `Created ${branch}` : `Opened in ${worktreeBranch(worktree)}`
   pushToast({ kind: 'info', title: `${what} · ${label}` }, 3200)
 }
@@ -1432,15 +1502,17 @@ export async function createWorktreeWithSteps(p: {
  * Failures are reported as a toast; git's refusal is kept so reopening the
  * dialog offers "Remove anyway". A worktree the host no longer knows
  * (removed from a terminal meanwhile) counts as removed. Either way the
- * repo is re-listed so the sidebar matches git.
+ * repo is re-listed so the sidebar matches git. Resolves true once removed;
+ * `quiet` leaves out the success toast (Clean up sums several up).
  */
 export async function removeWorktree(
   hostId: string,
   worktree: string,
-  force: boolean
-): Promise<void> {
+  force: boolean,
+  opts: { quiet?: boolean } = {}
+): Promise<boolean> {
   const key = wsKey(hostId, worktree)
-  if (get().removing[key]) return
+  if (get().removing[key]) return false
   const wt = worktreesOf(hostId).find((w) => w.id === worktree)
   const name = wt?.branch ?? worktree
   set((s) => ({ removing: { ...s.removing, [key]: true } }))
@@ -1474,7 +1546,7 @@ export async function removeWorktree(
       settle(e.message)
       reportError(`Could not remove ${name}`, err)
       if (wt) void refreshWorktrees(hostId, wt.repo)
-      return
+      return false
     }
   }
   settle(null)
@@ -1502,10 +1574,13 @@ export async function removeWorktree(
     else set({ active: null })
   }
   if (wt) void refreshWorktrees(hostId, wt.repo)
-  pushToast(
-    { kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` },
-    3200
-  )
+  if (!opts.quiet) {
+    pushToast(
+      { kind: 'info', title: `Removed ${name} on ${get().hosts[hostId]?.label ?? hostId}` },
+      3200
+    )
+  }
+  return true
 }
 
 /**

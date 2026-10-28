@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use civet_proto::{
     AgentStatus, ClientId, Event, InputMessage, KillSignal, LaunchAgentRequest, PaneId, PaneInfo,
     ProjectInfo, ProjectKind, RepoId, RepoInfo, ScrollbackPage, ScrollbackRequest,
-    SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo,
+    SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo, WorktreeSetup, WorktreeTemplate,
+    WorktreeTemplateInfo,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -22,6 +23,7 @@ use crate::git::{
 use crate::hooks::{self, HookFiles, ShellKind, basename};
 use crate::pane::{Pane, SpawnParams, lock};
 use crate::subscription::Subscription;
+use crate::templates;
 use crate::watch::{WorktreeWatch, common_dir};
 use crate::{ENV_WORKTREE, InputOutcome, KNOWN_AGENTS, SessionConfig, SessionError};
 
@@ -87,6 +89,11 @@ struct Inner {
     panes: Mutex<BTreeMap<PaneId, Arc<Pane>>>,
     next_pane: AtomicU64,
     repos: tokio::sync::Mutex<Vec<StoredRepo>>,
+    pushed_branches: crate::lifecycle::PushedBranches,
+    /// Host-saved worktree templates by repo id (`worktree-templates.json`).
+    templates: tokio::sync::Mutex<BTreeMap<String, WorktreeTemplate>>,
+    /// `CIVET_PORT` by worktree id (`worktree-ports.json`).
+    ports: Mutex<BTreeMap<String, u16>>,
     shutdown: AtomicBool,
     activity: Arc<Mutex<ActivityStore>>,
 }
@@ -188,6 +195,9 @@ impl SessionManager {
         std::fs::create_dir_all(config.state_dir.join("status"))?;
         let hook_files = hooks::install(&config.state_dir, config.cli_program.as_deref())?;
         let repos = load_repos(&config.state_dir.join(REPOS_FILE));
+        let host_templates =
+            templates::load_json(&config.state_dir.join(templates::HOST_TEMPLATES_FILE));
+        let ports = templates::load_json(&config.state_dir.join(templates::PORTS_FILE));
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let activity_dir = config.state_dir.join(activity::ACTIVITY_DIR);
         let activity = Arc::new(Mutex::new(ActivityStore::new(activity_dir.clone())));
@@ -199,6 +209,9 @@ impl SessionManager {
             panes: Mutex::new(BTreeMap::new()),
             next_pane: AtomicU64::new(1),
             repos: tokio::sync::Mutex::new(repos),
+            pushed_branches: Default::default(),
+            templates: tokio::sync::Mutex::new(host_templates),
+            ports: Mutex::new(ports),
             shutdown: AtomicBool::new(false),
             activity,
             config,
@@ -543,6 +556,35 @@ impl SessionManager {
         crate::github::list_pull_requests(Path::new(&r.path)).await
     }
 
+    /// The pull request of the worktree's branch, with checks and reviews
+    /// (see [`crate::github::pull_request_detail`]). None on a detached HEAD.
+    pub async fn pull_request_detail(
+        &self,
+        worktree: &WorktreeId,
+        threads: bool,
+    ) -> Result<Option<civet_proto::PullRequestDetail>, SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("pull requests")?;
+        let Some(branch) = w.branch else {
+            return Ok(None);
+        };
+        crate::github::pull_request_detail(Path::new(&w.path), &branch, threads).await
+    }
+
+    /// Open a pull request for the worktree's branch (`gh pr create`, see
+    /// [`crate::github::create_pull_request`]).
+    pub async fn create_pull_request(
+        &self,
+        req: civet_proto::CreatePullRequest,
+    ) -> Result<civet_proto::PullRequestInfo, SessionError> {
+        let (r, w) = self.find_worktree(&req.worktree).await?;
+        r.require_git("pull requests")?;
+        let branch = w.branch.ok_or_else(|| {
+            SessionError::InvalidArgument("a detached HEAD can't have a pull request".into())
+        })?;
+        crate::github::create_pull_request(Path::new(&w.path), &branch, &req).await
+    }
+
     /// The worktree's uncommitted changes (see [`crate::changes::status`]).
     pub async fn git_status(
         &self,
@@ -638,6 +680,53 @@ impl SessionManager {
             crate::git_actions::ActionOutcome::Done => None,
             crate::git_actions::ActionOutcome::Discarded(s) => Some(s),
         })
+    }
+
+    /// Ahead / behind and staleness of every worktree of the repository
+    /// (see [`crate::lifecycle::repo_lifecycle`]).
+    pub async fn worktree_lifecycle(
+        &self,
+        repo: &RepoId,
+        fetch: bool,
+        review: bool,
+    ) -> Result<civet_proto::RepoLifecycle, SessionError> {
+        let r = self.find_repo(repo).await?;
+        r.require_git("worktree lifecycle")?;
+        let worktrees = self.worktrees_of(&r, false).await?;
+        crate::lifecycle::repo_lifecycle(
+            &self.inner.git,
+            Path::new(&r.path),
+            &worktrees,
+            fetch,
+            review,
+            &self.inner.pushed_branches,
+        )
+        .await
+    }
+
+    /// Bring the default branch into the worktree's branch (see
+    /// [`crate::lifecycle::update`]). Emits WorktreesChanged when HEAD
+    /// moved, so every client re-lists (and recounts).
+    pub async fn update_worktree(
+        &self,
+        worktree: &WorktreeId,
+        strategy: civet_proto::UpdateStrategy,
+    ) -> Result<civet_proto::WorktreeUpdate, SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("updates")?;
+        let out = crate::lifecycle::update(
+            &self.inner.git,
+            Path::new(&r.path),
+            Path::new(&w.path),
+            strategy,
+        )
+        .await?;
+        if out.outcome != civet_proto::UpdateOutcome::UpToDate {
+            self.emit(Event::WorktreesChanged {
+                repo: RepoId(r.id.clone()),
+            });
+        }
+        Ok(out)
     }
 
     /// `git worktree add [-b branch] -- <path> [base]`. Default path:
@@ -961,6 +1050,7 @@ impl SessionManager {
             )));
         }
         tracing::info!(repo = %r.id, path = %w.path, "worktree removed");
+        self.forget_worktree(&w.id).await;
         Ok(())
     }
 
@@ -978,6 +1068,243 @@ impl SessionManager {
             }
         }
         "HEAD".to_owned()
+    }
+
+    // ----- worktree templates ------------------------------------------
+
+    /// The repository's template: the host-saved one, the parsed
+    /// `.civet/worktree.toml` of its main checkout, and the two merged.
+    pub async fn worktree_template(
+        &self,
+        repo: &RepoId,
+    ) -> Result<WorktreeTemplateInfo, SessionError> {
+        let r = self.find_repo(repo).await?;
+        r.require_git("worktree templates")?;
+        let host = self
+            .inner
+            .templates
+            .lock()
+            .await
+            .get(&r.id)
+            .cloned()
+            .unwrap_or_default();
+        Ok(self.template_info(&r, host).await)
+    }
+
+    async fn template_info(&self, r: &StoredRepo, host: WorktreeTemplate) -> WorktreeTemplateInfo {
+        let main = PathBuf::from(&r.path);
+        let file_path = path_string(&main.join(templates::TEMPLATE_FILE));
+        let read = tokio::task::spawn_blocking(move || templates::read_template_file(&main))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        let (file, file_error) = match read {
+            Ok(f) => (f, None),
+            Err(e) => (None, Some(e)),
+        };
+        WorktreeTemplateInfo {
+            repo: RepoId(r.id.clone()),
+            effective: templates::merge(&host, file.as_ref()),
+            host,
+            file_path,
+            file,
+            file_error,
+        }
+    }
+
+    /// Replace the host-saved template of a repository (all fields None:
+    /// delete it). Persists `worktree-templates.json`.
+    pub async fn set_worktree_template(
+        &self,
+        repo: &RepoId,
+        template: WorktreeTemplate,
+    ) -> Result<WorktreeTemplateInfo, SessionError> {
+        let r = self.find_repo(repo).await?;
+        r.require_git("worktree templates")?;
+        let template = templates::normalize(template);
+        {
+            let mut all = self.inner.templates.lock().await;
+            // Saved first: a failed write must not leave the change applied.
+            let mut next = all.clone();
+            if templates::is_unset(&template) {
+                next.remove(&r.id);
+            } else {
+                next.insert(r.id.clone(), template.clone());
+            }
+            let path = self
+                .inner
+                .config
+                .state_dir
+                .join(templates::HOST_TEMPLATES_FILE);
+            let data = serde_json::to_vec_pretty(&next).map_err(std::io::Error::other)?;
+            tokio::task::spawn_blocking(move || hooks::write_atomic(&path, &data))
+                .await
+                .map_err(std::io::Error::other)??;
+            *all = next;
+        }
+        tracing::info!(repo = %r.id, "worktree template saved");
+        Ok(self.template_info(&r, template).await)
+    }
+
+    /// Apply the repository's template to a new (non-main) worktree: copy
+    /// the `copy` paths from the main checkout (keeping files the worktree
+    /// has), assign its `CIVET_PORT`, and start the setup script in a
+    /// "Setup" pane (`sh -e`, or the script's `#!` interpreter) with
+    /// `CIVET_MAIN_CHECKOUT` and `CIVET_BRANCH` set. Problems that should
+    /// not stop the agent (a missing file, a bad repository file, the pane
+    /// failing to start) come back as warnings.
+    pub async fn setup_worktree(
+        &self,
+        worktree: &WorktreeId,
+        size: TermSize,
+    ) -> Result<WorktreeSetup, SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("worktree templates")?;
+        if w.is_main {
+            return Err(SessionError::InvalidArgument(format!(
+                "{} is the main checkout of {}; templates apply to new worktrees",
+                w.path, r.name
+            )));
+        }
+        let info = self.worktree_template(&RepoId(r.id.clone())).await?;
+        let template = info.effective;
+        let mut warnings: Vec<String> = info.file_error.into_iter().collect();
+
+        let patterns = template.copy.clone().unwrap_or_default();
+        let (main, wt) = (PathBuf::from(&r.path), PathBuf::from(&w.path));
+        let (copied, copy_warnings) = tokio::task::spawn_blocking(move || {
+            let (paths, mut warnings) = templates::expand_copy(&main, &patterns);
+            let mut copied = Vec::new();
+            for p in paths {
+                match templates::copy_missing(&main, &wt, &p) {
+                    Ok(true) => copied.push(p),
+                    Ok(false) => {}
+                    Err(e) => warnings.push(format!("{p}: {e}")),
+                }
+            }
+            (copied, warnings)
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+        warnings.extend(copy_warnings);
+        if !copied.is_empty() {
+            tracing::info!(path = %w.path, ?copied, "copied from the main checkout");
+        }
+
+        let port = self.worktree_port(&w.id).await;
+        let script = template.setup.clone().unwrap_or_default();
+        let setup_pane = if script.trim().is_empty() {
+            None
+        } else {
+            match self.spawn_setup(&r, &w, &script, size).await {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warnings.push(format!("the setup script did not start: {e}"));
+                    None
+                }
+            }
+        };
+        Ok(WorktreeSetup {
+            template,
+            copied,
+            warnings,
+            port,
+            setup_pane,
+        })
+    }
+
+    async fn spawn_setup(
+        &self,
+        r: &StoredRepo,
+        w: &WorktreeInfo,
+        script: &str,
+        size: TermSize,
+    ) -> Result<PaneInfo, SessionError> {
+        let file = self.setup_script_path(&w.id);
+        let data = script.as_bytes().to_vec();
+        let exec = script.starts_with("#!");
+        let dest = file.clone();
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::create_dir_all(dest.parent().expect("in setup/"))?;
+            hooks::write_atomic(&dest, &data)?;
+            let mode = if exec { 0o700 } else { 0o600 };
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode))
+        })
+        .await
+        .map_err(std::io::Error::other)??;
+        let (program, args) = templates::setup_command(script, &file);
+        let mut env = vec![("CIVET_MAIN_CHECKOUT".to_owned(), r.path.clone())];
+        if let Some(b) = &w.branch {
+            env.push(("CIVET_BRANCH".to_owned(), b.clone()));
+        }
+        self.spawn_pane(SpawnPaneRequest {
+            worktree: Some(w.id.clone()),
+            cwd: None,
+            command: Some(civet_proto::CommandSpec { program, args }),
+            env,
+            size,
+            title: Some("Setup".to_owned()),
+            agent: None,
+        })
+        .await
+    }
+
+    fn setup_script_path(&self, worktree: &WorktreeId) -> PathBuf {
+        self.inner
+            .config
+            .state_dir
+            .join(templates::SETUP_DIR)
+            .join(format!("{}.sh", repo_id_for(Path::new(&worktree.0))))
+    }
+
+    /// The worktree's `CIVET_PORT`, assigned (and persisted) on first use;
+    /// None when every block is taken. Assignments of worktrees whose
+    /// directory is gone are dropped first. Runs off the async threads: a
+    /// new assignment stats paths, test-binds ports and writes a file.
+    async fn worktree_port(&self, worktree: &WorktreeId) -> Option<u16> {
+        let (this, w) = (self.clone(), worktree.clone());
+        tokio::task::spawn_blocking(move || this.worktree_port_blocking(&w))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    fn worktree_port_blocking(&self, worktree: &WorktreeId) -> Option<u16> {
+        let mut ports = lock(&self.inner.ports);
+        if let Some(p) = ports.get(&worktree.0) {
+            return Some(*p);
+        }
+        ports.retain(|path, _| Path::new(path).exists());
+        let port = templates::pick_port(&ports, templates::port_is_free)?;
+        ports.insert(worktree.0.clone(), port);
+        self.save_ports(&ports);
+        tracing::debug!(worktree = %worktree.0, port, "CIVET_PORT assigned");
+        Some(port)
+    }
+
+    fn save_ports(&self, ports: &BTreeMap<String, u16>) {
+        let path = self.inner.config.state_dir.join(templates::PORTS_FILE);
+        let r = serde_json::to_vec_pretty(ports)
+            .map_err(std::io::Error::other)
+            .and_then(|d| hooks::write_atomic(&path, &d));
+        if let Err(e) = r {
+            tracing::warn!("saving {}: {e}", templates::PORTS_FILE);
+        }
+    }
+
+    /// A removed worktree's port and setup script.
+    async fn forget_worktree(&self, worktree: &WorktreeId) {
+        let (this, w) = (self.clone(), worktree.clone());
+        let _ = tokio::task::spawn_blocking(move || this.forget_worktree_blocking(&w)).await;
+    }
+
+    fn forget_worktree_blocking(&self, worktree: &WorktreeId) {
+        let mut ports = lock(&self.inner.ports);
+        if ports.remove(&worktree.0).is_some() {
+            self.save_ports(&ports);
+        }
+        drop(ports);
+        let _ = std::fs::remove_file(self.setup_script_path(worktree));
     }
 
     // ----- panes ---------------------------------------------------------
@@ -1002,7 +1329,8 @@ impl SessionManager {
     ///   CIVET_STATUS_FILE, CIVET_SHIM_DIR, PATH (shim dir first),
     ///   TERM_PROGRAM=civet, shell integration (zsh `ZDOTDIR`, bash
     ///   `PROMPT_COMMAND`, fish `-C`) keeping the shim dir first after the
-    ///   user's rc files, CIVET_WORKTREE, then `req.env`. `-lc` commands are
+    ///   user's rc files, CIVET_WORKTREE and CIVET_PORT (the worktree's,
+    ///   assigned on its first pane), then `req.env`. `-lc` commands are
     ///   prefixed with `PATH="$CIVET_SHIM_DIR:$PATH"; `.
     /// * Claude Code / Codex get their hooks from the PATH shims
     ///   (`<state>/hooks/bin`); an explicit-path `claude` program (or the
@@ -1109,6 +1437,9 @@ impl SessionManager {
         env.extend(setup.env);
         if let Some(w) = &req.worktree {
             env.push((ENV_WORKTREE.into(), w.0.clone()));
+            if let Some(port) = self.worktree_port(w).await {
+                env.push((civet_proto::ENV_PORT.into(), port.to_string()));
+            }
         }
         env.extend(req.env.iter().cloned());
 
