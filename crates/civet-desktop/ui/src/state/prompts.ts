@@ -62,7 +62,15 @@ function b(): CivetBackend {
   return backend
 }
 
+/**
+ * hostId → count of single-pane queue changes (events, local updates). A
+ * host list that resolves after one of them is older than it, and is
+ * fetched again rather than applied over it.
+ */
+const revisions = new Map<string, number>()
+
 function setQueue(hostId: string, pane: PaneId, prompts: QueuedPrompt[]): void {
+  revisions.set(hostId, (revisions.get(hostId) ?? 0) + 1)
   set((s) => {
     const host = { ...s.queues[hostId] }
     if (prompts.length) host[pane] = prompts
@@ -71,10 +79,21 @@ function setQueue(hostId: string, pane: PaneId, prompts: QueuedPrompt[]): void {
   })
 }
 
-function setHostQueues(hostId: string, prompts: QueuedPrompt[]): void {
+function groupByPane(prompts: QueuedPrompt[]): Record<PaneId, QueuedPrompt[]> {
   const host: Record<PaneId, QueuedPrompt[]> = {}
   for (const p of prompts) (host[p.pane] ??= []).push(p)
-  set((s) => ({ queues: { ...s.queues, [hostId]: host } }))
+  return host
+}
+
+function setHostQueues(hostId: string, prompts: QueuedPrompt[]): void {
+  set((s) => ({ queues: { ...s.queues, [hostId]: groupByPane(prompts) } }))
+}
+
+/** Like setHostQueues, but panes already known here keep their queue. */
+function mergeHostQueues(hostId: string, prompts: QueuedPrompt[]): void {
+  set((s) => ({
+    queues: { ...s.queues, [hostId]: { ...groupByPane(prompts), ...s.queues[hostId] } }
+  }))
 }
 
 /** A daemon event (also used by tests). */
@@ -139,9 +158,18 @@ export async function initPrompts(be: CivetBackend): Promise<() => void> {
   }
 }
 
+/** Lists retried when a queue change lands while one is in flight. */
+const LOAD_ATTEMPTS = 3
+
 async function loadHost(hostId: string): Promise<void> {
   try {
-    setHostQueues(hostId, await b().listQueuedPrompts(hostId))
+    for (let i = 1; ; i++) {
+      const rev = revisions.get(hostId) ?? 0
+      const list = await b().listQueuedPrompts(hostId)
+      if (revisions.get(hostId) === rev) return setHostQueues(hostId, list)
+      // Still changing: the panes it changed are newer here; take the rest.
+      if (i === LOAD_ATTEMPTS) return mergeHostQueues(hostId, list)
+    }
   } catch (err) {
     console.warn('[civet] queued prompts', hostId, err)
   }
@@ -225,6 +253,27 @@ function upsertQueued(hostId: string, p: QueuedPrompt): void {
   const cur = usePrompts.getState().queues[hostId]?.[p.pane] ?? []
   const i = cur.findIndex((q) => q.id === p.id)
   setQueue(hostId, p.pane, i < 0 ? [...cur, p] : cur.map((q) => (q.id === p.id ? p : q)))
+}
+
+/**
+ * Queue `text` again on its pane (a "Send now" that took it off the queue
+ * and then failed), so closing the dialog loses nothing. Null (after an
+ * error toast) if that fails too.
+ */
+export async function requeuePrompt(
+  hostId: string,
+  pane: PaneId,
+  text: string,
+  trigger: PromptTrigger
+): Promise<QueuedPrompt | null> {
+  try {
+    const p = await b().queuePrompt(hostId, pane, text, trigger)
+    upsertQueued(hostId, p)
+    return p
+  } catch (err) {
+    reportError('Could not put the prompt back in the queue', err)
+    return null
+  }
 }
 
 export async function editQueuedPrompt(

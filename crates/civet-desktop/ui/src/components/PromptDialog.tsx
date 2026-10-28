@@ -12,6 +12,8 @@ import {
   closePromptDialog,
   editQueuedPrompt,
   hasPrompts,
+  openPromptDialog,
+  requeuePrompt,
   usePrompts,
   type PromptDialog as DialogRequest
 } from '@/state/prompts'
@@ -276,8 +278,6 @@ function EditForm({ req }: { req: Extract<DialogRequest, { kind: 'edit' }> }) {
   const [text, setText] = useState(req.prompt.text)
   const [when, setWhen] = useState<PromptWhen>(req.prompt.trigger)
   const [busy, setBusy] = useState(false)
-  // Taken off the queue for "Send now" but not sent: Save queues it anew.
-  const [dequeued, setDequeued] = useState(false)
   const canSubmit = !busy && !!text.trim()
   const target = [{ hostId: req.hostId, pane: req.prompt.pane }]
 
@@ -288,14 +288,14 @@ function EditForm({ req }: { req: Extract<DialogRequest, { kind: 'edit' }> }) {
       if (when === 'now') {
         // Off the queue first, so it can never go out twice; if that fails
         // the daemon has (most likely) just sent it.
-        if (!dequeued) {
-          if (!(await cancelQueuedPrompt(req.hostId, req.prompt))) return
-          setDequeued(true)
+        if (!(await cancelQueuedPrompt(req.hostId, req.prompt))) return
+        if (!(await broadcastPrompt(target, text, 'now')).ok) {
+          // Not sent: back in the queue (at its end), and the dialog edits
+          // that one, so Close or Cancel prompt behave as before.
+          const back = await requeuePrompt(req.hostId, req.prompt.pane, text, req.prompt.trigger)
+          if (back) openPromptDialog({ kind: 'edit', hostId: req.hostId, prompt: back })
+          return
         }
-        // A failed send keeps the dialog (and the text) open.
-        if (!(await broadcastPrompt(target, text, 'now')).ok) return
-      } else if (dequeued) {
-        if (!(await broadcastPrompt(target, text, when)).ok) return
       } else {
         await editQueuedPrompt(req.hostId, req.prompt.id, text, when as PromptTrigger)
       }
@@ -335,7 +335,7 @@ function EditForm({ req }: { req: Extract<DialogRequest, { kind: 'edit' }> }) {
           className="mr-auto text-status-err-text"
           disabled={busy}
           onClick={() => {
-            if (!dequeued) void cancelQueuedPrompt(req.hostId, req.prompt)
+            void cancelQueuedPrompt(req.hostId, req.prompt)
             closePromptDialog()
           }}
         >

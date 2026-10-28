@@ -13,6 +13,7 @@ beforeAll(() => {
 })
 
 const { useStore } = await import('./store')
+type HostView = import('./store').HostView
 const prompts = await import('./prompts')
 const { usePrompts } = prompts
 
@@ -70,8 +71,15 @@ async function init(): Promise<Calls> {
   void listener
   useStore.setState({ backend: b, toasts: [], hosts: {}, panes: {} })
   usePrompts.setState({ queues: {}, selected: [], dialog: null })
-  await prompts.initPrompts(b)
+  await start(b)
   return calls
+}
+
+/** initPrompts, after stopping the previous test's (its host sync would list too). */
+let stop: (() => void) | null = null
+async function start(b: CivetBackend): Promise<void> {
+  stop?.()
+  stop = await prompts.initPrompts(b)
 }
 
 beforeEach(() => {
@@ -119,6 +127,39 @@ describe('queued prompts', () => {
     prompts.onPromptEvent('h', { paneClosed: { pane: 2 } })
     expect(usePrompts.getState().queues.h).toEqual({})
     expect(useStore.getState().toasts).toHaveLength(1)
+  })
+
+  it('a list that a queue event overtook is fetched again', async () => {
+    let lists = 0
+    const b = {
+      kind: 'mock',
+      // The first list was taken before pane 1's queue changed.
+      listQueuedPrompts: async () => {
+        lists++
+        if (lists === 1) {
+          prompts.onPromptEvent('h', {
+            promptQueue: { pane: 1, prompts: [queued(5, 1, 'new')], sent: null }
+          })
+          return [queued(1, 1, 'old')]
+        }
+        return [queued(5, 1, 'new'), queued(6, 2)]
+      },
+      onDaemonEvent: async () => () => {}
+    } as unknown as CivetBackend
+    useStore.setState({ backend: b, toasts: [], hosts: {}, panes: {} })
+    usePrompts.setState({ queues: {}, selected: [], dialog: null })
+    await start(b)
+    useStore.setState({
+      hosts: {
+        h: { hostId: 'h', state: 'connected', daemonVersion: '0.4.4' } as HostView
+      }
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(lists).toBe(2)
+    expect(usePrompts.getState().queues.h).toEqual({
+      1: [queued(5, 1, 'new')],
+      2: [queued(6, 2)]
+    })
   })
 
   it('an old daemon is not asked', () => {

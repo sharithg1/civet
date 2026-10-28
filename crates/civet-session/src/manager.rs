@@ -1512,11 +1512,24 @@ impl SessionManager {
     // ----- prompts (see crate::prompts) ----------------------------------
 
     /// Type `text` into the pane and press Enter [`prompts::SUBMIT_DELAY`]
-    /// later (the ticker does). Returns once the text is queued for the PTY.
+    /// later (the ticker does). Returns once the text is queued for the PTY,
+    /// or, while the pane's previous prompt still waits for its Enter, once
+    /// it is set to follow that one.
     pub fn send_prompt(&self, pane: PaneId, text: &str) -> Result<(), SessionError> {
         let text = prompts::clean_prompt(text)?;
-        self.pane(pane)?.type_prompt(&text)?;
-        lock(&self.inner.prompts).submit_at(pane, Instant::now() + prompts::SUBMIT_DELAY);
+        let p = self.pane(pane)?;
+        if p.is_exited() {
+            return Err(SessionError::InvalidArgument(format!("{pane} has exited")));
+        }
+        // Check and write under the queue lock (lock order: prompts, then
+        // the pane's), so the ticker cannot type into the pane in between.
+        let mut q = lock(&self.inner.prompts);
+        if q.submitting(pane) {
+            q.defer(pane, text);
+            return Ok(());
+        }
+        p.type_prompt(&text)?;
+        q.submit_at(pane, Instant::now() + prompts::SUBMIT_DELAY);
         Ok(())
     }
 
@@ -1736,14 +1749,17 @@ fn emit_prompt_queue(inner: &Inner, pane: PaneId, sent: Option<u64>) {
 }
 
 /// One ticker round of the prompt queues: drop the queues of panes that
-/// exited or closed, feed the others' status, send the prompts that are
-/// due and press the Enters that are due. Pane writes never block (they
-/// queue for the PTY writer), so this is cheap.
+/// exited or closed, feed the others' status, press the Enters that are
+/// due, then type deferred and due prompts into panes with no Enter
+/// pending. All under the queue lock, so nothing is typed into a pane
+/// between a prompt and its Enter; pane writes never block (they queue
+/// for the PTY writer), so this is cheap.
 fn run_prompts(inner: &Inner, panes: &[Arc<Pane>], now: Instant) {
     let by_id: BTreeMap<PaneId, &Arc<Pane>> = panes.iter().map(|p| (p.id, p)).collect();
-    let (due, submits, exited) = {
+    // (pane, sent prompt id) whose queue changed, announced after the lock.
+    let mut changed: Vec<(PaneId, Option<u64>)> = Vec::new();
+    {
         let mut q = lock(&inner.prompts);
-        let mut exited = Vec::new();
         for pane in q.panes() {
             match by_id.get(&pane) {
                 Some(p) if !p.is_exited() => q.observe(pane, p.status(), now),
@@ -1751,48 +1767,63 @@ fn run_prompts(inner: &Inner, panes: &[Arc<Pane>], now: Instant) {
                 // itself is gone for them.
                 Some(_) => {
                     q.drop_pane(pane);
-                    exited.push(pane);
+                    changed.push((pane, None));
                 }
                 None => {
                     q.drop_pane(pane);
                 }
             }
         }
-        let due = q.due(now, |pane| by_id.get(&pane).map(|p| p.status()));
-        (due, q.due_submits(now), exited)
-    };
-    for pane in exited {
-        emit_prompt_queue(inner, pane, None);
-    }
-    for prompt in due {
-        let Some(p) = by_id.get(&prompt.pane) else {
-            continue;
-        };
-        match p.type_prompt(&prompt.text) {
-            Ok(()) => {
-                tracing::info!(pane = prompt.pane.0, id = prompt.id, "queued prompt sent");
-                let mut q = lock(&inner.prompts);
-                q.remove(prompt.id);
-                q.submit_at(prompt.pane, now + prompts::SUBMIT_DELAY);
-                drop(q);
-                emit_prompt_queue(inner, prompt.pane, Some(prompt.id));
+        for pane in q.due_submits(now) {
+            match by_id.get(&pane).map(|p| p.press_enter()) {
+                // The paste is in; the Enter must follow once the PTY drains.
+                Some(Err(SessionError::Busy(_))) => q.submit_at(pane, now + prompts::FIRE_RETRY),
+                Some(Err(e)) => tracing::debug!(pane = pane.0, error = %e, "prompt submit dropped"),
+                _ => {}
             }
-            Err(SessionError::Busy(_)) => {
-                lock(&inner.prompts).retry(prompt.pane, now + prompts::FIRE_RETRY);
+        }
+        for (pane, text) in q.ready_deferred() {
+            let Some(p) = by_id.get(&pane) else {
+                q.drop_pane(pane);
+                continue;
+            };
+            match p.type_prompt(&text) {
+                Ok(()) => {
+                    q.take_deferred(pane);
+                    q.submit_at(pane, now + prompts::SUBMIT_DELAY);
+                }
+                // Stays deferred: tried again next round.
+                Err(SessionError::Busy(_)) => {}
+                Err(e) => {
+                    tracing::debug!(pane = pane.0, error = %e, "prompt not sent");
+                    q.take_deferred(pane);
+                }
             }
-            Err(e) => {
-                tracing::debug!(pane = prompt.pane.0, error = %e, "queued prompt not sent");
+        }
+        for prompt in q.due(now, |pane| by_id.get(&pane).map(|p| p.status())) {
+            let pane = prompt.pane;
+            let Some(p) = by_id.get(&pane) else {
+                continue;
+            };
+            if q.submitting(pane) {
+                q.retry(pane, now + prompts::SUBMIT_DELAY);
+                continue;
+            }
+            match p.type_prompt(&prompt.text) {
+                Ok(()) => {
+                    tracing::info!(pane = pane.0, id = prompt.id, "queued prompt sent");
+                    q.remove(prompt.id);
+                    q.submit_at(pane, now + prompts::SUBMIT_DELAY);
+                    changed.push((pane, Some(prompt.id)));
+                }
+                Err(SessionError::Busy(_)) => q.retry(pane, now + prompts::FIRE_RETRY),
+                Err(e) => {
+                    tracing::debug!(pane = pane.0, error = %e, "queued prompt not sent");
+                }
             }
         }
     }
-    for pane in submits {
-        match by_id.get(&pane).map(|p| p.press_enter()) {
-            // The paste is in; the Enter must follow once the PTY drains.
-            Some(Err(SessionError::Busy(_))) => {
-                lock(&inner.prompts).submit_at(pane, now + prompts::FIRE_RETRY);
-            }
-            Some(Err(e)) => tracing::debug!(pane = pane.0, error = %e, "prompt submit dropped"),
-            _ => {}
-        }
+    for (pane, sent) in changed {
+        emit_prompt_queue(inner, pane, sent);
     }
 }

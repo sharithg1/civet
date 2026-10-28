@@ -15,6 +15,11 @@
 //! lets the TUI get back to its input box after the hook reported the end
 //! of the turn, and skips a "done" that is immediately followed by more
 //! work.
+//!
+//! One prompt at a time per pane: while a pane's Enter is pending, a prompt
+//! sent to it now waits ([`PromptQueues::defer`]) and a queued one is
+//! retried, so two texts never land before one Enter (which would submit
+//! them as one message).
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -87,6 +92,8 @@ pub(crate) struct PromptQueues {
     armed: HashMap<PaneId, Instant>,
     /// Enter presses still to come: (pane, due).
     submits: Vec<(PaneId, Instant)>,
+    /// Prompts sent now to a pane whose Enter was still pending, in order.
+    deferred: Vec<(PaneId, String)>,
 }
 
 impl PromptQueues {
@@ -155,6 +162,7 @@ impl PromptQueues {
         let had = self.queues.contains_key(&pane);
         self.forget(pane);
         self.submits.retain(|(p, _)| *p != pane);
+        self.deferred.retain(|(p, _)| *p != pane);
         had
     }
 
@@ -228,6 +236,36 @@ impl PromptQueues {
     pub(crate) fn retry(&mut self, pane: PaneId, at: Instant) {
         if self.queues.contains_key(&pane) {
             self.armed.insert(pane, at);
+        }
+    }
+
+    /// True while `pane` has a typed prompt whose Enter is still to come:
+    /// nothing else may be typed into it until then.
+    pub(crate) fn submitting(&self, pane: PaneId) -> bool {
+        self.submits.iter().any(|&(p, _)| p == pane)
+    }
+
+    /// Type `text` into `pane` once its pending Enter is in.
+    pub(crate) fn defer(&mut self, pane: PaneId, text: String) {
+        self.deferred.push((pane, text));
+    }
+
+    /// The oldest deferred prompt of each pane that is free now (left in
+    /// place; [`Self::take_deferred`] once it was typed).
+    pub(crate) fn ready_deferred(&self) -> Vec<(PaneId, String)> {
+        let mut out: Vec<(PaneId, String)> = Vec::new();
+        for (pane, text) in &self.deferred {
+            if !self.submitting(*pane) && !out.iter().any(|(p, _)| p == pane) {
+                out.push((*pane, text.clone()));
+            }
+        }
+        out
+    }
+
+    /// Drop `pane`'s oldest deferred prompt (it was typed).
+    pub(crate) fn take_deferred(&mut self, pane: PaneId) {
+        if let Some(i) = self.deferred.iter().position(|(p, _)| *p == pane) {
+            self.deferred.remove(i);
         }
     }
 
@@ -453,5 +491,29 @@ mod tests {
         q.submit_at(P, t0);
         q.drop_pane(P);
         assert!(q.due_submits(t0).is_empty());
+    }
+
+    #[test]
+    fn one_prompt_at_a_time_per_pane() {
+        let t0 = Instant::now();
+        let mut q = PromptQueues::default();
+        q.submit_at(P, t0 + SUBMIT_DELAY);
+        assert!(q.submitting(P));
+        assert!(!q.submitting(PaneId(2)));
+        q.defer(P, "a".into());
+        q.defer(PaneId(2), "x".into());
+        q.defer(P, "b".into());
+        // P still waits for its Enter; pane 2 is free.
+        assert_eq!(q.ready_deferred(), [(PaneId(2), "x".to_owned())]);
+        q.take_deferred(PaneId(2));
+        assert_eq!(q.due_submits(t0 + SUBMIT_DELAY), [P]);
+        assert!(!q.submitting(P));
+        // Oldest first, one per pane per round.
+        assert_eq!(q.ready_deferred(), [(P, "a".to_owned())]);
+        q.take_deferred(P);
+        q.submit_at(P, t0 + SUBMIT_DELAY * 2);
+        assert!(q.ready_deferred().is_empty());
+        q.drop_pane(P);
+        assert!(q.ready_deferred().is_empty());
     }
 }

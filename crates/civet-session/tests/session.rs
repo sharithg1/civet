@@ -1849,6 +1849,19 @@ async fn send_prompt_pastes_then_presses_enter() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn prompts_sent_back_to_back_are_submitted_one_by_one() {
+    let f = fixture();
+    let out = f.root.join("typed");
+    let info = f.mgr.spawn_pane(prompt_reader(&out, "")).await.unwrap();
+    wait_screen(&f.mgr, info.id, "READY").await;
+    // The second waits for the first one's Enter (else one Enter would
+    // submit both as a single message).
+    f.mgr.send_prompt(info.id, "first").unwrap();
+    f.mgr.send_prompt(info.id, "second").unwrap();
+    wait_file(&out, b"\x1b[200~first\x1b[201~\r\x1b[200~second\x1b[201~\r").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn queued_prompt_fires_when_the_agent_is_done() {
     let f = fixture();
     let mut events = f.mgr.subscribe_events();
