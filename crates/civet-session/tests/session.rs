@@ -1659,6 +1659,74 @@ async fn worktree_templates_and_setup() {
     assert_eq!(setup.warnings.len(), 1, "{:?}", setup.warnings);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_turns_are_recorded_per_worktree() {
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    let repo = f.mgr.add_repo(&repo_dir.to_string_lossy()).await.unwrap();
+    let bin = f.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let agent = bin.join("fake-agent");
+    // One turn that writes a file, then waits.
+    write_script(
+        &agent,
+        "#!/bin/sh\nprintf '{\"status\":\"running\",\"message\":\"Write notes\"}' > \"$CIVET_STATUS_FILE\"\nsleep 1\necho hi > notes.txt\nprintf 'done\\nAll set' > \"$CIVET_STATUS_FILE\"\nsleep 30\n",
+    );
+    let (wt, pane) = f
+        .mgr
+        .launch_agent(LaunchAgentRequest {
+            repo: repo.id.clone(),
+            branch: "agent/notes".into(),
+            base: None,
+            worktree_path: None,
+            command: CommandSpec::new(agent.to_string_lossy(), Vec::<String>::new()),
+            env: vec![],
+            size: TermSize::new(100, 30),
+            title: None,
+            agent: Some("fake".into()),
+        })
+        .await
+        .unwrap();
+    let start = Instant::now();
+    let turn = loop {
+        let activity = f.mgr.agent_activity(&wt.id).await.unwrap();
+        if let Some(t) = activity
+            .turns
+            .first()
+            .filter(|t| t.status == AgentStatus::Done)
+        {
+            break t.clone();
+        }
+        assert!(start.elapsed() < T, "no finished turn: {activity:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(turn.pane, pane.id);
+    assert_eq!(turn.agent, "fake");
+    assert_eq!(turn.prompt.as_deref(), Some("Write notes"));
+    assert_eq!(turn.message.as_deref(), Some("All set"));
+    assert!(turn.ended_ms.unwrap() >= turn.started_ms);
+    let paths: Vec<_> = turn.files.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(paths, ["notes.txt"]);
+    let diff = f
+        .mgr
+        .turn_diff(
+            &wt.id,
+            turn.from_tree.as_deref().unwrap(),
+            turn.to_tree.as_deref().unwrap(),
+            "notes.txt",
+            None,
+            3,
+        )
+        .await
+        .unwrap();
+    assert!(diff.diff.contains("+hi"), "{}", diff.diff);
+    // Nothing recorded for other worktrees; nothing staged here.
+    let main = WorktreeId(repo_dir.to_string_lossy().into_owned());
+    assert!(f.mgr.agent_activity(&main).await.unwrap().turns.is_empty());
+    let status = f.mgr.git_status(&wt.id).await.unwrap();
+    assert!(status.staged.is_empty(), "{status:?}");
+}
+
 // ----- agent status --------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]

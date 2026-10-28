@@ -57,6 +57,33 @@ impl Git {
         args: &[&str],
         stdin: Option<Vec<u8>>,
     ) -> Result<GitOutput, SessionError> {
+        self.output_env(dir, args, stdin, &[]).await
+    }
+
+    /// [`Self::run`] with extra environment variables (e.g. `GIT_INDEX_FILE`).
+    pub(crate) async fn run_env(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        env: &[(&str, &Path)],
+    ) -> Result<String, SessionError> {
+        let out = self.output_env(dir, args, None, env).await?;
+        if out.success {
+            Ok(out.stdout)
+        } else if out.stderr.is_empty() {
+            Err(SessionError::Git(format!("git {} failed", args.join(" "))))
+        } else {
+            Err(SessionError::Git(out.stderr))
+        }
+    }
+
+    async fn output_env(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        env: &[(&str, &Path)],
+    ) -> Result<GitOutput, SessionError> {
         let spawn_err = |e: std::io::Error| {
             SessionError::Git(format!("failed to run {}: {e}", self.bin.display()))
         };
@@ -73,6 +100,14 @@ impl Git {
             .stderr(Stdio::piped())
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
+            // Why: inherited, these would point git at another repo than `dir`.
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_OBJECT_DIRECTORY")
+            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+            .env_remove("GIT_COMMON_DIR")
+            .envs(env.iter().copied())
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(spawn_err)?;
         // Written from a task so a large input cannot deadlock against git
@@ -501,6 +536,29 @@ pub(crate) fn parse_numstat_z(text: &str) -> HashMap<String, LineCounts> {
     out
 }
 
+/// Parse `git diff --name-status -z`: `X\0path\0`, or for a rename or copy
+/// `R<score>\0old\0new\0` (line counts unset).
+pub(crate) fn parse_name_status_z(text: &str) -> Vec<GitFileChange> {
+    let mut out = Vec::new();
+    let mut tokens = text.split('\0');
+    while let Some(status) = tokens.next() {
+        let Some(&letter) = status.as_bytes().first() else {
+            continue;
+        };
+        let Some(path) = tokens.next() else { break };
+        let Some(kind) = change_kind(letter) else {
+            continue;
+        };
+        if matches!(kind, GitChangeKind::Renamed | GitChangeKind::Copied) {
+            let Some(new) = tokens.next() else { break };
+            out.push(change(new, Some(path), kind));
+        } else {
+            out.push(change(path, None, kind));
+        }
+    }
+    out
+}
+
 /// Sum of `parse_numstat_z` over all files: None if any file is binary,
 /// Some((0, 0)) if there was nothing.
 pub(crate) fn numstat_total(text: &str) -> LineCounts {
@@ -710,6 +768,29 @@ mod tests {
         assert_eq!(numstat_total("3\t1\ta\0-\t-\tb\0"), (None, None));
         let huge = format!("{}\t{}\ta\0{}\t1\tb\0", u64::MAX, u64::MAX, u64::MAX);
         assert_eq!(numstat_total(&huge), (Some(u64::MAX), Some(u64::MAX)));
+    }
+
+    #[test]
+    fn name_status_records() {
+        let text = [
+            "M", "src/a.rs", "A", "new.txt", "R087", "old.rs", "moved.rs", "D", "gone", "X", "odd",
+            "T", "link", "",
+        ]
+        .join("\0");
+        let got = parse_name_status_z(&text);
+        assert_eq!(
+            got,
+            vec![
+                change("src/a.rs", None, GitChangeKind::Modified),
+                change("new.txt", None, GitChangeKind::Added),
+                change("moved.rs", Some("old.rs"), GitChangeKind::Renamed),
+                change("gone", None, GitChangeKind::Deleted),
+                change("link", None, GitChangeKind::TypeChanged),
+            ]
+        );
+        assert!(parse_name_status_z("").is_empty());
+        // Cut short: what was complete is kept.
+        assert_eq!(parse_name_status_z("M\0a\0R100\0b").len(), 1);
     }
 
     #[test]

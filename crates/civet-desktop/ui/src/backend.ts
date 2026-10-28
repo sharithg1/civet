@@ -60,7 +60,8 @@ import type {
   WorktreeSetup,
   PromptTrigger,
   QueuedPrompt,
-  AgentUsage
+  AgentUsage,
+  AgentActivity
 } from './types'
 
 export type Unlisten = () => void
@@ -178,6 +179,15 @@ export interface CivetBackend {
     worktree: WorktreeId,
     path: string,
     opts: { oldPath?: string | null; staged: boolean; contextLines?: number }
+  ): Promise<GitDiffInfo>
+  /** The agent activity timeline of a worktree (needs civetd >= 0.4.6). */
+  agentActivity(hostId: string, worktree: WorktreeId): Promise<AgentActivity>
+  /** One file's diff within an agent turn: its `fromTree` → `toTree`. */
+  turnDiff(
+    hostId: string,
+    worktree: WorktreeId,
+    path: string,
+    opts: { from: string; to: string; oldPath?: string | null; contextLines?: number }
   ): Promise<GitDiffInfo>
   /** Branch, upstream and ahead / behind of a worktree (needs civetd >= 0.1.14). */
   gitBranch(hostId: string, worktree: WorktreeId): Promise<GitBranchInfo>
@@ -458,6 +468,25 @@ export class TauriBackend implements CivetBackend {
       path,
       oldPath: opts.oldPath ?? null,
       staged: opts.staged,
+      contextLines: opts.contextLines ?? 3
+    })
+  }
+  agentActivity(hostId: string, worktree: WorktreeId) {
+    return this.call<AgentActivity>('agent_activity', { hostId, worktree })
+  }
+  turnDiff(
+    hostId: string,
+    worktree: WorktreeId,
+    path: string,
+    opts: { from: string; to: string; oldPath?: string | null; contextLines?: number }
+  ) {
+    return this.call<GitDiffInfo>('turn_diff', {
+      hostId,
+      worktree,
+      from: opts.from,
+      to: opts.to,
+      path,
+      oldPath: opts.oldPath ?? null,
       contextLines: opts.contextLines ?? 3
     })
   }

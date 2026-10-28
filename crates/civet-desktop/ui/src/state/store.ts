@@ -56,11 +56,18 @@ import { termSize } from '../types'
 /** A tab of panes (terminals, agents) in a split layout. */
 export type PaneTab = { kind?: undefined; id: string; root: PaneNode; focused: PaneId }
 /** Which side of a git change a diff tab shows (right panel → Changes). */
-export type DiffTarget = {
+export type ChangesDiffTarget = {
   side: 'staged' | 'unstaged' | 'untracked' | 'conflicted'
   /** Source of a rename / copy, diffed as a pair. */
   oldPath: string | null
 }
+/** A file's change within an agent turn, between its snapshots (right panel → Activity). */
+export type TurnDiffTarget = {
+  side: 'turn'
+  oldPath: string | null
+  turn: { id: number; from: string; to: string }
+}
+export type DiffTarget = ChangesDiffTarget | TurnDiffTarget
 /**
  * A read-only view of a worktree file (`path` relative to the worktree root),
  * or with `diff` its uncommitted changes. A `preview` tab (VS Code's preview
@@ -986,7 +993,7 @@ export function openFileTab(
   )
 }
 
-/** Open a file's diff in a tab of its own (one per file and side), or activate it. */
+/** Open a file's diff in a tab of its own (one per file and side or turn), or activate it. */
 export function openDiffTab(
   hostId: string,
   worktree: string,
@@ -996,7 +1003,15 @@ export function openDiffTab(
 ): void {
   openViewTab(
     wsKey(hostId, worktree),
-    (t) => t.path === path && t.diff?.side === diff.side,
+    (t) =>
+      t.path === path &&
+      t.diff?.side === diff.side &&
+      // Why: ids restart when a timeline is pruned; the snapshots tell turns apart.
+      (diff.side !== 'turn' ||
+        (t.diff.side === 'turn' &&
+          t.diff.turn.id === diff.turn.id &&
+          t.diff.turn.from === diff.turn.from &&
+          t.diff.turn.to === diff.turn.to)),
     { kind: 'file', path, diff },
     !!opts.preview
   )

@@ -1194,6 +1194,40 @@ impl HostManager {
         expect_response!(self.request(host_id, request).await?, Response::GitDiff(d) => d)
     }
 
+    /// `agent_activity`: the worktree's agent activity timeline.
+    pub async fn agent_activity(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+    ) -> Result<civet_proto::AgentActivity, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::AGENT_ACTIVITY_MIN_DAEMON_VERSION)?;
+        expect_response!(self.request(host_id, Request::AgentActivity { worktree }).await?, Response::AgentActivity(a) => a)
+    }
+
+    /// `turn_diff`: one file's diff within an agent turn.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn turn_diff(
+        &self,
+        host_id: &str,
+        worktree: WorktreeId,
+        from: String,
+        to: String,
+        path: String,
+        old_path: Option<String>,
+        context_lines: u32,
+    ) -> Result<civet_proto::GitDiffInfo, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::AGENT_ACTIVITY_MIN_DAEMON_VERSION)?;
+        let request = Request::TurnDiff {
+            worktree,
+            from,
+            to,
+            path,
+            old_path,
+            context_lines,
+        };
+        expect_response!(self.request(host_id, request).await?, Response::GitDiff(d) => d)
+    }
+
     /// `git_branch`: the worktree's branch, upstream and ahead / behind.
     pub async fn git_branch(
         &self,

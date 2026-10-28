@@ -61,7 +61,7 @@ export type Prefs = {
   sidebarOpen: boolean | null
   rightPanelOpen: boolean | null
   /** Right panel tab last selected. */
-  rightTab: 'files' | 'changes' | 'branch' | 'ports'
+  rightTab: 'files' | 'changes' | 'activity' | 'branch' | 'ports'
   /** Port forwards to restore on connect, per host id. */
   pinnedForwards: Record<string, PinnedForward[]>
   /** Files tab: expanded directories (worktree-relative) per `wsKey(hostId, worktree)`. */

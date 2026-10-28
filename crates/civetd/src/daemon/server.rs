@@ -578,6 +578,28 @@ impl Server {
             Request::GitBranch { worktree } => {
                 s.git_branch(&worktree).await.map(Response::GitBranch)
             }
+            Request::AgentActivity { worktree } => s
+                .agent_activity(&worktree)
+                .await
+                .map(Response::AgentActivity),
+            Request::TurnDiff {
+                worktree,
+                from,
+                to,
+                path,
+                old_path,
+                context_lines,
+            } => s
+                .turn_diff(
+                    &worktree,
+                    &from,
+                    &to,
+                    &path,
+                    old_path.as_deref(),
+                    context_lines,
+                )
+                .await
+                .map(Response::GitDiff),
             Request::GitAction { worktree, action } => s
                 .git_action(&worktree, action)
                 .await

@@ -171,7 +171,75 @@ pub(crate) async fn diff(
         a.extend(paths.iter().cloned());
         a
     };
+    numstat_then_patch(git, dir, path, &with, untracked, context_lines).await
+}
 
+/// One file's diff between two trees of the repository at `dir` (an agent
+/// turn's snapshots, see [`crate::activity`]), with rename detection when
+/// `old_path` is given. Same limits as [`diff`]; `NotFound` if a tree is
+/// gone (pruned by `git gc`).
+pub(crate) async fn diff_trees(
+    git: &Git,
+    dir: &Path,
+    from: &str,
+    to: &str,
+    path: &str,
+    old_path: Option<&str>,
+    context_lines: u32,
+) -> Result<GitDiffInfo, SessionError> {
+    check_relative_path(path)?;
+    if let Some(old) = old_path {
+        check_relative_path(old)?;
+    }
+    for tree in [from, to] {
+        if !is_object_id(tree) {
+            return Err(SessionError::InvalidArgument(format!(
+                "{tree:?} is not a tree id"
+            )));
+        }
+        let spec = format!("{tree}^{{tree}}");
+        if !git.succeeds(dir, &["cat-file", "-e", &spec]).await? {
+            return Err(SessionError::NotFound(format!(
+                "snapshot {} (pruned by git gc?)",
+                &tree[..7]
+            )));
+        }
+    }
+    let with = |extra: &[&str]| {
+        let mut a: Vec<String> = [
+            "--no-optional-locks",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "-M",
+        ]
+        .map(String::from)
+        .to_vec();
+        a.extend(extra.iter().map(|s| s.to_string()));
+        a.extend([from.to_owned(), to.to_owned(), "--".to_owned()]);
+        a.extend(old_path.map(literal_pathspec));
+        a.push(literal_pathspec(path));
+        a
+    };
+    numstat_then_patch(git, dir, path, &with, false, context_lines).await
+}
+
+/// A full hex object id (SHA-1 or SHA-256).
+pub(crate) fn is_object_id(s: &str) -> bool {
+    matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Count lines with `--numstat` first (binary, too many lines), then fetch
+/// the patch. `with(extra)` builds the full argument list; `untracked`: a
+/// `--no-index` diff.
+async fn numstat_then_patch(
+    git: &Git,
+    dir: &Path,
+    path: &str,
+    with: &(dyn Fn(&[&str]) -> Vec<String> + Sync),
+    untracked: bool,
+    context_lines: u32,
+) -> Result<GitDiffInfo, SessionError> {
     let mut info = GitDiffInfo {
         path: path.to_owned(),
         binary: false,

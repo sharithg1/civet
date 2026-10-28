@@ -3,13 +3,22 @@
 // files and diffs too large to send; long diffs render in pages so a big file
 // can't stall the window. The worktree's status is polled while the tab
 // shows, and the diff is fetched again whenever the file's entry changes or a
-// git action runs in the worktree.
+// git action runs in the worktree. TurnDiffView shows a file an agent turn
+// changed (Activity tab), between the turn's snapshots.
 import { useEffect, useMemo, useState } from 'react'
 import { Copy, RotateCw } from 'lucide-react'
 import { CivetError } from '@/backend'
 import type { GitChangeKind, GitDiffInfo } from '@/types'
-import { pushToast, useStore, wsKey, type DiffTarget } from '@/state/store'
+import {
+  pushToast,
+  useStore,
+  wsKey,
+  type ChangesDiffTarget,
+  type TurnDiffTarget
+} from '@/state/store'
 import { CHANGES_POLL_MS, findChange, useChanges, useChangesPolling } from '@/state/changes'
+import { useActivity } from '@/state/activity'
+import { isTurn, turnTimes } from '@/lib/activity'
 import { parseUnifiedDiff, type DiffLine, type ParsedDiff } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 import { useWorktreeInfo } from './chrome'
@@ -63,7 +72,7 @@ export function DiffView({
   hostId: string
   worktree: string
   path: string
-  target: DiffTarget
+  target: ChangesDiffTarget
 }) {
   useChangesPolling(hostId, worktree, CHANGES_POLL_MS)
   const change = useChanges((s) =>
@@ -72,10 +81,8 @@ export function DiffView({
   // Bumped by every git action in the worktree (stage, discard…): fetch again.
   const epoch = useChanges((s) => s.diffEpoch[wsKey(hostId, worktree)] ?? 0)
   const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
-  const root = useWorktreeInfo(hostId, worktree)?.info.path
   const [state, setState] = useState<DiffState | null>(null)
   const [reload, setReload] = useState(0)
-  const [shown, setShown] = useState(DIFF_PAGE_LINES)
   // Fetch again when the file's status (kind or line counts) changes.
   const sig = change ? `${change.kind}:${change.additions}:${change.deletions}` : 'gone'
 
@@ -99,13 +106,8 @@ export function DiffView({
   }, [hostId, worktree, path, target.oldPath, target.side, sig, reload, epoch, connected])
 
   const diff = state?.diff ?? null
-  const parsed = useMemo(() => (diff?.diff ? parseUnifiedDiff(diff.diff) : null), [diff])
   const kind = change?.kind ?? (target.side === 'untracked' ? 'untracked' : null)
-  const copyPath = () => {
-    const text = root ? `${root.replace(/\/+$/, '')}/${path}` : path
-    void navigator.clipboard?.writeText(text).catch(() => {})
-    pushToast({ kind: 'info', title: `Copied ${text}` }, 3200)
-  }
+  const copyPath = useCopyPath(hostId, worktree, path)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -125,30 +127,107 @@ export function DiffView({
           <Copy />
         </IconButton>
       </div>
-      {state?.error ? (
-        <Message error>{state.error.message}</Message>
-      ) : !state ? (
-        <Message>{connected ? 'Loading…' : 'Not connected.'}</Message>
-      ) : diff?.binary ? (
-        <Message>Binary file; there is no text diff to show.</Message>
-      ) : diff?.tooLarge ? (
-        <Message>
-          This diff is too large to show
-          {diff.additions != null && diff.deletions != null
-            ? ` (+${diff.additions} −${diff.deletions} lines)`
-            : ''}
-          .
-        </Message>
-      ) : !parsed || parsed.hunks.length === 0 ? (
-        <Message>{metaLines(parsed?.headers ?? []).join(' · ') || 'No changes.'}</Message>
-      ) : (
-        <DiffBody
-          parsed={parsed}
-          shown={shown}
-          onMore={() => setShown((n) => n + DIFF_PAGE_LINES)}
-        />
-      )}
+      <DiffContent state={state} connected={connected} />
     </div>
+  )
+}
+
+/**
+ * A diff tab of an agent turn (opened from the Activity tab): one file's
+ * change between the turn's snapshots. Snapshots never change, so it is
+ * fetched once (and on Reload).
+ */
+export function TurnDiffView({
+  hostId,
+  worktree,
+  path,
+  target
+}: {
+  hostId: string
+  worktree: string
+  path: string
+  target: TurnDiffTarget
+}) {
+  const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
+  const turn = useActivity((s) =>
+    s.byWorktree[wsKey(hostId, worktree)]?.activity?.turns.find((t) => isTurn(target.turn, t))
+  )
+  const [state, setState] = useState<DiffState | null>(null)
+  const [reload, setReload] = useState(0)
+  const { from, to } = target.turn
+
+  useEffect(() => {
+    void reload
+    const b = useStore.getState().backend
+    if (!b || !connected) return
+    let live = true
+    b.turnDiff(hostId, worktree, path, { from, to, oldPath: target.oldPath }).then(
+      (diff) => live && setState({ diff, error: null }),
+      (err: unknown) => live && setState({ diff: null, error: CivetError.from(err) })
+    )
+    return () => {
+      live = false
+    }
+  }, [hostId, worktree, path, from, to, target.oldPath, reload, connected])
+
+  const diff = state?.diff ?? null
+  const copyPath = useCopyPath(hostId, worktree, path)
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-3">
+        <span className="min-w-0 truncate font-mono text-xs text-soft" title={path}>
+          {target.oldPath ? `${target.oldPath} → ${path}` : path}
+        </span>
+        <span className="shrink-0 truncate text-xs text-quiet">
+          {turn ? `${turn.agent} · ${turnTimes(turn)}` : 'Agent turn'}
+        </span>
+        <span className="flex-1" />
+        {diff && <Counts additions={diff.additions} deletions={diff.deletions} />}
+        <IconButton label="Reload" disabled={!connected} onClick={() => setReload((n) => n + 1)}>
+          <RotateCw />
+        </IconButton>
+        <IconButton label="Copy path" onClick={copyPath}>
+          <Copy />
+        </IconButton>
+      </div>
+      <DiffContent state={state} connected={connected} />
+    </div>
+  )
+}
+
+/** Copy the file's full path on the host (toast). */
+function useCopyPath(hostId: string, worktree: string, path: string): () => void {
+  const root = useWorktreeInfo(hostId, worktree)?.info.path
+  return () => {
+    const text = root ? `${root.replace(/\/+$/, '')}/${path}` : path
+    void navigator.clipboard?.writeText(text).catch(() => {})
+    pushToast({ kind: 'info', title: `Copied ${text}` }, 3200)
+  }
+}
+
+/** The diff below a diff tab's header, or why there is none. */
+function DiffContent({ state, connected }: { state: DiffState | null; connected: boolean }) {
+  const [shown, setShown] = useState(DIFF_PAGE_LINES)
+  const diff = state?.diff ?? null
+  const parsed = useMemo(() => (diff?.diff ? parseUnifiedDiff(diff.diff) : null), [diff])
+  return state?.error ? (
+    <Message error>{state.error.message}</Message>
+  ) : !state ? (
+    <Message>{connected ? 'Loading…' : 'Not connected.'}</Message>
+  ) : diff?.binary ? (
+    <Message>Binary file; there is no text diff to show.</Message>
+  ) : diff?.tooLarge ? (
+    <Message>
+      This diff is too large to show
+      {diff.additions != null && diff.deletions != null
+        ? ` (+${diff.additions} −${diff.deletions} lines)`
+        : ''}
+      .
+    </Message>
+  ) : !parsed || parsed.hunks.length === 0 ? (
+    <Message>{metaLines(parsed?.headers ?? []).join(' · ') || 'No changes.'}</Message>
+  ) : (
+    <DiffBody parsed={parsed} shown={shown} onMore={() => setShown((n) => n + DIFF_PAGE_LINES)} />
   )
 }
 

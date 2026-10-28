@@ -15,6 +15,7 @@ use civet_proto::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+use crate::activity::{self, ActivityStore, PaneFacts, Recorder};
 use crate::git::{
     Git, branch_dir_name, canonical_lenient, canonical_or_same, parse_worktree_porcelain,
     path_string, repo_id_for,
@@ -98,6 +99,7 @@ struct Inner {
     /// driven by the status ticker.
     prompts: Mutex<PromptQueues>,
     shutdown: AtomicBool,
+    activity: Arc<Mutex<ActivityStore>>,
 }
 
 /// Owns repos/worktrees, panes, input sequencing and subscriptions.
@@ -201,6 +203,8 @@ impl SessionManager {
             templates::load_json(&config.state_dir.join(templates::HOST_TEMPLATES_FILE));
         let ports = templates::load_json(&config.state_dir.join(templates::PORTS_FILE));
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let activity_dir = config.state_dir.join(activity::ACTIVITY_DIR);
+        let activity = Arc::new(Mutex::new(ActivityStore::new(activity_dir.clone())));
         let inner = Arc::new(Inner {
             shell: default_shell(config.shell.as_deref()),
             git: Git::new(config.git.clone()),
@@ -214,6 +218,7 @@ impl SessionManager {
             ports: Mutex::new(ports),
             prompts: Mutex::new(PromptQueues::default()),
             shutdown: AtomicBool::new(false),
+            activity,
             config,
         });
         let weak = Arc::downgrade(&inner);
@@ -224,6 +229,24 @@ impl SessionManager {
         std::thread::Builder::new()
             .name("civet-worktree-watch".into())
             .spawn(move || worktree_watcher(weak))?;
+        let recorder = Recorder::new(
+            inner.activity.clone(),
+            inner.git.clone(),
+            activity_dir.join("index.tmp"),
+        );
+        let events = inner.events.subscribe();
+        let (weak, alive) = (Arc::downgrade(&inner), Arc::downgrade(&inner));
+        std::thread::Builder::new()
+            .name("civet-activity".into())
+            .spawn(move || {
+                let pane = move |id| pane_facts(&weak, id);
+                let alive = move || {
+                    alive
+                        .upgrade()
+                        .is_some_and(|i| !i.shutdown.load(Ordering::SeqCst))
+                };
+                activity::run(recorder, events, pane, alive)
+            })?;
         Ok(Self { inner })
     }
 
@@ -594,6 +617,44 @@ impl SessionManager {
             path,
             old_path,
             staged,
+            context_lines,
+        )
+        .await
+    }
+
+    /// The worktree's agent activity timeline (see [`crate::activity`]);
+    /// empty if no agent worked there.
+    pub async fn agent_activity(
+        &self,
+        worktree: &WorktreeId,
+    ) -> Result<civet_proto::AgentActivity, SessionError> {
+        let store = self.inner.activity.clone();
+        let key = worktree.0.clone();
+        tokio::task::spawn_blocking(move || lock(&store).activity(&key))
+            .await
+            .map_err(|e| SessionError::Io(std::io::Error::other(e)))
+    }
+
+    /// One file's diff within an agent turn, between its snapshots (see
+    /// [`crate::changes::diff_trees`]).
+    pub async fn turn_diff(
+        &self,
+        worktree: &WorktreeId,
+        from: &str,
+        to: &str,
+        path: &str,
+        old_path: Option<&str>,
+        context_lines: u32,
+    ) -> Result<civet_proto::GitDiffInfo, SessionError> {
+        let (r, w) = self.find_worktree(worktree).await?;
+        r.require_git("diffs")?;
+        crate::changes::diff_trees(
+            &self.inner.git,
+            Path::new(&w.path),
+            from,
+            to,
+            path,
+            old_path,
             context_lines,
         )
         .await
@@ -1666,6 +1727,17 @@ impl SessionManager {
             self.emit(Event::PaneClosed { pane: p.id });
         }
     }
+}
+
+/// What the activity recorder needs to know about a live pane.
+fn pane_facts(weak: &Weak<Inner>, id: PaneId) -> Option<PaneFacts> {
+    let pane = lock(&weak.upgrade()?.panes).get(&id).cloned()?;
+    let info = pane.info();
+    Some(PaneFacts {
+        worktree: info.worktree,
+        is_agent: pane.is_agent(),
+        label: info.agent.filter(|a| !a.is_empty()).unwrap_or(info.title),
+    })
 }
 
 /// Emits WorktreesChanged for repos whose worktrees changed outside Civet

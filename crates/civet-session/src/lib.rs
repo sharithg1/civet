@@ -20,11 +20,14 @@
 //!   queued until the agent is next done
 //!   ([`SessionManager::queue_prompt`]), pushed as
 //!   [`civet_proto::Event::PromptQueue`].
+//! * **Agent activity timeline** per worktree: each turn's times, status and
+//!   the files it changed (see `activity.rs`).
 //!
 //! There is no networking here; `civetd` wires this to the transport.
 //! See `docs/INTERFACES.md` (section 4) for the contract and `HOOKS.md` in
 //! this crate for wiring agent hooks to `$CIVET_STATUS_FILE`.
 
+mod activity;
 mod changes;
 mod error;
 mod fileops;
@@ -70,8 +73,8 @@ pub const ENV_WORKTREE: &str = "CIVET_WORKTREE";
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     /// `~/.civet` (or `$CIVET_STATE_DIR`). Holds `repos.json`, `status/`,
-    /// `hooks/`, `trash/`, `setup/`, `worktree-templates.json` and
-    /// `worktree-ports.json`.
+    /// `hooks/`, `trash/`, `setup/`, `activity/`, `worktree-templates.json`
+    /// and `worktree-ports.json`.
     pub state_dir: PathBuf,
     /// Shell for panes without a command and for `-lc` wrapping.
     /// Default (None): `$SHELL`, else `/bin/bash`, else `/bin/sh`.

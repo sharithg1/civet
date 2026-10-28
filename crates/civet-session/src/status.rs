@@ -147,6 +147,11 @@ impl StatusTracker {
         }
     }
 
+    /// Launched as an agent, or an agent reported through its hook.
+    pub(crate) fn is_agent(&self) -> bool {
+        self.is_agent
+    }
+
     /// Apply a change if the precedence rules allow it and it differs from
     /// the current status. Returns the event to broadcast.
     pub(crate) fn apply(&mut self, change: Change) -> Option<AgentStatusEvent> {

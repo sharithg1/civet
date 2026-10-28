@@ -133,7 +133,7 @@ export function worktreeTabs(
         preview: !!g.preview,
         paneCount: 0,
         what: {
-          text: [slash < 0 ? '' : g.path.slice(0, slash), g.diff ? diffWhat(g.diff.side) : '']
+          text: [slash < 0 ? '' : g.path.slice(0, slash), g.diff ? diffWhat(g.diff) : '']
             .filter(Boolean)
             .join(' · '),
           mono: true
@@ -169,6 +169,7 @@ export function useWorktreeInfo(
   return null
 }
 
-function diffWhat(side: NonNullable<FileTab['diff']>['side']): string {
+function diffWhat({ side }: NonNullable<FileTab['diff']>): string {
+  if (side === 'turn') return 'agent turn'
   return side === 'staged' ? 'staged changes' : side === 'conflicted' ? 'conflict' : 'changes'
 }
