@@ -162,6 +162,28 @@ describe('queued prompts', () => {
     })
   })
 
+  it('a stable list replaces what was known before (a reconnect)', async () => {
+    let lists = 0
+    const b = {
+      kind: 'mock',
+      listQueuedPrompts: async () => {
+        lists++
+        return []
+      },
+      onDaemonEvent: async () => () => {}
+    } as unknown as CivetBackend
+    useStore.setState({ backend: b, toasts: [], hosts: {}, panes: {} })
+    // Sent by the daemon while this host was away.
+    usePrompts.setState({ queues: { r: { 9: [queued(9, 9)] } }, selected: [], dialog: null })
+    await start(b)
+    useStore.setState({
+      hosts: { r: { hostId: 'r', state: 'connected', daemonVersion: '0.4.4' } as HostView }
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(lists).toBe(1)
+    expect(usePrompts.getState().queues.r).toEqual({})
+  })
+
   it('an old daemon is not asked', () => {
     const host = (daemonVersion: string | null, state: 'connected' | 'reconnecting') =>
       ({ state, daemonVersion }) as Parameters<typeof prompts.hasPrompts>[0]

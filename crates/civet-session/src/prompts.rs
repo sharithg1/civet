@@ -245,9 +245,24 @@ impl PromptQueues {
         self.submits.iter().any(|&(p, _)| p == pane)
     }
 
-    /// Type `text` into `pane` once its pending Enter is in.
-    pub(crate) fn defer(&mut self, pane: PaneId, text: String) {
+    /// True while `pane` has a prompt waiting in [`Self::defer`]: a newer
+    /// one goes after it.
+    pub(crate) fn has_deferred(&self, pane: PaneId) -> bool {
+        self.deferred.iter().any(|(p, _)| *p == pane)
+    }
+
+    /// Type `text` into `pane` once its pending Enter is in (or its PTY
+    /// drains). At most [`MAX_QUEUED_PROMPTS`] wait per pane: beyond that
+    /// the pane is not taking input, and the send is refused.
+    pub(crate) fn defer(&mut self, pane: PaneId, text: String) -> Result<(), SessionError> {
+        let waiting = self.deferred.iter().filter(|(p, _)| *p == pane).count();
+        if waiting >= MAX_QUEUED_PROMPTS {
+            return Err(SessionError::Busy(format!(
+                "{pane} is not taking input: {waiting} prompts already wait to be typed"
+            )));
+        }
         self.deferred.push((pane, text));
+        Ok(())
     }
 
     /// The oldest deferred prompt of each pane that is free now (left in
@@ -500,9 +515,10 @@ mod tests {
         q.submit_at(P, t0 + SUBMIT_DELAY);
         assert!(q.submitting(P));
         assert!(!q.submitting(PaneId(2)));
-        q.defer(P, "a".into());
-        q.defer(PaneId(2), "x".into());
-        q.defer(P, "b".into());
+        q.defer(P, "a".into()).unwrap();
+        q.defer(PaneId(2), "x".into()).unwrap();
+        q.defer(P, "b".into()).unwrap();
+        assert!(q.has_deferred(P));
         // P still waits for its Enter; pane 2 is free.
         assert_eq!(q.ready_deferred(), [(PaneId(2), "x".to_owned())]);
         q.take_deferred(PaneId(2));
@@ -515,5 +531,17 @@ mod tests {
         assert!(q.ready_deferred().is_empty());
         q.drop_pane(P);
         assert!(q.ready_deferred().is_empty());
+        assert!(!q.has_deferred(P));
+    }
+
+    #[test]
+    fn deferred_prompts_are_bounded() {
+        let mut q = PromptQueues::default();
+        for i in 0..MAX_QUEUED_PROMPTS {
+            q.defer(P, i.to_string()).unwrap();
+        }
+        assert!(matches!(q.defer(P, "x".into()), Err(SessionError::Busy(_))));
+        // Per pane.
+        q.defer(PaneId(2), "y".into()).unwrap();
     }
 }

@@ -1513,8 +1513,9 @@ impl SessionManager {
 
     /// Type `text` into the pane and press Enter [`prompts::SUBMIT_DELAY`]
     /// later (the ticker does). Returns once the text is queued for the PTY,
-    /// or, while the pane's previous prompt still waits for its Enter, once
-    /// it is set to follow that one.
+    /// or, while the pane's previous prompt still waits for its Enter (or
+    /// its PTY is backlogged), once it is set to follow. `Busy` when
+    /// [`civet_proto::MAX_QUEUED_PROMPTS`] already wait that way.
     pub fn send_prompt(&self, pane: PaneId, text: &str) -> Result<(), SessionError> {
         let text = prompts::clean_prompt(text)?;
         let p = self.pane(pane)?;
@@ -1523,13 +1524,17 @@ impl SessionManager {
         }
         // Check and write under the queue lock (lock order: prompts, then
         // the pane's), so the ticker cannot type into the pane in between.
+        // Older held prompts go first.
         let mut q = lock(&self.inner.prompts);
-        if q.submitting(pane) {
-            q.defer(pane, text);
-            return Ok(());
+        if q.submitting(pane) || q.has_deferred(pane) {
+            return q.defer(pane, text);
         }
-        p.type_prompt(&text)?;
-        q.submit_at(pane, Instant::now() + prompts::SUBMIT_DELAY);
+        match p.type_prompt(&text) {
+            Ok(()) => q.submit_at(pane, Instant::now() + prompts::SUBMIT_DELAY),
+            // PTY backlogged: typed once it drains.
+            Err(SessionError::Busy(_)) => q.defer(pane, text)?,
+            Err(e) => return Err(e),
+        }
         Ok(())
     }
 
@@ -1805,7 +1810,7 @@ fn run_prompts(inner: &Inner, panes: &[Arc<Pane>], now: Instant) {
             let Some(p) = by_id.get(&pane) else {
                 continue;
             };
-            if q.submitting(pane) {
+            if q.submitting(pane) || q.has_deferred(pane) {
                 q.retry(pane, now + prompts::SUBMIT_DELAY);
                 continue;
             }

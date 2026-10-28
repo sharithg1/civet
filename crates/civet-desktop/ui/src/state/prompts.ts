@@ -166,7 +166,7 @@ async function loadHost(hostId: string): Promise<void> {
     for (let i = 1; ; i++) {
       const rev = revisions.get(hostId) ?? 0
       const list = await b().listQueuedPrompts(hostId)
-      if (revisions.get(hostId) === rev) return setHostQueues(hostId, list)
+      if ((revisions.get(hostId) ?? 0) === rev) return setHostQueues(hostId, list)
       // Still changing: the panes it changed are newer here; take the rest.
       if (i === LOAD_ATTEMPTS) return mergeHostQueues(hostId, list)
     }
