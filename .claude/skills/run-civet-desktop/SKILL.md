@@ -69,6 +69,7 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 |---|---|
 | `connect [host]` | Connect a mock host (default `devbox`; a name containing `fail` fails, `udp-blocked` falls back to SSH). Waits for "1 host connected". The `main` worktree of `civet` opens. |
 | `worktree <text>` | Click a sidebar worktree by its text (`Implement QUIC resume`, `scrollback-paging`…). |
+| `hover-worktree <text>` | Hover a sidebar worktree row (shows ahead/behind and spend in place of its age). |
 | `right <files\|changes\|branch\|ports>` | Switch the right panel tab. |
 | `click-file` / `dblclick-file <name>` | A row in the Files tree (exact entry name, e.g. `Cargo.toml`). |
 | `rclick-file` / `cmd-click-file` / `shift-click-file <name>` | Right-click (opens the context menu), ⌘-click or ⇧-click a Files row. |

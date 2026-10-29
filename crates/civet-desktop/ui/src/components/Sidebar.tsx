@@ -1,7 +1,7 @@
 // Worktree sidebar, laid out like Cursor's: it runs the full window height,
 // with the traffic lights, sidebar toggle and previous / next worktree
 // arrows on top, then the nav (New worktree ⌥N, Search ⌘K, Add project ⌘O),
-// then one section per host (label, state, latency) holding its projects
+// then one section per host (label and state; latency in the dot's tooltip) holding its projects
 // (repos) and their worktree rows: a status dot, the task / branch label and
 // the age of the newest session. Under the selected worktree, its tabs.
 // Settings (and an Update pill when a daemon upgrade is waiting) at the
@@ -12,8 +12,9 @@
 // clears its label (branch / task name and PR badge, until they change),
 // archives it (into the project's collapsed "Archived" group) or removes it
 // (the Remove worktree dialog), and updates it from the default branch
-// (rebase or merge, state/lifecycle.ts). Rows show how far the branch is
-// ahead of / behind the default branch; a project with stale worktrees
+// (rebase or merge, state/lifecycle.ts). At rest a row keeps to its label,
+// PR state and age; hovering swaps the age for how far the branch is ahead
+// of / behind the default branch and its agent spend. A project with stale worktrees
 // (merged, remote branch gone, PR merged or closed) shows a Clean up button
 // with their count. While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
@@ -389,7 +390,7 @@ export function HostStateDot({ host }: { host: HostView }) {
   return (
     <span
       aria-label={s}
-      title={s}
+      title={s === 'connected' ? `connected · ${hostMeta(host)}` : s}
       data-host-state={s}
       className={cn(
         'inline-block size-1.5 shrink-0 rounded-full',
@@ -459,7 +460,9 @@ function HostSection({
           </span>
         )}
         <span className="flex-1" />
-        <span className="font-mono text-2xs text-dim group-hover:hidden">{hostMeta(host)}</span>
+        {host.state !== 'connected' && (
+          <span className="font-mono text-2xs text-dim group-hover:hidden">{hostMeta(host)}</span>
+        )}
         <button
           type="button"
           aria-label={`Add project on ${host.label}`}
@@ -601,7 +604,6 @@ function FolderProjectRow({
         >
           {name}
         </span>
-        <span className="shrink-0 text-sm text-dim">folder</span>
       </div>
     </div>
   )
@@ -996,7 +998,7 @@ function WorktreeRow({
         title={
           removing
             ? `Removing ${host.label}:${wt.path}…`
-            : `${useTask ? `${branch}\n` : ''}${host.label}:${wt.path}`
+            : `${useTask ? `${branch}\n` : ''}${host.label}:${wt.path}${wt.isMain ? '\nDefault worktree' : ''}`
         }
         onClick={(e) => {
           if (removing) return
@@ -1006,7 +1008,7 @@ function WorktreeRow({
           selectWorktree(hostId, wt.id)
         }}
         className={cn(
-          'relative mx-2 flex cursor-default flex-col rounded-md px-2',
+          'group/row relative mx-2 flex cursor-default flex-col rounded-md px-2',
           selected ? 'bg-sidebar-accent' : !removing && 'hover:bg-hover',
           picked && 'ring-1 ring-status-run/70 ring-inset',
           archived && !selected && 'opacity-60',
@@ -1042,7 +1044,7 @@ function WorktreeRow({
             <span
               data-ahead-behind
               title={aheadBehindTitle(life.info.ahead, life.info.behind, life.base)}
-              className="shrink-0 font-mono text-2xs text-quiet"
+              className="hidden shrink-0 font-mono text-2xs text-quiet group-hover/row:inline"
             >
               {counts}
             </span>
@@ -1050,13 +1052,19 @@ function WorktreeRow({
           {pr && !hidden.pr && !removing && (
             <PullRequestIcon pr={pr} hostId={hostId} worktree={wt.id} />
           )}
-          {!removing && <WorktreeSpend hostId={hostId} worktree={wt.id} />}
+          {!removing && (
+            <span className="hidden group-hover/row:contents">
+              <WorktreeSpend hostId={hostId} worktree={wt.id} />
+            </span>
+          )}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
-          ) : wt.isMain ? (
-            <span className="shrink-0 text-sm text-dim">default</span>
           ) : (
-            newest != null && <span className="shrink-0 text-sm text-quiet">{ago(newest)}</span>
+            newest != null && (
+              <span className="shrink-0 text-sm text-quiet group-hover/row:hidden">
+                {ago(newest)}
+              </span>
+            )
           )}
         </div>
         {showTabs && (
