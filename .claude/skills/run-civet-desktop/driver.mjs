@@ -35,6 +35,8 @@ const commands = {
   },
   // Select a worktree in the sidebar by its visible text.
   worktree: async (...name) => p.getByText(name.join(' ')).first().click(),
+  // Hover a sidebar worktree row (by its visible text) to show its hover details.
+  'hover-worktree': async (...name) => p.getByText(name.join(' ')).first().hover(),
   // Right panel: Files | Changes | Branch | Ports.
   right: async (name) => p.getByRole('tab', { name: new RegExp(`^${name}`, 'i') }).click(),
   'click-file': async (...name) => row(name.join(' ')).click(),
