@@ -17,6 +17,7 @@ import { RecordParseError, parseRecords, type TermRecord } from './records'
 import { ScrollbackPager } from './scrollback-pager'
 import { handleClipboardKey, isMacPlatform } from './clipboard-keys'
 import { handleShiftEnter } from './newline-keys'
+import { handleWordKey } from './word-keys'
 import { handleFindKey, type FindAction, type FindOptions } from './find-keys'
 import { InputQueue } from './input-queue'
 import { FIND_DECORATIONS, buildDefaultTerminalOptions } from './terminal-options'
@@ -132,16 +133,18 @@ export class PaneController {
       () => d3.dispose()
     )
 
-    // Shift+Enter inserts a newline (see newline-keys); Cmd+F finds (see
+    // Shift+Enter inserts a newline (see newline-keys); Option+Left/Right move
+    // by word (see word-keys); Cmd+F finds (see
     // find-keys); Cmd+C copies xterm's selection, Cmd+A selects all (see
     // clipboard-keys).
     const isMac = isMacPlatform()
-    const sendNewline = (data: string) => {
+    const sendText = (data: string) => {
       if (!this.stream.closed) this.input.push('text', data)
     }
     this.term.attachCustomKeyEventHandler(
       (ev) =>
-        handleShiftEnter(ev, sendNewline) &&
+        handleShiftEnter(ev, sendText) &&
+        handleWordKey(ev, isMac, sendText) &&
         handleFindKey(ev, { isMac, onFind: (action) => this.cb.onFind?.(action) }) &&
         handleClipboardKey(ev, this.term, {
           isMac,
