@@ -387,10 +387,12 @@ export function hostMeta(host: HostView): string {
 
 export function HostStateDot({ host }: { host: HostView }) {
   const s = host.state
+  const label = s === 'connected' ? `connected · ${hostMeta(host)}` : s
   return (
     <span
-      aria-label={s}
-      title={s === 'connected' ? `connected · ${hostMeta(host)}` : s}
+      role="img"
+      aria-label={label}
+      title={label}
       data-host-state={s}
       className={cn(
         'inline-block size-1.5 shrink-0 rounded-full',
@@ -1044,7 +1046,7 @@ function WorktreeRow({
             <span
               data-ahead-behind
               title={aheadBehindTitle(life.info.ahead, life.info.behind, life.base)}
-              className="hidden shrink-0 font-mono text-2xs text-quiet group-hover/row:inline"
+              className="sr-only shrink-0 font-mono text-2xs text-quiet group-hover/row:not-sr-only"
             >
               {counts}
             </span>
@@ -1053,7 +1055,7 @@ function WorktreeRow({
             <PullRequestIcon pr={pr} hostId={hostId} worktree={wt.id} />
           )}
           {!removing && (
-            <span className="hidden group-hover/row:contents">
+            <span className="sr-only group-hover/row:not-sr-only">
               <WorktreeSpend hostId={hostId} worktree={wt.id} />
             </span>
           )}
