@@ -170,6 +170,5 @@ export function useWorktreeInfo(
 }
 
 function diffWhat({ side }: NonNullable<FileTab['diff']>): string {
-  if (side === 'turn') return 'agent turn'
   return side === 'staged' ? 'staged changes' : side === 'conflicted' ? 'conflict' : 'changes'
 }

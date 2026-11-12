@@ -10,7 +10,7 @@ import { leaves } from '@/layout/pane-tree'
 import { Spinner } from '@/components/ui/spinner'
 import { Kbd } from './chrome'
 import { ConnectionBanner } from './ConnectionBanner'
-import { DiffView, TurnDiffView } from './DiffView'
+import { DiffView } from './DiffView'
 import { FileView } from './FileView'
 import { SplitLayout } from './SplitLayout'
 import { StatsView } from './StatsView'
@@ -37,8 +37,6 @@ export function Workspace() {
   }
   const tab = ws?.tabs.find((t) => t.id === ws?.activeTab)
   const diff = tab?.kind === 'file' ? tab.diff : undefined
-  const turnDiff = diff?.side === 'turn' ? diff : null
-  const changesDiff = diff?.side !== 'turn' ? diff : null
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <ConnectionBanner hostId={active.hostId} />
@@ -51,21 +49,13 @@ export function Workspace() {
       >
         {statsOpen ? (
           <StatsView hostId={active.hostId} worktree={active.worktree} />
-        ) : tab?.kind === 'file' && turnDiff ? (
-          <TurnDiffView
-            key={tab.id}
-            hostId={active.hostId}
-            worktree={active.worktree}
-            path={tab.path}
-            target={turnDiff}
-          />
-        ) : tab?.kind === 'file' && changesDiff ? (
+        ) : tab?.kind === 'file' && diff ? (
           <DiffView
             key={tab.id}
             hostId={active.hostId}
             worktree={active.worktree}
             path={tab.path}
-            target={changesDiff}
+            target={diff}
           />
         ) : tab?.kind === 'file' ? (
           <FileView
