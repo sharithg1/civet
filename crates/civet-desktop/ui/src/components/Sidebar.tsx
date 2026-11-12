@@ -61,6 +61,7 @@ import {
   openPullRequest,
   panesOfWorktree,
   reconnectHost,
+  requestRemoveProject,
   requestRestartDaemon,
   selectWorktree,
   setWorktreeArchived,
@@ -583,31 +584,61 @@ function FolderProjectRow({
         reorder.dragging === repoId && 'opacity-50'
       )}
     >
-      <div
-        role="button"
-        tabIndex={-1}
-        data-wt={wt?.id}
-        data-folder="true"
-        data-active={selected ? 'true' : 'false'}
-        title={`${name} · folder (no git)\n${host.label}:${wt?.path ?? ''}`}
-        onPointerDown={reorder.handle(repoId)}
-        onClick={() => wt && selectWorktree(hostId, wt.id)}
-        className={cn(
-          'mx-2 mb-1 flex h-[30px] cursor-default items-center gap-2.5 rounded-md px-2',
-          selected ? 'bg-sidebar-accent' : 'hover:bg-hover'
-        )}
-      >
-        <Folder className="size-4 shrink-0 text-quiet" />
-        <span
+      <ProjectMenu hostId={hostId} repoId={repoId}>
+        <div
+          role="button"
+          tabIndex={-1}
+          data-wt={wt?.id}
+          data-folder="true"
+          data-active={selected ? 'true' : 'false'}
+          title={`${name} · folder (no git)\n${host.label}:${wt?.path ?? ''}`}
+          onPointerDown={reorder.handle(repoId)}
+          onClick={() => wt && selectWorktree(hostId, wt.id)}
           className={cn(
-            'min-w-0 flex-1 truncate text-base',
-            selected ? 'text-foreground' : 'text-soft'
+            'mx-2 mb-1 flex h-[30px] cursor-default items-center gap-2.5 rounded-md px-2',
+            selected ? 'bg-sidebar-accent' : 'hover:bg-hover'
           )}
         >
-          {name}
-        </span>
-      </div>
+          <Folder className="size-4 shrink-0 text-quiet" />
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate text-base',
+              selected ? 'text-foreground' : 'text-soft'
+            )}
+          >
+            {name}
+          </span>
+        </div>
+      </ProjectMenu>
     </div>
+  )
+}
+
+/** Right-click menu of a project row: remove it from the host. */
+function ProjectMenu({
+  hostId,
+  repoId,
+  children
+}: {
+  hostId: string
+  repoId: string
+  children: ReactNode
+}) {
+  const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
+        <ContextMenuItem
+          variant="destructive"
+          disabled={!connected}
+          onSelect={() => requestRemoveProject(hostId, repoId)}
+        >
+          <Trash2 />
+          Remove project…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -653,58 +684,60 @@ function ProjectGroup({
         reorder.dragging === repoId && 'opacity-50'
       )}
     >
-      <div
-        role="button"
-        tabIndex={-1}
-        aria-expanded={!collapsed}
-        title="Click to collapse, drag to reorder"
-        onPointerDown={reorder.handle(repoId)}
-        onClick={() => toggleRepoCollapsed(hostId, repoId)}
-        className="group mx-2 flex h-[30px] cursor-default items-center gap-2.5 rounded-md px-2 hover:bg-hover"
-      >
-        {/* Cursor's disclosure: a folder when collapsed, a chevron when open
+      <ProjectMenu hostId={hostId} repoId={repoId}>
+        <div
+          role="button"
+          tabIndex={-1}
+          aria-expanded={!collapsed}
+          title="Click to collapse, drag to reorder"
+          onPointerDown={reorder.handle(repoId)}
+          onClick={() => toggleRepoCollapsed(hostId, repoId)}
+          className="group mx-2 flex h-[30px] cursor-default items-center gap-2.5 rounded-md px-2 hover:bg-hover"
+        >
+          {/* Cursor's disclosure: a folder when collapsed, a chevron when open
             (and on hover, so the click target reads as a toggle). */}
-        <span className="grid size-4 shrink-0 place-items-center text-quiet">
-          {collapsed ? (
-            <>
-              <Folder className="size-4 group-hover:hidden" />
-              <ChevronRight className="hidden size-4 group-hover:block" />
-            </>
-          ) : (
-            <ChevronDown className="size-4" />
+          <span className="grid size-4 shrink-0 place-items-center text-quiet">
+            {collapsed ? (
+              <>
+                <Folder className="size-4 group-hover:hidden" />
+                <ChevronRight className="hidden size-4 group-hover:block" />
+              </>
+            ) : (
+              <ChevronDown className="size-4" />
+            )}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-base text-soft">{name}</span>
+          {stale > 0 && (
+            <button
+              type="button"
+              title={`Clean up ${stale} stale worktree${stale === 1 ? '' : 's'} in ${name}`}
+              aria-label={`Clean up worktrees in ${name}`}
+              disabled={host.state !== 'connected'}
+              onClick={(e) => {
+                e.stopPropagation()
+                useLifecycle.setState({ cleanup: { hostId, repo: repoId } })
+              }}
+              className="flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-sm text-quiet hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-50 [&_svg]:size-3"
+            >
+              <Brush />
+              {stale}
+            </button>
           )}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-base text-soft">{name}</span>
-        {stale > 0 && (
           <button
             type="button"
-            title={`Clean up ${stale} stale worktree${stale === 1 ? '' : 's'} in ${name}`}
-            aria-label={`Clean up worktrees in ${name}`}
+            title={`New worktree in ${name} (⌥N)`}
+            aria-label={`New worktree in ${name}`}
             disabled={host.state !== 'connected'}
             onClick={(e) => {
               e.stopPropagation()
-              useLifecycle.setState({ cleanup: { hostId, repo: repoId } })
+              useStore.setState({ newWorktree: { hostId, repo: repoId } })
             }}
-            className="flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-sm text-quiet hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-50 [&_svg]:size-3"
+            className={cn(ROW_ACTION, '-mr-1')}
           >
-            <Brush />
-            {stale}
+            <Plus />
           </button>
-        )}
-        <button
-          type="button"
-          title={`New worktree in ${name} (⌥N)`}
-          aria-label={`New worktree in ${name}`}
-          disabled={host.state !== 'connected'}
-          onClick={(e) => {
-            e.stopPropagation()
-            useStore.setState({ newWorktree: { hostId, repo: repoId } })
-          }}
-          className={cn(ROW_ACTION, '-mr-1')}
-        >
-          <Plus />
-        </button>
-      </div>
+        </div>
+      </ProjectMenu>
       {!collapsed && (
         <div className="mb-1 flex flex-col gap-px">
           {live.map((wt) => (

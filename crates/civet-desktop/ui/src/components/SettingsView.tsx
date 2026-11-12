@@ -10,6 +10,7 @@ import { ArrowLeft, Folder, Keyboard, Search, Server, Settings } from 'lucide-re
 import {
   disconnectHost,
   reconnectHost,
+  requestRemoveProject,
   requestRestartDaemon,
   upgradeSummary,
   useStore,
@@ -508,6 +509,14 @@ function ProjectsPage() {
                       Worktree setup…
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className={btn}
+                    disabled={hosts[h]?.state !== 'connected'}
+                    onClick={() => requestRemoveProject(h, r.id)}
+                  >
+                    Remove…
+                  </button>
                 </div>
                 {templates && open === key && <WorktreeTemplateEditor hostId={h} repo={r.id} />}
               </div>
