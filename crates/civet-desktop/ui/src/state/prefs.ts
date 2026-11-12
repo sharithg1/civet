@@ -61,7 +61,7 @@ export type Prefs = {
   sidebarOpen: boolean | null
   rightPanelOpen: boolean | null
   /** Right panel tab last selected. */
-  rightTab: 'files' | 'changes' | 'activity' | 'branch' | 'ports'
+  rightTab: 'files' | 'changes' | 'branch' | 'ports'
   /** Port forwards to restore on connect, per host id. */
   pinnedForwards: Record<string, PinnedForward[]>
   /** Files tab: expanded directories (worktree-relative) per `wsKey(hostId, worktree)`. */
@@ -140,11 +140,16 @@ export const DEFAULT_PREFS: Prefs = {
 
 const KEY = 'civet.prefs.v1'
 
+const RIGHT_TABS: Prefs['rightTab'][] = ['files', 'changes', 'branch', 'ports']
+
 function load(): Prefs {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null
     if (!raw) return DEFAULT_PREFS
-    return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) }
+    const prefs = { ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) }
+    // Why: the Activity tab is gone; a saved pick of it falls back to the default.
+    if (!RIGHT_TABS.includes(prefs.rightTab)) prefs.rightTab = DEFAULT_PREFS.rightTab
+    return prefs
   } catch {
     return DEFAULT_PREFS
   }
