@@ -668,6 +668,50 @@ describe('store', () => {
     expect(useStore.getState().workspaces[key]!.activeTab).toBe('a')
   })
 
+  it('removing a project closes its panes, unregisters it and moves the selection off', async () => {
+    const repo: RepoInfo = { id: 'r', name: 'repo', path: '/r', defaultBranch: 'main' }
+    const other: RepoInfo = { id: 'o', name: 'other', path: '/o', defaultBranch: 'main' }
+    const main: WorktreeInfo = {
+      id: '/r',
+      repo: 'r',
+      path: '/r',
+      branch: 'main',
+      head: null,
+      isMain: true,
+      locked: false
+    }
+    const killPane = vi.fn(async () => {})
+    const removeRepo = vi.fn(async () => {})
+    useStore.setState({
+      backend: fakeBackend({ killPane, removeRepo, listRepos: async () => [other] }),
+      hosts: {
+        h: { ...summary('h'), rttMs: null, message: null, bootstrap: null, errorCode: null }
+      },
+      panes: { h: { 1: pane(1, { worktree: '/r' }), 2: pane(2, { worktree: '/o' }) } },
+      repos: { h: [repo, other] },
+      worktrees: { [store.wtKey('h', 'r')]: [main] },
+      workspaces: {},
+      active: null
+    })
+    store.selectWorktree('h', '/r')
+
+    store.requestRemoveProject('h', 'r')
+    const confirm = useStore.getState().confirm!
+    expect(confirm.title).toBe('Remove repo?')
+    expect(confirm.confirmLabel).toBe('Remove project (closes 1 pane)')
+    expect(removeRepo).not.toHaveBeenCalled()
+    confirm.onConfirm()
+    await vi.waitFor(() => expect(removeRepo).toHaveBeenCalledWith('h', 'r'))
+    expect(killPane).toHaveBeenCalledTimes(1)
+    expect(killPane).toHaveBeenCalledWith('h', 1, 'hangup')
+    await vi.waitFor(() => expect(useStore.getState().repos.h).toEqual([other]))
+    const s = useStore.getState()
+    expect(s.active).toBeNull()
+    expect(s.panes.h![1]).toBeUndefined()
+    expect(s.panes.h![2]).toBeDefined()
+    expect(s.workspaces[store.wsKey('h', '/r')]).toBeUndefined()
+  })
+
   it('a folder project has files and sessions but no worktrees or PRs', async () => {
     const spawnPane = vi.fn(async () => pane(9, { worktree: '/notes' }))
     const launchAgent = vi.fn()

@@ -1259,6 +1259,59 @@ export async function addProject(hostId: string, path: string): Promise<void> {
   if (main) selectWorktree(hostId, main.id)
 }
 
+/** Live panes in any worktree of a project. */
+function projectPanes(hostId: string, repo: string): PaneId[] {
+  const ids = new Set((get().worktrees[wtKey(hostId, repo)] ?? []).map((w) => w.id))
+  return Object.values(get().panes[hostId] ?? {})
+    .filter((p) => p.worktree != null && ids.has(p.worktree))
+    .map((p) => p.id)
+}
+
+/** Ask, then remove a project from the host (its panes close; files and worktrees stay). */
+export function requestRemoveProject(hostId: string, repo: string): void {
+  const r = get().repos[hostId]?.find((x) => x.id === repo)
+  if (!r) return
+  const n = projectPanes(hostId, repo).length
+  const panes = n ? ` ${n} open pane${n === 1 ? '' : 's'} in it will be closed.` : ''
+  set({
+    confirm: {
+      title: `Remove ${r.name}?`,
+      body:
+        `Civet stops tracking ${r.path} on ${get().hosts[hostId]?.label ?? hostId}.${panes} ` +
+        'Files, branches and worktrees on disk are not touched; add it again any time.',
+      confirmLabel: n ? `Remove project (closes ${n} pane${n === 1 ? '' : 's'})` : 'Remove project',
+      onConfirm: () => void removeProject(hostId, repo),
+      focusCancel: true
+    }
+  })
+}
+
+export async function removeProject(hostId: string, repo: string): Promise<void> {
+  try {
+    await Promise.all(
+      projectPanes(hostId, repo).map((pane) =>
+        backend()
+          .killPane(hostId, pane, 'hangup')
+          .catch((err: unknown) => {
+            if (CivetError.from(err).code !== 'notFound') throw err
+          })
+          .then(() => removePaneEverywhere(hostId, pane))
+      )
+    )
+    await backend().removeRepo(hostId, repo)
+  } catch (err) {
+    reportError('Could not remove the project', err)
+    return
+  }
+  // Drops its workspaces and moves the selection off it.
+  bumpWorktreeEpoch(hostId, repo)
+  applyWorktreeList(hostId, repo, [])
+  set((s) => ({
+    repos: { ...s.repos, [hostId]: (s.repos[hostId] ?? []).filter((r) => r.id !== repo) }
+  }))
+  await refreshRepos(hostId)
+}
+
 export type AgentChoice = 'claude' | 'codex' | 'custom'
 
 function checkGitRepo(hostId: string, repo: string): void {
