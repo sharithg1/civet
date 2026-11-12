@@ -697,8 +697,8 @@ describe('store', () => {
 
     store.requestRemoveProject('h', 'r')
     const confirm = useStore.getState().confirm!
-    expect(confirm.title).toBe('Remove repo?')
-    expect(confirm.confirmLabel).toBe('Remove project (closes 1 pane)')
+    expect(confirm.title).toBe('Stop tracking repo?')
+    expect(confirm.confirmLabel).toBe('Stop tracking (closes 1 pane)')
     expect(removeRepo).not.toHaveBeenCalled()
     confirm.onConfirm()
     await vi.waitFor(() => expect(removeRepo).toHaveBeenCalledWith('h', 'r'))

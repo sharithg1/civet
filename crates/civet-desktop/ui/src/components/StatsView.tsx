@@ -68,17 +68,23 @@ export function StatsIndicator() {
         open ? 'bg-card text-foreground' : 'text-quiet hover:bg-hover hover:text-soft'
       )}
     >
-      {sparkline && (
-        <Sparkline values={cpu} slots={INDICATOR_SAMPLES} max={1000} className="h-3.5 w-9" />
-      )}
-      <span className="w-8 text-right">{formatPermille(latest.cpu)}</span>
-      <span className="text-dim">·</span>
-      <span>{formatBytes(latest.memUsed)}</span>
-      {warn[0] && (
+      {/* The title bar is a size container (TitleBar.tsx): the routine
+          numbers give way to the tabs first, then the warning to its icon. */}
+      <span className="hidden items-center gap-1.5 @3xl:flex">
+        {sparkline && (
+          <Sparkline values={cpu} slots={INDICATOR_SAMPLES} max={1000} className="h-3.5 w-9" />
+        )}
+        <span className="w-8 text-right">{formatPermille(latest.cpu)}</span>
+        <span className="text-dim">·</span>
+        <span>{formatBytes(latest.memUsed)}</span>
+      </span>
+      {warn[0] ? (
         <span className="flex items-center gap-1 text-status-err-text">
           <AlertTriangle className="size-3" aria-hidden />
-          {warn[0]}
+          <span className="hidden whitespace-nowrap @xl:inline">{warn[0]}</span>
         </span>
+      ) : (
+        <Activity className="size-3.5 @3xl:hidden" aria-hidden />
       )}
     </button>
   )

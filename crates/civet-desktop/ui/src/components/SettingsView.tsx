@@ -256,8 +256,9 @@ export function SettingsView() {
             </button>
           ))}
         </div>
+        {/* Why not on Projects: its worktree setup editor has its own Save. */}
         <div className="flex h-12 shrink-0 items-center px-4 text-xs text-faint">
-          {saved ? 'Saved' : 'Changes save automatically'}
+          {page === 'projects' && !query ? '' : saved ? 'Saved' : 'Changes save automatically'}
         </div>
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
@@ -515,7 +516,7 @@ function ProjectsPage() {
                     disabled={hosts[h]?.state !== 'connected'}
                     onClick={() => requestRemoveProject(h, r.id)}
                   >
-                    Remove…
+                    Stop tracking…
                   </button>
                 </div>
                 {templates && open === key && <WorktreeTemplateEditor hostId={h} repo={r.id} />}

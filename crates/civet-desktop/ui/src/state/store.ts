@@ -115,6 +115,8 @@ export type ConfirmRequest = {
   onConfirm: () => void
   /** Focus Cancel instead of the (destructive) confirm button. */
   focusCancel?: boolean
+  /** A plain confirm button: nothing is deleted or interrupted. Default: destructive. */
+  safe?: boolean
 }
 
 export type NewWorktreeRequest = { hostId: string; repo?: string }
@@ -1267,21 +1269,23 @@ function projectPanes(hostId: string, repo: string): PaneId[] {
     .map((p) => p.id)
 }
 
-/** Ask, then remove a project from the host (its panes close; files and worktrees stay). */
+/** Ask, then stop tracking a project on the host (its panes close; files and worktrees stay). */
 export function requestRemoveProject(hostId: string, repo: string): void {
   const r = get().repos[hostId]?.find((x) => x.id === repo)
   if (!r) return
   const n = projectPanes(hostId, repo).length
-  const panes = n ? ` ${n} open pane${n === 1 ? '' : 's'} in it will be closed.` : ''
+  const panes = n ? ` Its ${n} open pane${n === 1 ? '' : 's'} will be closed.` : ''
   set({
     confirm: {
-      title: `Remove ${r.name}?`,
+      title: `Stop tracking ${r.name}?`,
       body:
-        `Civet stops tracking ${r.path} on ${get().hosts[hostId]?.label ?? hostId}.${panes} ` +
-        'Files, branches and worktrees on disk are not touched; add it again any time.',
-      confirmLabel: n ? `Remove project (closes ${n} pane${n === 1 ? '' : 's'})` : 'Remove project',
+        `${r.path} on ${get().hosts[hostId]?.label ?? hostId} leaves Civet; its files, branches ` +
+        `and worktrees stay on disk, and you can add it again any time.${panes}`,
+      confirmLabel: n ? `Stop tracking (closes ${n} pane${n === 1 ? '' : 's'})` : 'Stop tracking',
       onConfirm: () => void removeProject(hostId, repo),
-      focusCancel: true
+      focusCancel: true,
+      // Closing panes ends their sessions: that stays a destructive button.
+      safe: n === 0
     }
   })
 }

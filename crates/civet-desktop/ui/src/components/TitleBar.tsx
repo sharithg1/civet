@@ -12,7 +12,7 @@
 // lib/window-chrome.ts. A folder project (not a git repository) has no
 // branch details or worktree removal.
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronDown,
   Copy,
@@ -78,7 +78,8 @@ export function TitleBar() {
       // drags the window; buttons and tabs keep their clicks.
       data-tauri-drag-region="deep"
       data-titlebar-inset={sidebarOpen ? undefined : inset}
-      className="flex h-10 shrink-0 items-center gap-1 bg-background pr-2 pl-3 select-none"
+      // @container: the host stats collapse as the row narrows (StatsView.tsx).
+      className="@container flex h-10 shrink-0 items-center gap-1 bg-background pr-2 pl-3 select-none"
       style={!sidebarOpen && inset ? { paddingLeft: inset } : undefined}
     >
       {!sidebarOpen && (
@@ -223,6 +224,13 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: string; startX: number; moved: boolean } | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
+  // The strip scrolls when the tabs overflow: keep the active one in view.
+  useEffect(() => {
+    if (!activeTab) return
+    stripRef.current
+      ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(activeTab)}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTab])
 
   // Pointer events rather than HTML5 drag-and-drop: Tauri's native file-drop
   // handler swallows HTML5 drag events in the webview. The strip reorders

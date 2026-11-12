@@ -247,7 +247,7 @@ export function ConfirmDialog() {
           </AlertDialogCancel>
           <AlertDialogAction
             ref={confirmRef}
-            variant="destructive"
+            variant={shown?.safe ? 'default' : 'destructive'}
             size="md"
             onClick={() => {
               close()

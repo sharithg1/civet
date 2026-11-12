@@ -9,12 +9,13 @@
 // by dragging it (lib/reorder.ts); the layout is saved in the prefs. Data is
 // the daemon's (repos, worktrees, panes); the "task" label is the agent
 // pane's title (see lib/worktree-view.ts). Right-clicking a worktree row
-// clears its label (branch / task name and PR badge, until they change),
+// clears its label (branch / task name, until they change),
 // archives it (into the project's collapsed "Archived" group) or removes it
 // (the Remove worktree dialog), and updates it from the default branch
-// (rebase or merge, state/lifecycle.ts). At rest a row keeps to its label,
-// PR state and age; hovering swaps the age for how far the branch is ahead
-// of / behind the default branch and its agent spend. A project with stale worktrees
+// (rebase or merge, state/lifecycle.ts), and opens its pull request on GitHub.
+// A row keeps to its status dot, label and age, so the label never loses
+// width; how far the branch is ahead of / behind the default branch and its
+// agent spend are in the row's tooltip. A project with stale worktrees
 // (merged, remote branch gone, PR merged or closed) shows a Clean up button
 // with their count. While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
@@ -35,12 +36,13 @@ import {
   ChevronDown,
   ChevronRight,
   Eraser,
+  ExternalLink,
+  EyeOff,
   Folder,
   FolderPlus,
   GitBranchPlus,
   GitMerge,
   Lock,
-  MessageSquare,
   MoreHorizontal,
   PanelLeft,
   Plus,
@@ -76,7 +78,6 @@ import {
 import type { HostView } from '@/state/store'
 import { applyOrder, clampSidebarWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
 import {
-  aheadBehindLabel,
   aheadBehindTitle,
   updateFromMain,
   useLifecycle,
@@ -122,20 +123,12 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Spinner } from '@/components/ui/spinner'
-import {
-  checksSummary,
-  PR_DETAIL_BACKGROUND_POLL_MS,
-  reviewSummary,
-  usePullRequestPolling,
-  usePullRequests
-} from '@/state/pull-requests'
 import { Kbd, useWorktreeTabs } from './chrome'
-import { CHECK_STATE, PR_STATE } from './PullRequestSection'
 import { IconButton } from './IconButton'
 import { PanelResizeHandle } from './PanelResizeHandle'
 import { StatusDot } from './StatusDot'
 import { AgentLogo, hasAgentLogo } from './AgentLogo'
-import { WorktreeSpend } from './AgentUsage'
+import { useWorktreeSpend } from './AgentUsage'
 
 export function Sidebar() {
   const hostOrder = useStore((s) => s.hostOrder)
@@ -630,12 +623,11 @@ function ProjectMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
         <ContextMenuItem
-          variant="destructive"
           disabled={!connected}
           onSelect={() => requestRemoveProject(hostId, repoId)}
         >
-          <Trash2 />
-          Remove project…
+          <EyeOff />
+          Stop tracking project…
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -794,10 +786,14 @@ function useStaleCount(hostId: string, repo: string): number {
   }).length
 }
 
-/** Right-click menu of a worktree row: send prompt, clear label, archive / unarchive, update, remove. */
+/**
+ * Right-click menu of a worktree row: send prompt, open its pull request,
+ * clear label, archive / unarchive, update, remove.
+ */
 function WorktreeMenu({
   hostId,
   wt,
+  pr,
   archived,
   removing,
   label,
@@ -805,6 +801,8 @@ function WorktreeMenu({
 }: {
   hostId: string
   wt: WorktreeInfo
+  /** The branch's newest pull request, if any. */
+  pr: PullRequestInfo | undefined
   archived: boolean
   removing: boolean
   /** What the row shows now, for "Clear label"; null when it shows nothing to clear. */
@@ -834,6 +832,12 @@ function WorktreeMenu({
           <Send />
           Send prompt…
         </ContextMenuItem>
+        {pr && (
+          <ContextMenuItem onSelect={() => void openPullRequest(pr)}>
+            <ExternalLink />
+            Open PR #{pr.number} on GitHub
+          </ContextMenuItem>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem
           disabled={!label}
@@ -897,59 +901,6 @@ function WorktreeMenu({
   )
 }
 
-/**
- * The branch's pull request state, as in Cursor's sidebar, with its CI state
- * and unresolved review comments while it is open; opens it on GitHub.
- */
-function PullRequestIcon({
-  pr,
-  hostId,
-  worktree
-}: {
-  pr: PullRequestInfo
-  hostId: string
-  worktree: string
-}) {
-  const { Icon, className, label } = PR_STATE[pr.state]
-  const live = pr.state === 'open' || pr.state === 'draft'
-  usePullRequestPolling(hostId, worktree, PR_DETAIL_BACKGROUND_POLL_MS, { enabled: live })
-  const detail = usePullRequests((s) => {
-    const d = s.byWorktree[wsKey(hostId, worktree)]?.detail
-    return live && d?.pr.number === pr.number ? d : null
-  })
-  const checks = detail?.checksState ? CHECK_STATE[detail.checksState] : null
-  const unresolved = detail?.unresolvedThreads ?? 0
-  const lines = [`#${pr.number} · ${label}`, pr.title]
-  if (detail?.checksState) lines.push(`${checks?.label}: ${checksSummary(detail)}`)
-  const review = detail && reviewSummary(detail)
-  if (review) lines.push(review)
-  if (unresolved > 0) lines.push(`${unresolved} unresolved comment${unresolved === 1 ? '' : 's'}`)
-  lines.push('Click to open on GitHub')
-  return (
-    <button
-      type="button"
-      aria-label={`Open PR #${pr.number} on GitHub`}
-      title={lines.join('\n')}
-      onClick={(e) => {
-        e.stopPropagation()
-        void openPullRequest(pr)
-      }}
-      className="-mx-1 flex h-[22px] shrink-0 cursor-pointer items-center gap-1 rounded-[4px] px-1 hover:bg-hover-strong"
-    >
-      {unresolved > 0 && (
-        <span className="flex items-center gap-0.5 font-mono text-2xs text-quiet">
-          <MessageSquare className="size-3" />
-          {unresolved}
-        </span>
-      )}
-      {checks && detail?.checksState !== 'passed' && (
-        <checks.Icon aria-label={checks.label} className={cn('size-3', checks.className)} />
-      )}
-      <Icon className={cn('size-3.5', className)} />
-    </button>
-  )
-}
-
 function WorktreeRow({
   host,
   wt,
@@ -974,7 +925,7 @@ function WorktreeRow({
     return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
   })
   const life = useWorktreeLifecycle(hostId, wt.repo, wt.id)
-  const counts = life ? aheadBehindLabel(life.info.ahead, life.info.behind) : ''
+  const spend = useWorktreeSpend(hostId, wt.id)
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)
   const labelPref = usePrefs((s) => s.worktreeLabel)
   const tabsPref = usePrefs((s) => s.sidebarTabs)
@@ -983,11 +934,7 @@ function WorktreeRow({
   const panes = panesOfWorktree(paneMap, wt.id)
   const dot = worktreeDot(panes, host.state === 'connected', unread)
   const task = wt.isMain ? null : worktreeTask(wt, panes)
-  const current: ClearedLabel = {
-    branch: wt.branch,
-    task,
-    pr: pr ? `${pr.number}:${pr.state}` : null
-  }
+  const current: ClearedLabel = { branch: wt.branch, task }
   const cleared = usePrefs((s) => s.clearedLabels[key])
   const hidden = clearedParts(cleared, current)
   useEffect(() => {
@@ -997,10 +944,7 @@ function WorktreeRow({
   const branch = hidden.branch ? basename(wt.path) : worktreeBranch(wt)
   const useTask = labelPref === 'task' && !!task && !hidden.task
   const title = useTask ? task! : branch
-  const clearable =
-    (current.branch != null && !hidden.branch) ||
-    (task != null && !hidden.task) ||
-    (pr != null && !hidden.pr)
+  const clearable = (current.branch != null && !hidden.branch) || (task != null && !hidden.task)
   const newest = panes.reduce<number | null>(
     (m, p) => (m == null || p.createdAtMs > m ? p.createdAtMs : m),
     null
@@ -1016,6 +960,7 @@ function WorktreeRow({
     <WorktreeMenu
       hostId={hostId}
       wt={wt}
+      pr={pr}
       archived={archived}
       removing={removing}
       label={clearable ? current : null}
@@ -1033,7 +978,17 @@ function WorktreeRow({
         title={
           removing
             ? `Removing ${host.label}:${wt.path}…`
-            : `${useTask ? `${branch}\n` : ''}${host.label}:${wt.path}${wt.isMain ? '\nDefault worktree' : ''}`
+            : [
+                useTask ? branch : null,
+                `${host.label}:${wt.path}`,
+                wt.isMain ? 'Default worktree' : null,
+                life?.base && (life.info.ahead || life.info.behind)
+                  ? aheadBehindTitle(life.info.ahead, life.info.behind, life.base)
+                  : null,
+                spend
+              ]
+                .filter(Boolean)
+                .join('\n')
         }
         onClick={(e) => {
           if (removing) return
@@ -1075,31 +1030,10 @@ function WorktreeRow({
             {title}
           </span>
           {wt.locked && <Lock aria-label="locked" className="size-3.5 shrink-0 text-dim" />}
-          {counts && life?.base && !removing && (
-            <span
-              data-ahead-behind
-              title={aheadBehindTitle(life.info.ahead, life.info.behind, life.base)}
-              className="sr-only shrink-0 font-mono text-2xs text-quiet group-hover/row:not-sr-only"
-            >
-              {counts}
-            </span>
-          )}
-          {pr && !hidden.pr && !removing && (
-            <PullRequestIcon pr={pr} hostId={hostId} worktree={wt.id} />
-          )}
-          {!removing && (
-            <span className="sr-only group-hover/row:not-sr-only">
-              <WorktreeSpend hostId={hostId} worktree={wt.id} />
-            </span>
-          )}
           {removing ? (
             <span className="shrink-0 text-sm text-quiet">Removing…</span>
           ) : (
-            newest != null && (
-              <span className="shrink-0 text-sm text-quiet group-hover/row:hidden">
-                {ago(newest)}
-              </span>
-            )
+            newest != null && <span className="shrink-0 text-sm text-quiet">{ago(newest)}</span>
           )}
         </div>
         {showTabs && (

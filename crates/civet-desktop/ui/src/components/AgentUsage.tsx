@@ -37,10 +37,10 @@ const MAX_SESSIONS = 12
 // ---------------------------------------------------------------------------
 
 /**
- * A worktree's estimated agent spend over the usage window, for its sidebar
- * row. Nothing when there is none (or Settings hides it).
+ * A worktree's estimated agent spend over the usage window, as a line for its
+ * sidebar row's tooltip. null when there is none (or Settings hides it).
  */
-export function WorktreeSpend({ hostId, worktree }: { hostId: string; worktree: string }) {
+export function useWorktreeSpend(hostId: string, worktree: string): string | null {
   const show = usePrefs((p) => p.sidebarSpend)
   const usage = useAgentUsage((s) => s.hosts[hostId]?.usage)
   const t = useMemo(
@@ -48,17 +48,7 @@ export function WorktreeSpend({ hostId, worktree }: { hostId: string; worktree: 
     [usage, worktree]
   )
   if (!show || !t || t.costMicros < 10_000) return null
-  return (
-    <span
-      className="shrink-0 font-mono text-xs text-dim tabular-nums"
-      title={[
-        `Agent spend, last ${USAGE_DAYS} days: ${formatUsd(t.costMicros)} (estimate at list prices)`,
-        `${formatTokens(totalTokens(t.tokens))} tokens · ${t.sessions} session${t.sessions === 1 ? '' : 's'}`
-      ].join('\n')}
-    >
-      {formatUsd(t.costMicros)}
-    </span>
-  )
+  return `Agent spend, last ${USAGE_DAYS} days: ${formatUsd(t.costMicros)} (estimate) · ${formatTokens(totalTokens(t.tokens))} tokens`
 }
 
 // ---------------------------------------------------------------------------
