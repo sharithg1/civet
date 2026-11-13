@@ -3,22 +3,13 @@
 // files and diffs too large to send; long diffs render in pages so a big file
 // can't stall the window. The worktree's status is polled while the tab
 // shows, and the diff is fetched again whenever the file's entry changes or a
-// git action runs in the worktree. TurnDiffView shows a file an agent turn
-// changed (Activity tab), between the turn's snapshots.
+// git action runs in the worktree.
 import { useEffect, useMemo, useState } from 'react'
 import { Copy, RotateCw } from 'lucide-react'
 import { CivetError } from '@/backend'
 import type { GitChangeKind, GitDiffInfo } from '@/types'
-import {
-  pushToast,
-  useStore,
-  wsKey,
-  type ChangesDiffTarget,
-  type TurnDiffTarget
-} from '@/state/store'
+import { pushToast, useStore, wsKey, type ChangesDiffTarget } from '@/state/store'
 import { CHANGES_POLL_MS, findChange, useChanges, useChangesPolling } from '@/state/changes'
-import { useActivity } from '@/state/activity'
-import { isTurn, turnTimes } from '@/lib/activity'
 import { diffSides, parseUnifiedDiff, type DiffLine, type ParsedDiff } from '@/lib/diff'
 import { type HighlightToken, highlight, languageForPath } from '@/lib/highlight'
 import { cn } from '@/lib/utils'
@@ -118,69 +109,6 @@ export function DiffView({
         </span>
         <span className="shrink-0 text-xs text-quiet">
           {target.side === 'staged' ? 'Staged' : kind ? CHANGE_KIND[kind][1] : 'No longer changed'}
-        </span>
-        <span className="flex-1" />
-        {diff && <Counts additions={diff.additions} deletions={diff.deletions} />}
-        <IconButton label="Reload" disabled={!connected} onClick={() => setReload((n) => n + 1)}>
-          <RotateCw />
-        </IconButton>
-        <IconButton label="Copy path" onClick={copyPath}>
-          <Copy />
-        </IconButton>
-      </div>
-      <DiffContent state={state} connected={connected} path={path} />
-    </div>
-  )
-}
-
-/**
- * A diff tab of an agent turn (opened from the Activity tab): one file's
- * change between the turn's snapshots. Snapshots never change, so it is
- * fetched once (and on Reload).
- */
-export function TurnDiffView({
-  hostId,
-  worktree,
-  path,
-  target
-}: {
-  hostId: string
-  worktree: string
-  path: string
-  target: TurnDiffTarget
-}) {
-  const connected = useStore((s) => s.hosts[hostId]?.state === 'connected')
-  const turn = useActivity((s) =>
-    s.byWorktree[wsKey(hostId, worktree)]?.activity?.turns.find((t) => isTurn(target.turn, t))
-  )
-  const [state, setState] = useState<DiffState | null>(null)
-  const [reload, setReload] = useState(0)
-  const { from, to } = target.turn
-
-  useEffect(() => {
-    void reload
-    const b = useStore.getState().backend
-    if (!b || !connected) return
-    let live = true
-    b.turnDiff(hostId, worktree, path, { from, to, oldPath: target.oldPath }).then(
-      (diff) => live && setState({ diff, error: null }),
-      (err: unknown) => live && setState({ diff: null, error: CivetError.from(err) })
-    )
-    return () => {
-      live = false
-    }
-  }, [hostId, worktree, path, from, to, target.oldPath, reload, connected])
-
-  const diff = state?.diff ?? null
-  const copyPath = useCopyPath(hostId, worktree, path)
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-3">
-        <span className="min-w-0 truncate font-mono text-xs text-soft" title={path}>
-          {target.oldPath ? `${target.oldPath} → ${path}` : path}
-        </span>
-        <span className="shrink-0 truncate text-xs text-quiet">
-          {turn ? `${turn.agent} · ${turnTimes(turn)}` : 'Agent turn'}
         </span>
         <span className="flex-1" />
         {diff && <Counts additions={diff.additions} deletions={diff.deletions} />}
