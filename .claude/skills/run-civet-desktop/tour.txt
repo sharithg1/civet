@@ -125,10 +125,7 @@ commit-message Resume QUIC sessions across network changes
 wait 300
 ss-el 29-commit-message aside >> nth=1 -- Commit box with a message typed (Commit enabled).
 
-# ── Right panel: Activity, Branch, Ports ────────────────────────────────
-right activity
-wait 600
-ss 30-activity -- Activity tab: the agent's turns in this worktree as a timeline.
+# ── Right panel: Branch, Ports ──────────────────────────────────────────
 right branch
 wait 500
 ss 31-branch-with-pr -- Branch tab of a feature worktree: branch → base, HEAD and path (its PR is only in the worktree menu).

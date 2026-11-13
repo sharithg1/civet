@@ -96,7 +96,7 @@ Add a command to `driver.mjs` when you need a new interaction; keep it small.
 ## UI catalog (all screens, for a design review)
 
 `tour.txt` walks every screen, panel, menu and dialog (~60: connect, sidebar,
-tabs, splits, find, history, switcher, Files / Changes / Activity / Branch /
+tabs, splits, find, history, switcher, Files / Changes / Branch /
 Ports, worktree states, host stats, every dialog, every settings page, hidden
 panels, narrow window, connection drop, toasts, old daemons, About). Each
 `ss name -- description` line also lands in `manifest.json`.

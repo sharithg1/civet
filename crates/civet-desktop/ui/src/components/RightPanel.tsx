@@ -1,16 +1,15 @@
-// Right panel (Files / Changes / Activity / Branch / Ports), styled after Cursor's review pane:
+// Right panel (Files / Changes / Branch / Ports), styled after Cursor's review pane:
 // its own header row of icon pills with the panel toggle at the far right,
 // then a PR-like branch view (state badge, branch → base, title, sections).
 // Files browses and previews the worktree's files (FilesTab.tsx); Changes
 // lists its git status and per-file diffs (ChangesTab.tsx; the tab label's
-// count keeps polling while the panel is open). Activity is the agents'
-// timeline in the worktree, turn by turn (ActivityTab.tsx). Branch shows what the
-// daemon reports (branch, HEAD, path); sessions are in the tab strip, and
-// removal in the worktree's menus. Ports lists listening ports
+// count keeps polling while the panel is open). Branch shows what the daemon
+// reports (branch, HEAD, path); sessions are in the tab strip, and removal in
+// the worktree's menus. Ports lists listening ports
 // and port forwards (PortsTab.tsx). A folder project (not a git repository)
 // has no Changes or Branch: they are hidden and Files shows instead.
 // Backend follow-up: branch_info.
-import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, History } from 'lucide-react'
+import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch } from 'lucide-react'
 import {
   isFolderWorktree,
   panesOfWorktree,
@@ -28,20 +27,18 @@ import { IconButton } from './IconButton'
 import { PanelResizeHandle } from './PanelResizeHandle'
 import { FilesTab } from './FilesTab'
 import { ChangesCount, ChangesTab } from './ChangesTab'
-import { ActivityTab } from './ActivityTab'
 import { PortsTab } from './PortsTab'
 import { RightPanelToggle } from './TitleBar'
 
 const TABS: [RightTab, string, typeof FileText][] = [
   ['files', 'Files', FileText],
   ['changes', 'Changes', Diff],
-  ['activity', 'Activity', History],
   ['branch', 'Branch', GitBranch],
   ['ports', 'Ports', ArrowRightLeft]
 ]
 
-/** Tabs without git: a folder project's (its agent turns have times but no files). */
-const FOLDER_TABS: RightTab[] = ['files', 'activity', 'ports']
+/** Tabs without git: a folder project's. */
+const FOLDER_TABS: RightTab[] = ['files', 'ports']
 
 export function RightPanel() {
   const active = useStore((s) => s.active)
@@ -146,9 +143,6 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
   }
   if (tab === 'changes') {
     return <ChangesTab key={worktree} hostId={hostId} worktree={worktree} connected={connected} />
-  }
-  if (tab === 'activity') {
-    return <ActivityTab key={worktree} hostId={hostId} worktree={worktree} connected={connected} />
   }
   const { repo, info } = wt
   const branch = worktreeBranch(info)
