@@ -90,3 +90,34 @@ export function splitPath(path: string): [name: string, dir: string] {
   const i = path.lastIndexOf('/')
   return i < 0 ? [path, ''] : [path.slice(i + 1), path.slice(0, i)]
 }
+
+/**
+ * A diff's two sides as code, for syntax highlighting: the old side (context
+ * and deleted lines) and the new side (context and added lines), each one
+ * line per row in hunk order, so a grammar sees continuous code rather than
+ * single lines. `rows[h][i]` is where hunk h's line i landed: the row of its
+ * side (context lines use the new side), or null for notes.
+ */
+export type DiffSides = {
+  old: string
+  new: string
+  rows: ({ side: 'old' | 'new'; row: number } | null)[][]
+}
+
+export function diffSides(parsed: ParsedDiff): DiffSides {
+  const old: string[] = []
+  const neu: string[] = []
+  const rows = parsed.hunks.map((h) =>
+    h.lines.map((l) => {
+      if (l.kind === 'note') return null
+      if (l.kind === 'del') {
+        old.push(l.text)
+        return { side: 'old' as const, row: old.length - 1 }
+      }
+      if (l.kind === 'context') old.push(l.text)
+      neu.push(l.text)
+      return { side: 'new' as const, row: neu.length - 1 }
+    })
+  )
+  return { old: old.join('\n'), new: neu.join('\n'), rows }
+}

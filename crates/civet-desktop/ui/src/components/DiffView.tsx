@@ -10,7 +10,8 @@ import { CivetError } from '@/backend'
 import type { GitChangeKind, GitDiffInfo } from '@/types'
 import { pushToast, useStore, wsKey, type ChangesDiffTarget } from '@/state/store'
 import { CHANGES_POLL_MS, findChange, useChanges, useChangesPolling } from '@/state/changes'
-import { parseUnifiedDiff, type DiffLine, type ParsedDiff } from '@/lib/diff'
+import { diffSides, parseUnifiedDiff, type DiffLine, type ParsedDiff } from '@/lib/diff'
+import { type HighlightToken, highlight, languageForPath } from '@/lib/highlight'
 import { cn } from '@/lib/utils'
 import { useWorktreeInfo } from './chrome'
 import { IconButton } from './IconButton'
@@ -118,7 +119,7 @@ export function DiffView({
           <Copy />
         </IconButton>
       </div>
-      <DiffContent state={state} connected={connected} />
+      <DiffContent state={state} connected={connected} path={path} />
     </div>
   )
 }
@@ -134,7 +135,15 @@ function useCopyPath(hostId: string, worktree: string, path: string): () => void
 }
 
 /** The diff below a diff tab's header, or why there is none. */
-function DiffContent({ state, connected }: { state: DiffState | null; connected: boolean }) {
+function DiffContent({
+  state,
+  connected,
+  path
+}: {
+  state: DiffState | null
+  connected: boolean
+  path: string
+}) {
   const [shown, setShown] = useState(DIFF_PAGE_LINES)
   const diff = state?.diff ?? null
   const parsed = useMemo(() => (diff?.diff ? parseUnifiedDiff(diff.diff) : null), [diff])
@@ -155,7 +164,12 @@ function DiffContent({ state, connected }: { state: DiffState | null; connected:
   ) : !parsed || parsed.hunks.length === 0 ? (
     <Message>{metaLines(parsed?.headers ?? []).join(' · ') || 'No changes.'}</Message>
   ) : (
-    <DiffBody parsed={parsed} shown={shown} onMore={() => setShown((n) => n + DIFF_PAGE_LINES)} />
+    <DiffBody
+      parsed={parsed}
+      lang={languageForPath(path)}
+      shown={shown}
+      onMore={() => setShown((n) => n + DIFF_PAGE_LINES)}
+    />
   )
 }
 
@@ -168,13 +182,16 @@ function metaLines(headers: string[]): string[] {
 
 function DiffBody({
   parsed,
+  lang,
   shown,
   onMore
 }: {
   parsed: ParsedDiff
+  lang: string | null
   shown: number
   onMore: () => void
 }) {
+  const tokens = useDiffHighlight(parsed, lang)
   let budget = shown
   return (
     <div className="min-h-0 flex-1 overflow-auto">
@@ -189,7 +206,12 @@ function DiffBody({
                 {h.header}
               </div>
               {lines.map((l, j) => (
-                <Line key={`${i}:${j}`} line={l} combined={parsed.combined} />
+                <Line
+                  key={`${i}:${j}`}
+                  line={l}
+                  tokens={tokens?.[i]?.[j]}
+                  combined={parsed.combined}
+                />
               ))}
             </div>
           )
@@ -210,7 +232,15 @@ function DiffBody({
   )
 }
 
-function Line({ line, combined }: { line: DiffLine; combined: boolean }) {
+function Line({
+  line,
+  tokens,
+  combined
+}: {
+  line: DiffLine
+  tokens?: HighlightToken[] | null
+  combined: boolean
+}) {
   if (line.kind === 'note') {
     return (
       <div className={cn('text-xs text-faint italic', combined ? 'pl-[72px]' : 'pl-[124px]')}>
@@ -232,9 +262,53 @@ function Line({ line, combined }: { line: DiffLine; combined: boolean }) {
       >
         {add ? '+' : del ? '-' : ' '}
       </span>
-      <span className="pr-4 whitespace-pre text-soft">{line.text || ' '}</span>
+      <span className="shiki-tokens pr-4 whitespace-pre text-soft">
+        {!line.text
+          ? ' '
+          : tokens
+            ? tokens.map((t, k) => (
+                <span key={k} style={t.style}>
+                  {t.content}
+                </span>
+              ))
+            : line.text}
+      </span>
     </div>
   )
+}
+
+/**
+ * Syntax-highlighted tokens per hunk line (`[hunk][line]`; null for notes),
+ * once both sides of the diff are tokenized; null before that, or when the
+ * file's language isn't one we highlight or the diff is too long.
+ */
+function useDiffHighlight(
+  parsed: ParsedDiff,
+  lang: string | null
+): (HighlightToken[] | null)[][] | null {
+  const [done, setDone] = useState<{
+    parsed: ParsedDiff
+    lang: string
+    tokens: (HighlightToken[] | null)[][]
+  }>()
+  useEffect(() => {
+    if (!lang) return
+    let live = true
+    const sides = diffSides(parsed)
+    void Promise.all([highlight(sides.old, lang), highlight(sides.new, lang)]).then(
+      ([old, neu]) => {
+        if (!live || !old || !neu) return
+        const tokens = sides.rows.map((hunk) =>
+          hunk.map((at) => (at ? ((at.side === 'old' ? old : neu)[at.row] ?? null) : null))
+        )
+        setDone({ parsed, lang, tokens })
+      }
+    )
+    return () => {
+      live = false
+    }
+  }, [parsed, lang])
+  return done && done.parsed === parsed && done.lang === lang ? done.tokens : null
 }
 
 function Gutter({ n }: { n: number | null }) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseUnifiedDiff, splitPath } from './diff'
+import { diffSides, parseUnifiedDiff, splitPath } from './diff'
 
 const num = (d: ReturnType<typeof parseUnifiedDiff>, h = 0) =>
   d.hunks[h]!.lines.map((l) => [l.kind, l.oldNo, l.newNo, l.text])
@@ -83,5 +83,34 @@ describe('splitPath', () => {
   it('splits name and directory', () => {
     expect(splitPath('src/a/b.rs')).toEqual(['b.rs', 'src/a'])
     expect(splitPath('README')).toEqual(['README', ''])
+  })
+})
+
+describe('diffSides', () => {
+  it('splits a diff into old and new code, mapping each line to its row', () => {
+    const d = parseUnifiedDiff(
+      [
+        '@@ -1,3 +1,3 @@',
+        ' a',
+        '-b',
+        '+B',
+        ' c',
+        '@@ -9 +9,0 @@',
+        '-z',
+        '\\ No newline at end of file'
+      ].join('\n')
+    )
+    const s = diffSides(d)
+    expect(s.old).toBe('a\nb\nc\nz')
+    expect(s.new).toBe('a\nB\nc')
+    expect(s.rows).toEqual([
+      [
+        { side: 'new', row: 0 },
+        { side: 'old', row: 1 },
+        { side: 'new', row: 1 },
+        { side: 'new', row: 2 }
+      ],
+      [{ side: 'old', row: 3 }, null]
+    ])
   })
 })
