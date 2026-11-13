@@ -702,14 +702,58 @@ describe('store', () => {
     expect(removeRepo).not.toHaveBeenCalled()
     confirm.onConfirm()
     await vi.waitFor(() => expect(removeRepo).toHaveBeenCalledWith('h', 'r'))
+    await vi.waitFor(() => expect(killPane).toHaveBeenCalledWith('h', 1, 'hangup'))
     expect(killPane).toHaveBeenCalledTimes(1)
-    expect(killPane).toHaveBeenCalledWith('h', 1, 'hangup')
+    await vi.waitFor(() => expect(useStore.getState().panes.h![1]).toBeUndefined())
     await vi.waitFor(() => expect(useStore.getState().repos.h).toEqual([other]))
     const s = useStore.getState()
     expect(s.active).toBeNull()
-    expect(s.panes.h![1]).toBeUndefined()
     expect(s.panes.h![2]).toBeDefined()
     expect(s.workspaces[store.wsKey('h', '/r')]).toBeUndefined()
+  })
+
+  it('stopping tracking closes nothing when civetd refuses, and re-asks if panes changed', async () => {
+    const repo: RepoInfo = { id: 'r', name: 'repo', path: '/r', defaultBranch: 'main' }
+    const main: WorktreeInfo = {
+      id: '/r',
+      repo: 'r',
+      path: '/r',
+      branch: 'main',
+      head: null,
+      isMain: true,
+      locked: false
+    }
+    const killPane = vi.fn(async () => {})
+    const removeRepo = vi.fn(async () => {
+      throw new Error('nope')
+    })
+    useStore.setState({
+      backend: fakeBackend({ killPane, removeRepo }),
+      hosts: {
+        h: { ...summary('h'), rttMs: null, message: null, bootstrap: null, errorCode: null }
+      },
+      panes: { h: {} },
+      repos: { h: [repo] },
+      worktrees: { [store.wtKey('h', 'r')]: [main] },
+      workspaces: {},
+      active: null
+    })
+
+    store.requestRemoveProject('h', 'r')
+    expect(useStore.getState().confirm!.safe).toBe(true)
+    // A pane opens while the dialog is up: confirming asks again, with it counted.
+    useStore.setState({ panes: { h: { 1: pane(1, { worktree: '/r' }) } } })
+    useStore.getState().confirm!.onConfirm()
+    expect(removeRepo).not.toHaveBeenCalled()
+    const again = useStore.getState().confirm!
+    expect(again.confirmLabel).toBe('Stop tracking (closes 1 pane)')
+    expect(again.safe).toBe(false)
+
+    again.onConfirm()
+    await vi.waitFor(() => expect(removeRepo).toHaveBeenCalled())
+    await vi.waitFor(() => expect(useStore.getState().repos.h).toEqual([repo]))
+    expect(killPane).not.toHaveBeenCalled()
+    expect(useStore.getState().panes.h![1]).toBeDefined()
   })
 
   it('a folder project has files and sessions but no worktrees or PRs', async () => {
