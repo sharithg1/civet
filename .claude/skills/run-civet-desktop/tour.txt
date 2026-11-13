@@ -236,7 +236,7 @@ js store.useStore.setState({ rightPanelOpen: true })
 viewport 1000x700
 wait 600
 ss 56-narrow-window -- Narrow window (1000×700).
-viewport 1400x900
+viewport
 wait 400
 
 # ── Connection problems and other hosts ─────────────────────────────────

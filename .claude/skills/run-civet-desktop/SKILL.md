@@ -144,7 +144,7 @@ Design-review commands (in addition to the table above):
 | Command | Does |
 |---|---|
 | `ss-el <name> <selector>` | Screenshot one element: `aside` = sidebar, `aside >> nth=1` = right panel. Clips popovers that stick out. |
-| `viewport <WxH>` | Resize the window mid-script. |
+| `viewport [WxH]` | Resize the window mid-script; bare `viewport` restores the run's size (`VIEWPORT`). |
 | `hover-button <name>` | Hover a button by accessible name (tooltip after ~900 ms `wait`). |
 | `unhover` | Move the mouse to the corner (drop hover / tooltip). |
 | `rclick <text>` / `click-text <text>` / `hover-text <text>` | Right-click / click / hover any element by exact visible text (project rows, the host row). |

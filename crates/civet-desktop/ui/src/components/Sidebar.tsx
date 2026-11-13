@@ -71,6 +71,7 @@ import {
   toggleHostCollapsed,
   toggleRepoCollapsed,
   useStore,
+  worktreePullRequest,
   worktreesOf,
   wsKey,
   wtKey
@@ -919,11 +920,7 @@ function WorktreeRow({
   const paneMap = useStore((s) => s.panes[hostId])
   // Any worktree, the main one included (a feature branch may be checked
   // out there), except on the default branch.
-  const pr = useStore((s) => {
-    const defaultBranch = s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch
-    if (!wt.branch || wt.branch === defaultBranch) return undefined
-    return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
-  })
+  const pr = useStore((s) => worktreePullRequest(s, hostId, wt))
   const life = useWorktreeLifecycle(hostId, wt.repo, wt.id)
   const spend = useWorktreeSpend(hostId, wt.id)
   const activeTab = useStore((s) => s.workspaces[key]?.activeTab ?? null)

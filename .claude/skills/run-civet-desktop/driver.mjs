@@ -198,8 +198,8 @@ const commands = {
     await p.locator(selector.join(' ')).first().hover()
     await p.mouse.wheel(0, Number(dy))
   },
-  // Resize the window, e.g. `viewport 1000x700`.
-  viewport: async (wxh) => p.setViewportSize(size(wxh)),
+  // Resize the window, e.g. `viewport 1000x700`; bare `viewport`: back to the run's size.
+  viewport: async (wxh) => p.setViewportSize(size(wxh || (process.env.VIEWPORT ?? '1400x900'))),
   // Hover a button by its accessible name (shows its tooltip).
   'hover-button': async (...name) =>
     p.getByRole('button', { name: name.join(' '), exact: true }).first().hover(),

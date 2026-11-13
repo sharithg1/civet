@@ -480,8 +480,14 @@ export async function refreshHost(hostId: string): Promise<void> {
   }
 }
 
+/** hostId → bumped when a project is untracked; older repo lists are dropped. */
+const reposGen = new Map<string, number>()
+
 async function refreshRepos(hostId: string): Promise<void> {
+  const gen = reposGen.get(hostId) ?? 0
   const repos = await backend().listRepos(hostId)
+  // Why: a list taken before Stop tracking would bring the project back.
+  if ((reposGen.get(hostId) ?? 0) !== gen) return
   set((s) => ({ repos: { ...s.repos, [hostId]: repos } }))
   await Promise.all(repos.map((r) => refreshWorktrees(hostId, r.id)))
 }
@@ -637,6 +643,17 @@ export function refreshPullRequests(hostId: string, repo: string): void {
       },
       (err: unknown) => console.debug(`list_pull_requests ${repo} on ${hostId}:`, err)
     )
+}
+
+/** The newest PR of a worktree's branch, unless it is on the default branch. */
+export function worktreePullRequest(
+  s: State,
+  hostId: string,
+  wt: Pick<WorktreeInfo, 'repo' | 'branch'>
+): PullRequestInfo | undefined {
+  const defaultBranch = s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch
+  if (!wt.branch || wt.branch === defaultBranch) return undefined
+  return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
 }
 
 export async function openPullRequest(pr: PullRequestInfo): Promise<void> {
@@ -1297,16 +1314,22 @@ export async function removeProject(hostId: string, repo: string): Promise<void>
   }
   // Drops its workspaces and moves the selection off it. Out of `repos`
   // first, so a worktree refresh in flight stops instead of re-listing it.
+  reposGen.set(hostId, (reposGen.get(hostId) ?? 0) + 1)
   set((s) => ({
     repos: { ...s.repos, [hostId]: (s.repos[hostId] ?? []).filter((r) => r.id !== repo) }
   }))
   bumpWorktreeEpoch(hostId, repo)
   applyWorktreeList(hostId, repo, [])
-  // Like removeWorktree: a pane that won't close doesn't undo the removal.
+  // A pane that won't close doesn't undo the removal, but the user hears
+  // about a session that may still be running on the host.
   for (const pane of panes) {
     backend()
       .killPane(hostId, pane, 'hangup')
-      .catch(() => {})
+      .catch((err: unknown) => {
+        if (CivetError.from(err).code !== 'notFound') {
+          reportError(`Could not close pane ${pane}; it may still run on the host`, err)
+        }
+      })
       .finally(() => removePaneEverywhere(hostId, pane))
   }
   try {

@@ -17,6 +17,7 @@ import {
   ChevronDown,
   Copy,
   Diff,
+  ExternalLink,
   Folder,
   GitBranch,
   MoreHorizontal,
@@ -43,13 +44,15 @@ import {
   moveTab,
   newAgentTab,
   newTerminalTab,
+  openPullRequest,
   panesOfWorktree,
   pinTab,
   pushToast,
   splitFocused,
   useStore,
   wsKey,
-  tabPanes
+  tabPanes,
+  worktreePullRequest
 } from '@/state/store'
 import { FileIcon } from './FilesTab'
 import {
@@ -159,6 +162,8 @@ function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string 
 function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: string }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const host = useStore((s) => s.hosts[hostId])
+  // The sidebar row's menu has it too; this one is reachable from the keyboard.
+  const pr = useStore((s) => (wt ? worktreePullRequest(s, hostId, wt.info) : undefined))
   if (!wt) return null
   const { info } = wt
   const folder = isFolderRepo(wt.repo)
@@ -192,6 +197,12 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
           >
             <GitBranch />
             Branch details
+          </DropdownMenuItem>
+        )}
+        {pr && (
+          <DropdownMenuItem onSelect={() => void openPullRequest(pr)}>
+            <ExternalLink />
+            Open PR #{pr.number} on GitHub
           </DropdownMenuItem>
         )}
         {!info.isMain && (

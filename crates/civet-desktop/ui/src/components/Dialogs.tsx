@@ -249,7 +249,10 @@ export function ConfirmDialog() {
             ref={confirmRef}
             variant={shown?.safe ? 'default' : 'destructive'}
             size="md"
-            onClick={() => {
+            onClick={(e) => {
+              // Why: Radix would close the dialog after this and drop a
+              // follow-up confirm that onConfirm sets (Stop tracking re-asks).
+              e.preventDefault()
               close()
               req?.onConfirm()
             }}

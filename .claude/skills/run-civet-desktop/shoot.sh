@@ -54,8 +54,16 @@ serve() {
 tour_all() {
   for s in $sizes; do
     echo "== $2 $s"
+    # A fresh directory: no PNG left over from an earlier run gets compared.
+    rm -rf "$out/$2/$s"
+    # `|| true`: a tour step may fail (UI the base ref lacks); a driver that
+    # dies before writing its manifest is checked for below.
     KEEP_GOING=1 VIEWPORT="$s" SHOTS="$out/$2/$s" node "$here/driver.mjs" "http://localhost:$1/?mock" <"$tour" |
       grep -v '^screenshot' || true
+    if [ ! -s "$out/$2/$s/manifest.json" ]; then
+      echo "no screenshots for $2 $s (driver failed?)" >&2
+      exit 1
+    fi
   done
 }
 
