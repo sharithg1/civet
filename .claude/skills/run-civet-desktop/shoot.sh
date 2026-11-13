@@ -32,7 +32,8 @@ base_port="${BASE_PORT:-5232}"
 pids=()
 base_src=""
 cleanup() {
-  for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+  # ${pids[@]+...}: an empty array trips `set -u` in macOS's bash 3.2.
+  for p in ${pids[@]+"${pids[@]}"}; do pkill -P "$p" 2>/dev/null || true; kill "$p" 2>/dev/null || true; done
   if [ -n "$base_src" ]; then git -C "$repo" worktree remove --force "$base_src" 2>/dev/null || true; fi
 }
 trap cleanup EXIT

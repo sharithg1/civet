@@ -13,7 +13,6 @@ beforeAll(() => {
 const { useStore, wsKey, wtKey } = await import('./store')
 const { useChanges } = await import('./changes')
 const {
-  aheadBehindLabel,
   aheadBehindTitle,
   cleanUpWorktrees,
   cleanupCandidates,
@@ -57,9 +56,6 @@ beforeEach(() => {
 
 describe('worktree lifecycle', () => {
   it('labels ahead / behind', () => {
-    expect(aheadBehindLabel(0, 0)).toBe('')
-    expect(aheadBehindLabel(2, 0)).toBe('↑2')
-    expect(aheadBehindLabel(2, 5)).toBe('↑2 ↓5')
     expect(aheadBehindTitle(2, 5, 'origin/main')).toBe('2 ahead of, 5 behind origin/main')
     expect(aheadBehindTitle(0, 1, 'main')).toBe('1 behind main')
     expect(aheadBehindTitle(0, 0, 'main')).toBe('Even with main')

@@ -131,7 +131,7 @@ wait 600
 ss 30-activity -- Activity tab: the agent's turns in this worktree as a timeline.
 right branch
 wait 500
-ss 31-branch-with-pr -- Branch tab of a worktree with an open PR: checks, reviews, unresolved comments.
+ss 31-branch-with-pr -- Branch tab of a feature worktree: branch → base, HEAD and path (its PR is only in the worktree menu).
 right ports
 wait 500
 ss-el 32-ports aside >> nth=1 -- Ports tab: forwarded / listening ports on the host.
@@ -140,11 +140,11 @@ ss-el 32-ports aside >> nth=1 -- Ports tab: forwarded / listening ports on the h
 worktree main
 right branch
 wait 500
-ss-el 33-branch-default-checkout aside >> nth=1 -- Branch tab of the main checkout (no PR, no sessions).
+ss-el 33-branch-default-checkout aside >> nth=1 -- Branch tab of the main checkout.
 worktree Fix the flaky
 right changes
 wait 600
-ss 34-conflict -- A worktree with a merge conflict and a closed PR.
+ss 34-conflict -- A worktree with a merge conflict.
 worktree Redesign the
 wait 600
 ss 35-agent-needs-input -- A worktree whose agent is waiting for input / stopped.

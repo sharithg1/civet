@@ -132,8 +132,9 @@ export function worktreeTask(wt: WorktreeInfo, panes: readonly PaneInfo[]): stri
 }
 
 /**
- * What "Clear label" hid on a worktree row: the branch name, the task title
- * and the PR badge (`number:state`) as they were when cleared.
+ * What "Clear label" hid on a worktree row: the branch name and the task
+ * title as they were when cleared. (Records saved before the PR badge was
+ * dropped may still carry a `pr` key; it is ignored.)
  */
 export type ClearedLabel = { branch: string | null; task: string | null }
 

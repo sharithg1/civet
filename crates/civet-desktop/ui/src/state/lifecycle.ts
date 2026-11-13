@@ -140,11 +140,6 @@ export function useWorktreeLifecycle(
   return info ? { base: l!.base, info } : null
 }
 
-/** "↑2 ↓5"-style counts; '' when even. */
-export function aheadBehindLabel(ahead: number, behind: number): string {
-  return [ahead > 0 && `↑${ahead}`, behind > 0 && `↓${behind}`].filter(Boolean).join(' ')
-}
-
 /** "2 ahead of, 5 behind origin/main" for a tooltip. */
 export function aheadBehindTitle(ahead: number, behind: number, base: string): string {
   if (!ahead && !behind) return `Even with ${base}`

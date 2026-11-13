@@ -720,8 +720,7 @@ function FileRow({
   const title = change.oldPath
     ? `${label}: ${change.oldPath} → ${change.path}`
     : `${label}: ${change.path}`
-  const n = targets.length
-  const what = n > 1 ? ` ${n} files` : ''
+  const menu = { actions, disabled }
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -758,7 +757,8 @@ function FileRow({
               <Counts additions={change.additions} deletions={change.deletions} />
             </span>
           </button>
-          <div className="hidden shrink-0 items-center pr-1 group-focus-within/row:flex group-hover/row:flex">
+          {/* has-[…]: stays while its menu is open (focus is in the portal). */}
+          <div className="hidden shrink-0 items-center pr-1 group-focus-within/row:flex group-hover/row:flex has-[[data-state=open]]:flex">
             <EntryActions
               side={side}
               changes={targets}
@@ -766,27 +766,67 @@ function FileRow({
               disabled={disabled}
               noDiscard
             />
+            {/* Discard for the keyboard too (the context menu needs a mouse). */}
+            {side !== 'conflicted' && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label="More actions"
+                  title="More actions"
+                  disabled={disabled}
+                  onClick={(e) => e.stopPropagation()}
+                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-hover-strong hover:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-hover-strong"
+                >
+                  <Ellipsis className="size-3.5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <RowMenuItems Item={DropdownMenuItem} side={side} targets={targets} {...menu} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         </div>
       </ContextMenuTrigger>
       {side !== 'conflicted' && (
         <ContextMenuContent className="w-56">
-          <ContextMenuItem disabled={disabled} onSelect={() => actions.stage(side, targets)}>
-            {side === 'staged' ? <Minus /> : <Plus />}
-            {side === 'staged' ? 'Unstage' : 'Stage'}
-            {what}
-          </ContextMenuItem>
-          <ContextMenuItem
-            variant="destructive"
-            disabled={disabled}
-            onSelect={() => actions.discard(side, targets)}
-          >
-            {side === 'untracked' ? <Trash2 /> : <Undo2 />}
-            {side === 'untracked' ? `Delete${what}` : n > 1 ? `Discard${what}` : 'Discard changes'}
-          </ContextMenuItem>
+          <RowMenuItems Item={ContextMenuItem} side={side} targets={targets} {...menu} />
         </ContextMenuContent>
       )}
     </ContextMenu>
+  )
+}
+
+/** Stage / unstage and discard / delete for a row, in its context or "…" menu. */
+function RowMenuItems({
+  Item,
+  side,
+  targets,
+  actions,
+  disabled
+}: {
+  Item: typeof ContextMenuItem | typeof DropdownMenuItem
+  side: ChangeSide
+  targets: GitFileChange[]
+  actions: GroupActions
+  disabled: boolean
+}) {
+  const n = targets.length
+  const what = n > 1 ? ` ${n} files` : ''
+  return (
+    <>
+      <Item disabled={disabled} onSelect={() => actions.stage(side, targets)}>
+        {side === 'staged' ? <Minus /> : <Plus />}
+        {side === 'staged' ? 'Unstage' : 'Stage'}
+        {what}
+      </Item>
+      <Item
+        variant="destructive"
+        disabled={disabled}
+        onSelect={() => actions.discard(side, targets)}
+      >
+        {side === 'untracked' ? <Trash2 /> : <Undo2 />}
+        {side === 'untracked' ? `Delete${what}` : n > 1 ? `Discard${what}` : 'Discard changes'}
+      </Item>
+    </>
   )
 }
 
