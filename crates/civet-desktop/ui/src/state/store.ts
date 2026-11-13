@@ -109,6 +109,8 @@ export type ConfirmRequest = {
   onConfirm: () => void
   /** Focus Cancel instead of the (destructive) confirm button. */
   focusCancel?: boolean
+  /** A plain confirm button: nothing is deleted or interrupted. Default: destructive. */
+  safe?: boolean
 }
 
 export type NewWorktreeRequest = { hostId: string; repo?: string }
@@ -478,8 +480,14 @@ export async function refreshHost(hostId: string): Promise<void> {
   }
 }
 
+/** hostId → bumped when a project is untracked; older repo lists are dropped. */
+const reposGen = new Map<string, number>()
+
 async function refreshRepos(hostId: string): Promise<void> {
+  const gen = reposGen.get(hostId) ?? 0
   const repos = await backend().listRepos(hostId)
+  // Why: a list taken before Stop tracking would bring the project back.
+  if ((reposGen.get(hostId) ?? 0) !== gen) return
   set((s) => ({ repos: { ...s.repos, [hostId]: repos } }))
   await Promise.all(repos.map((r) => refreshWorktrees(hostId, r.id)))
 }
@@ -510,20 +518,25 @@ export function refreshWorktrees(hostId: string, repo: string): Promise<void> {
     running.again = true
     return running.done
   }
+  // Still in the host's projects (Stop tracking may land mid-refresh)?
+  const tracked = () => !get().repos[hostId] || get().repos[hostId]!.some((r) => r.id === repo)
   const entry = { again: true, done: Promise.resolve() }
   wtRefreshing.set(k, entry)
   entry.done = (async () => {
     try {
       while (entry.again) {
         entry.again = false
+        if (!tracked()) return
         const epoch = wtEpoch.get(k) ?? 0
         const list = await backend().listWorktrees(hostId, repo)
+        if (!tracked()) return
         if ((wtEpoch.get(k) ?? 0) !== epoch) entry.again = true
         else applyWorktreeList(hostId, repo, list)
       }
       refreshPullRequests(hostId, repo)
     } catch (err) {
-      reportError(`Could not list worktrees of ${repo}`, err)
+      // A project untracked meanwhile has nothing left to list.
+      if (tracked()) reportError(`Could not list worktrees of ${repo}`, err)
     } finally {
       wtRefreshing.delete(k)
     }
@@ -630,6 +643,17 @@ export function refreshPullRequests(hostId: string, repo: string): void {
       },
       (err: unknown) => console.debug(`list_pull_requests ${repo} on ${hostId}:`, err)
     )
+}
+
+/** The newest PR of a worktree's branch, unless it is on the default branch. */
+export function worktreePullRequest(
+  s: State,
+  hostId: string,
+  wt: Pick<WorktreeInfo, 'repo' | 'branch'>
+): PullRequestInfo | undefined {
+  const defaultBranch = s.repos[hostId]?.find((r) => r.id === wt.repo)?.defaultBranch
+  if (!wt.branch || wt.branch === defaultBranch) return undefined
+  return s.pullRequests[wtKey(hostId, wt.repo)]?.[wt.branch]
 }
 
 export async function openPullRequest(pr: PullRequestInfo): Promise<void> {
@@ -1253,49 +1277,66 @@ function projectPanes(hostId: string, repo: string): PaneId[] {
     .map((p) => p.id)
 }
 
-/** Ask, then remove a project from the host (its panes close; files and worktrees stay). */
+/** Ask, then stop tracking a project on the host (its panes close; files and worktrees stay). */
 export function requestRemoveProject(hostId: string, repo: string): void {
   const r = get().repos[hostId]?.find((x) => x.id === repo)
   if (!r) return
   const n = projectPanes(hostId, repo).length
-  const panes = n ? ` ${n} open pane${n === 1 ? '' : 's'} in it will be closed.` : ''
+  const panes = n ? ` Its ${n} open pane${n === 1 ? '' : 's'} will be closed.` : ''
   set({
     confirm: {
-      title: `Remove ${r.name}?`,
+      title: `Stop tracking ${r.name}?`,
       body:
-        `Civet stops tracking ${r.path} on ${get().hosts[hostId]?.label ?? hostId}.${panes} ` +
-        'Files, branches and worktrees on disk are not touched; add it again any time.',
-      confirmLabel: n ? `Remove project (closes ${n} pane${n === 1 ? '' : 's'})` : 'Remove project',
-      onConfirm: () => void removeProject(hostId, repo),
-      focusCancel: true
+        `${r.path} on ${get().hosts[hostId]?.label ?? hostId} leaves Civet; its files, branches ` +
+        `and worktrees stay on disk, and you can add it again any time.${panes}`,
+      confirmLabel: n ? `Stop tracking (closes ${n} pane${n === 1 ? '' : 's'})` : 'Stop tracking',
+      // A pane opened (or closed) while asking: ask again with the new count
+      // rather than close sessions the dialog didn't mention.
+      onConfirm: () =>
+        projectPanes(hostId, repo).length === n
+          ? void removeProject(hostId, repo)
+          : requestRemoveProject(hostId, repo),
+      focusCancel: true,
+      // Closing panes ends their sessions: that stays a destructive button.
+      safe: n === 0
     }
   })
 }
 
 export async function removeProject(hostId: string, repo: string): Promise<void> {
+  const panes = projectPanes(hostId, repo)
+  // Unregister first: if civetd refuses, nothing has been closed yet.
   try {
-    await Promise.all(
-      projectPanes(hostId, repo).map((pane) =>
-        backend()
-          .killPane(hostId, pane, 'hangup')
-          .catch((err: unknown) => {
-            if (CivetError.from(err).code !== 'notFound') throw err
-          })
-          .then(() => removePaneEverywhere(hostId, pane))
-      )
-    )
     await backend().removeRepo(hostId, repo)
   } catch (err) {
-    reportError('Could not remove the project', err)
+    reportError('Could not stop tracking the project', err)
     return
   }
-  // Drops its workspaces and moves the selection off it.
-  bumpWorktreeEpoch(hostId, repo)
-  applyWorktreeList(hostId, repo, [])
+  // Drops its workspaces and moves the selection off it. Out of `repos`
+  // first, so a worktree refresh in flight stops instead of re-listing it.
+  reposGen.set(hostId, (reposGen.get(hostId) ?? 0) + 1)
   set((s) => ({
     repos: { ...s.repos, [hostId]: (s.repos[hostId] ?? []).filter((r) => r.id !== repo) }
   }))
-  await refreshRepos(hostId)
+  bumpWorktreeEpoch(hostId, repo)
+  applyWorktreeList(hostId, repo, [])
+  // A pane that won't close doesn't undo the removal, but the user hears
+  // about a session that may still be running on the host.
+  for (const pane of panes) {
+    backend()
+      .killPane(hostId, pane, 'hangup')
+      .catch((err: unknown) => {
+        if (CivetError.from(err).code !== 'notFound') {
+          reportError(`Could not close pane ${pane}; it may still run on the host`, err)
+        }
+      })
+      .finally(() => removePaneEverywhere(hostId, pane))
+  }
+  try {
+    await refreshRepos(hostId)
+  } catch (err) {
+    reportError('Could not reload the projects', err)
+  }
 }
 
 export type AgentChoice = 'claude' | 'codex' | 'custom'

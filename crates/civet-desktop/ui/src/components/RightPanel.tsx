@@ -4,12 +4,12 @@
 // Files browses and previews the worktree's files (FilesTab.tsx); Changes
 // lists its git status and per-file diffs (ChangesTab.tsx; the tab label's
 // count keeps polling while the panel is open). Branch shows what the daemon
-// reports (branch, HEAD, path, sessions, the branch's pull request:
-// PullRequestSection.tsx) plus "Remove worktree…". Ports lists listening ports
+// reports (branch, HEAD, path); sessions are in the tab strip, and removal in
+// the worktree's menus. Ports lists listening ports
 // and port forwards (PortsTab.tsx). A folder project (not a git repository)
 // has no Changes or Branch: they are hidden and Files shows instead.
 // Backend follow-up: branch_info.
-import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch, Terminal } from 'lucide-react'
+import { ArrowRight, ArrowRightLeft, Copy, Diff, FileText, GitBranch } from 'lucide-react'
 import {
   isFolderWorktree,
   panesOfWorktree,
@@ -20,7 +20,7 @@ import {
 import { clampRightPanelWidth, DEFAULT_PREFS, setPrefs, usePrefs } from '@/state/prefs'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { DOT_LABEL, paneDot, worktreeBranch, worktreeTask } from '@/lib/worktree-view'
+import { worktreeBranch, worktreeTask } from '@/lib/worktree-view'
 import { useWorktreeInfo } from './chrome'
 import { usePorts } from '@/state/ports'
 import { IconButton } from './IconButton'
@@ -28,8 +28,6 @@ import { PanelResizeHandle } from './PanelResizeHandle'
 import { FilesTab } from './FilesTab'
 import { ChangesCount, ChangesTab } from './ChangesTab'
 import { PortsTab } from './PortsTab'
-import { PullRequestSection } from './PullRequestSection'
-import { StatusDot } from './StatusDot'
 import { RightPanelToggle } from './TitleBar'
 
 const TABS: [RightTab, string, typeof FileText][] = [
@@ -73,8 +71,8 @@ export function RightPanel() {
         data-tauri-drag-region="deep"
         className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none"
       >
-        {/* Labels shrink (ellipsis) before the panel toggle is pushed out,
-            e.g. once Changes / Ports show a count. */}
+        {/* Only the selected tab shows its label, so none of them is cut
+            to an ellipsis; the others are icons (and counts) with a tooltip. */}
         <div className="flex min-w-0 items-center gap-0.5" role="tablist">
           {tabs.map(([id, label, Icon]) => (
             <button
@@ -90,7 +88,7 @@ export function RightPanel() {
               )}
             >
               <Icon className="size-3.5 shrink-0" />
-              <span className="min-w-0 truncate">{label}</span>
+              <span className={cn('min-w-0 truncate', tab !== id && 'sr-only')}>{label}</span>
               {id === 'changes' && active && (
                 <ChangesCount
                   hostId={active.hostId}
@@ -200,34 +198,6 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
         </div>
       </div>
 
-      <Section title="Sessions" count={panes.length}>
-        {panes.length === 0 && (
-          <div className="px-3 py-2 text-sm text-quiet">No sessions running</div>
-        )}
-        {panes.map((p) => {
-          const dot = paneDot(p, connected)
-          return (
-            <div
-              key={p.id}
-              className="flex h-8 items-center gap-2.5 px-3 text-sm"
-              title={DOT_LABEL[dot]}
-            >
-              <span className="grid size-3.5 shrink-0 place-items-center">
-                {p.agent ? (
-                  <StatusDot kind={dot} size={6} />
-                ) : (
-                  <Terminal className="size-3.5 text-quiet" />
-                )}
-              </span>
-              <span className="min-w-0 truncate text-soft">{p.title || p.command.join(' ')}</span>
-              <span className="ml-auto shrink-0 text-xs text-quiet">
-                {p.exited ? `exit ${p.exitCode ?? '?'}` : (p.agent ?? 'shell')}
-              </span>
-            </div>
-          )
-        })}
-      </Section>
-
       <Section title="Remote path">
         <button
           type="button"
@@ -238,52 +208,16 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
           {remote}
         </button>
       </Section>
-
-      {!info.isMain && (
-        <Section title="Pull request">
-          <PullRequestSection
-            hostId={hostId}
-            worktree={worktree}
-            branchName={info.branch}
-            defaultBranch={repo.defaultBranch}
-            branch={null}
-            connected={connected}
-            canAct={false}
-          />
-        </Section>
-      )}
-
-      {!info.isMain && (
-        <div className="px-3 pt-3 pb-4">
-          <button
-            type="button"
-            disabled={!connected}
-            onClick={() => useStore.setState({ removeWorktree: { hostId, worktree } })}
-            className="h-7 cursor-pointer rounded-md border border-input bg-card px-2.5 text-sm text-soft hover:bg-hover-strong hover:text-foreground disabled:cursor-default disabled:opacity-50"
-          >
-            Remove worktree…
-          </button>
-        </div>
-      )}
     </div>
   )
 }
 
 /** Cursor's "1 File Changed" strip: a hairline-ruled header row above a list. */
-function Section({
-  title,
-  count,
-  children
-}: {
-  title: string
-  count?: number
-  children: React.ReactNode
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col pb-1">
       <div className="flex h-9 items-center gap-1.5 border-y border-border px-3 text-sm text-quiet">
         {title}
-        {count != null && count > 0 && <span className="text-dim">{count}</span>}
       </div>
       <div className="flex flex-col py-1">{children}</div>
     </div>

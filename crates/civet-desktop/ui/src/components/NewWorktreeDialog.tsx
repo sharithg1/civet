@@ -1,7 +1,8 @@
 // "New worktree" (Civet v3): project chips, branch name (optional: empty runs
-// the steps in the project's main checkout), a preview line with
+// the steps in the project's main checkout, which the line under it says), a preview line with
 // the (editable) base, ordered on-create steps (Claude / Codex / Terminal,
-// each opens in its own tab), "Save as default for <project>", and an
+// each opens in its own tab), "Save as default for <project>" (off: one
+// worktree's steps don't change the next one's unless asked), and an
 // optional first task for the first agent. The first agent step goes through `launch_agent`, so the
 // single-call "worktree + agent" path is unchanged; see
 // store.createWorktreeWithSteps. With a worktree template (Settings →
@@ -93,7 +94,7 @@ export function NewWorktreeDialog() {
   const [steps, setSteps] = useState<CreateStep[]>(() =>
     req ? defaultSteps(req.hostId, repoId) : []
   )
-  const [save, setSave] = useState(true)
+  const [save, setSave] = useState(false)
   const [prompt, setPrompt] = useState('')
   // Template defaults arrive after the dialog opens: they replace the steps
   // and prompt only while those are untouched.
@@ -222,11 +223,13 @@ export function NewWorktreeDialog() {
             ))}
           </div>
           <div className="flex flex-col gap-1">
+            <label htmlFor="nw-name" className="text-xs font-medium text-body">
+              Branch
+            </label>
             <Input
               id="nw-name"
               autoFocus
-              aria-label="Branch name"
-              placeholder="new branch, e.g. NO-TICKET/short-task (empty: use the main checkout)"
+              placeholder="e.g. NO-TICKET/short-task"
               value={name}
               autoComplete="off"
               spellCheck={false}
@@ -237,9 +240,9 @@ export function NewWorktreeDialog() {
             {nameError && <span className="text-2xs text-status-err-text">{nameError}</span>}
           </div>
           {useMain ? (
-            <div className="truncate font-mono text-2xs text-faint">
-              {hostLabel}:{repo?.name ?? '…'} · main checkout
-              {mainWt ? ` (${worktreeBranch(mainWt)})` : ''} · no new worktree
+            <div className="truncate text-2xs text-status-wait">
+              No branch: runs in {hostLabel}:{repo?.name ?? '…'}'s main checkout
+              {mainWt ? ` (${worktreeBranch(mainWt)})` : ''}, no new worktree
             </div>
           ) : (
             <div className="flex items-center font-mono text-2xs text-faint">

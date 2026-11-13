@@ -69,7 +69,7 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 |---|---|
 | `connect [host]` | Connect a mock host (default `devbox`; a name containing `fail` fails, `udp-blocked` falls back to SSH). Waits for "1 host connected". The `main` worktree of `civet` opens. |
 | `worktree <text>` | Click a sidebar worktree by its text (`Implement QUIC resume`, `scrollback-paging`…). |
-| `hover-worktree <text>` | Hover a sidebar worktree row (shows ahead/behind and spend in place of its age). |
+| `hover-worktree <text>` | Hover a sidebar worktree row (ahead/behind and spend are in its tooltip). |
 | `right <files\|changes\|branch\|ports>` | Switch the right panel tab. |
 | `click-file` / `dblclick-file <name>` | A row in the Files tree (exact entry name, e.g. `Cargo.toml`). |
 | `rclick-file` / `cmd-click-file` / `shift-click-file <name>` | Right-click (opens the context menu), ⌘-click or ⇧-click a Files row. |
@@ -92,6 +92,70 @@ npm install --prefix .claude/skills/run-civet-desktop   # playwright-core for th
 | `wait [ms]` | Sleep (default 300). Every other command already waits 150 ms after. |
 
 Add a command to `driver.mjs` when you need a new interaction; keep it small.
+
+## UI catalog (all screens, for a design review)
+
+`tour.txt` walks every screen, panel, menu and dialog (~60: connect, sidebar,
+tabs, splits, find, history, switcher, Files / Changes / Branch /
+Ports, worktree states, host stats, every dialog, every settings page, hidden
+panels, narrow window, connection drop, toasts, old daemons, About). Each
+`ss name -- description` line also lands in `manifest.json`.
+
+```sh
+.claude/skills/run-civet-desktop/catalog.sh            # → docs/ui-review/
+.claude/skills/run-civet-desktop/catalog.sh <dir> 1100x720
+```
+
+It writes `<dir>/screenshots/*.png` + `manifest.json` and `<dir>/README.md`
+(index, capture notes, mock artifacts to ignore, and a review brief asking for
+bad UI / improvements / redundancies in `REVIEW.md`). ~22 MB at 1400×900.
+Port 5231 must be free (PORT=…). Add a screen: add steps and an
+`ss NN-name -- what it shows` line to `tour.txt`, then re-run.
+
+## Design review (screenshot tour, before/after)
+
+`shoot.sh` runs `tour.txt` at each window size, at 2× scale. With `--base <ref>` it also runs
+the tour against `<ref>` in a temporary git worktree and writes a before |
+after composite (changed pixels tinted magenta) for each screen that changed.
+
+```sh
+.claude/skills/run-civet-desktop/shoot.sh <scratchpad>/review --base main
+# options: --sizes "1400x900 1100x720" (default)  --tour <file>
+# ports: PORT (5231, this checkout), BASE_PORT (5232, the base ref)
+```
+
+Output: `<out>/after/<size>/NN-name.png`, and with `--base` also
+`<out>/before/<size>/` and `<out>/compare/<size>/` plus a `same` /
+`N.NN% changed` line per screen. Read the PNGs to review them.
+
+- The tour runs with `KEEP_GOING=1`: a step that fails (UI that doesn't exist
+  on the base ref yet) is logged as `FAILED` and the tour goes on, with a 5 s
+  timeout instead of 30 s. Screens after a failed step may show a different state.
+- Small diffs (well under 1%) on `05-agent-worktree` / `06-changes` are mock
+  noise: the agent terminal and change counts are live. The "Agent finished"
+  toast also shows up in later screens.
+- Add a screen by adding steps + an `ss NN-name` line to `tour.txt`; keep the
+  names numbered and stable so before/after pairs line up.
+- Driver env for ad-hoc runs: `SCALE` (default 2), `VIEWPORT` (`1400x900`),
+  `KEEP_GOING=1`. The app has one (dark) theme, so there's no theme variant.
+
+Design-review commands (in addition to the table above):
+
+| Command | Does |
+|---|---|
+| `ss-el <name> <selector>` | Screenshot one element: `aside` = sidebar, `aside >> nth=1` = right panel. Clips popovers that stick out. |
+| `viewport [WxH]` | Resize the window mid-script; bare `viewport` restores the run's size (`VIEWPORT`). |
+| `hover-button <name>` | Hover a button by accessible name (tooltip after ~900 ms `wait`). |
+| `unhover` | Move the mouse to the corner (drop hover / tooltip). |
+| `rclick <text>` / `click-text <text>` / `hover-text <text>` | Right-click / click / hover any element by exact visible text (project rows, the host row). |
+| `click <selector>` | Click the first match of a CSS selector (`click .xterm` focuses the terminal). |
+| `ss <name> -- <desc>` / `ss-el <name> <sel> -- <desc>` | As above, recording the description in `manifest.json`. |
+| `js <expr>` | Run JS in the page with the app's modules in scope: `store` (state/store.ts), `prompts` (state/prompts.ts), `s` (current state). Opens anything directly: `js store.useStore.setState({ settings: 'hosts' })`, `js prompts.openSendPrompt()`, `js store.pushToast({...}, 0)`. |
+| `connect-try <host>` | Fill and submit the connect form without waiting (error states, e.g. `fail-box`). |
+| `fresh` | Clear localStorage (saved hosts, prefs) and reload: back to the connect screen. |
+| `goto <path>` | Load a URL relative to the start URL (`goto /?about` is the About window). |
+| `toasts off` / `toasts on` | Hide / show toast notifications. |
+| `scroll <dy> <selector>` | Mouse wheel over an element. |
 
 ## Run (human path)
 

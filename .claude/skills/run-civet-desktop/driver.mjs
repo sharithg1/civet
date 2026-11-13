@@ -1,7 +1,10 @@
 // Drive the desktop UI (mock backend) in headless Chrome. Reads one command
 // per line from stdin; see SKILL.md for the command list.
 //   node driver.mjs [url] < script
-import { mkdirSync } from 'node:fs'
+// Env: SHOTS (output dir), SCALE (device pixel ratio, default 2 = Retina),
+// VIEWPORT (WxH, default 1400x900), KEEP_GOING=1 (log a failed step and go on,
+// for tours run against older branches), HEADED=1.
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { chromium } from 'playwright-core'
 
@@ -9,8 +12,17 @@ const url = process.argv[2] ?? 'http://localhost:5199/?mock'
 const out = process.env.SHOTS ?? 'shots'
 mkdirSync(out, { recursive: true })
 
+const size = (wxh) => {
+  const [width, height] = wxh.split('x').map(Number)
+  return { width, height }
+}
 const browser = await chromium.launch({ channel: 'chrome', headless: !process.env.HEADED })
-const p = await browser.newPage({ viewport: { width: 1400, height: 900 } })
+const p = await browser.newPage({
+  viewport: size(process.env.VIEWPORT ?? '1400x900'),
+  deviceScaleFactor: Number(process.env.SCALE ?? 2)
+})
+// A tour run against an older branch hits steps that can't work there; fail them fast.
+if (process.env.KEEP_GOING) p.setDefaultTimeout(5000)
 const errors = []
 p.on('pageerror', (e) => errors.push(e.message))
 await p.goto(url)
@@ -26,7 +38,26 @@ const change = (name) =>
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const editorTab = (label) => p.locator(EDITOR_TAB, { hasText: label }).first()
 
+// `ss name -- what it shows` lines collect here; written to $SHOTS/manifest.json.
+const manifest = []
+const shot = async (name, desc, el) => {
+  const path = `${out}/${name}.png`
+  await (el ?? p).screenshot({ path })
+  manifest.push({ file: `${name}.png`, desc, viewport: p.viewportSize() })
+  console.log('screenshot', path)
+}
+// Split `a b -- rest` into ([a, b], 'rest').
+const described = (args) => {
+  const i = args.indexOf('--')
+  return i < 0 ? [args, ''] : [args.slice(0, i), args.slice(i + 1).join(' ')]
+}
+
 const commands = {
+  // Fill the connect form and press Connect without waiting for success (error states).
+  'connect-try': async (host) => {
+    await p.getByPlaceholder(/user@devbox/).fill(host)
+    await p.getByRole('button', { name: 'Connect', exact: true }).click()
+  },
   // Connect the mock host (any name; "fail" in it fails, "udp-blocked" falls back to SSH).
   connect: async (host = 'devbox') => {
     await p.getByPlaceholder(/user@devbox/).fill(host)
@@ -118,11 +149,67 @@ const commands = {
     console.log((await p.locator(s.join(' ') || 'body').allInnerTexts()).join('\n').slice(0, 3000)),
   eval: async (...js) => console.log(await p.evaluate(js.join(' '))),
   wait: async (ms = '300') => p.waitForTimeout(Number(ms)),
-  ss: async (name = 'shot') => {
-    const path = `${out}/${name}.png`
-    await p.screenshot({ path })
-    console.log('screenshot', path)
-  }
+  // `ss name [-- description]`; the description goes to manifest.json.
+  ss: async (...args) => {
+    const [[name = 'shot'], desc] = described(args)
+    await shot(name, desc)
+  },
+  // Screenshot one element (first match of a CSS selector), e.g. `ss-el sidebar aside -- desc`.
+  'ss-el': async (...args) => {
+    const [[name, ...selector], desc] = described(args)
+    await shot(name, desc, p.locator(selector.join(' ')).first())
+  },
+  // Run JS in the page with the app's own modules in scope (Vite dev serves /src):
+  // `store` (state/store.ts), `prompts` (state/prompts.ts), `s` = store state.
+  // e.g. `js store.useStore.setState({ settings: 'hosts' })`
+  js: async (...code) => {
+    const r = await p.evaluate(async (code) => {
+      const store = await import('/src/state/store.ts')
+      const prompts = await import('/src/state/prompts.ts')
+      const s = store.useStore.getState()
+      return eval(code)
+    }, code.join(' '))
+    if (r !== undefined) console.log(typeof r === 'string' ? r : JSON.stringify(r))
+  },
+  // Load another URL, relative to the start URL (e.g. `goto /?about`).
+  goto: async (to) => p.goto(new URL(to, url).href),
+  // Start over: forget saved hosts and prefs, reload the start URL (connect screen).
+  fresh: async () => {
+    await p.evaluate(() => localStorage.clear())
+    await p.goto(url)
+  },
+  // `toasts off` hides toast notifications (they cover the right panel), `toasts on` shows them.
+  toasts: async (state) =>
+    p.evaluate((hide) => {
+      let el = document.getElementById('driver-toasts')
+      if (!el) {
+        el = document.createElement('style')
+        el.id = 'driver-toasts'
+        document.head.append(el)
+      }
+      el.textContent = hide ? '[data-sonner-toaster] { display: none !important }' : ''
+    }, state === 'off'),
+  // Hover any element by its exact visible text.
+  'hover-text': async (...text) => p.getByText(text.join(' '), { exact: true }).first().hover(),
+  // Click the first match of a CSS selector (e.g. `click .xterm`).
+  click: async (...selector) => p.locator(selector.join(' ')).first().click(),
+  // Scroll the mouse wheel over an element (CSS selector): `scroll -800 .xterm`.
+  scroll: async (dy, ...selector) => {
+    await p.locator(selector.join(' ')).first().hover()
+    await p.mouse.wheel(0, Number(dy))
+  },
+  // Resize the window, e.g. `viewport 1000x700`; bare `viewport`: back to the run's size.
+  viewport: async (wxh) => p.setViewportSize(size(wxh || (process.env.VIEWPORT ?? '1400x900'))),
+  // Hover a button by its accessible name (shows its tooltip).
+  'hover-button': async (...name) =>
+    p.getByRole('button', { name: name.join(' '), exact: true }).first().hover(),
+  // Right-click any element by its exact visible text (e.g. a sidebar project row).
+  rclick: async (...text) =>
+    p.getByText(text.join(' '), { exact: true }).first().click({ button: 'right' }),
+  // Click any element by its exact visible text (nav items that aren't buttons).
+  'click-text': async (...text) => p.getByText(text.join(' '), { exact: true }).first().click(),
+  // Move the mouse out of the way (drops hover states and tooltips).
+  unhover: async () => p.mouse.move(0, 0)
 }
 
 let failed = false
@@ -142,9 +229,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   } catch (e) {
     console.log(`FAILED ${line}: ${e.message.split('\n')[0]}`)
     failed = true
-    break
+    if (!process.env.KEEP_GOING) break
   }
 }
+if (manifest.length) writeFileSync(`${out}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`)
 for (const e of errors) console.log('pageerror', e)
 await browser.close()
 // A page exception fails the run even when every command went through.

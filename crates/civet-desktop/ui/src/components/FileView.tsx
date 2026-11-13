@@ -90,6 +90,7 @@ export function FileView({
         <FileBody
           file={file.value}
           lang={languageForPath(path)}
+          wrap={markdown}
           render={
             source
               ? undefined
@@ -106,10 +107,13 @@ export function FileView({
 function FileBody({
   file,
   lang,
+  wrap,
   render
 }: {
   file: FilePreview
   lang: string | null
+  /** Soft-wrap long lines (Markdown prose); without line numbers, which would misalign. */
+  wrap?: boolean
   /** Shows the text instead of the numbered source (Markdown preview). */
   render?: (text: string) => React.ReactNode
 }) {
@@ -131,6 +135,16 @@ function FileBody({
         {notice}
         {render(file.text)}
       </>
+    )
+  }
+  if (wrap) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {notice}
+        <pre className="shiki-tokens px-3 py-2 font-mono text-sm leading-[20px] break-words whitespace-pre-wrap text-soft select-text">
+          <HighlightedText text={file.text} lang={lang} />
+        </pre>
+      </div>
     )
   }
   return (

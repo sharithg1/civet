@@ -137,7 +137,12 @@ export function WorktreeTemplateEditor({ hostId, repo }: { hostId: string; repo:
         />
       </Field>
       <div className="flex items-center gap-2">
-        <button type="button" className={btn} disabled={busy || !dirty} onClick={() => void save()}>
+        <button
+          type="button"
+          className={cn(btn, dirty && 'border-primary bg-primary text-primary-foreground')}
+          disabled={busy || !dirty}
+          onClick={() => void save()}
+        >
           Save
         </button>
         <button

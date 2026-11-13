@@ -6,13 +6,13 @@
 //
 // Git actions (state/git-actions.ts): a commit box on top (⌘↵, Amend, "Commit
 // all" when nothing is staged), the branch with ahead / behind and
-// Pull / Push / Fetch, stage / unstage / discard per row, per selection and
-// per group, conflict resolution, "Update from main" while the branch is
+// Pull / Push / Fetch, stage / unstage per row (discard in its right-click
+// menu, away from the safe action), per selection and per group, conflict resolution, "Update from main" while the branch is
 // behind the default branch, and a menu with stash, undo last commit and
 // "Discard all". Discards are undone from their toast, so only "Discard all"
 // asks first. Everything is greyed out while an action runs, and on a civetd
-// too old for git actions. Under the branch bar: the branch's pull request
-// with CI and reviews, or "Create pull request" (PullRequestSection.tsx).
+// too old for git actions. Pull requests, CI and reviews live on GitHub (the
+// worktree's menu opens its PR there), not here.
 import { useState } from 'react'
 import {
   ArrowDown,
@@ -64,10 +64,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { CHANGE_KIND, Counts } from './DiffView'
 import { IconButton } from './IconButton'
-import { PullRequestSection } from './PullRequestSection'
-import { useWorktreeInfo } from './chrome'
 
 const GROUPS: [ChangeSide, string][] = [
   ['conflicted', 'Conflicts'],
@@ -96,7 +100,6 @@ export function ChangesTab({
   const entry = useChanges((s) => s.byWorktree[key])
   const busy = useChanges((s) => s.busy[key] ?? null)
   const [sel, setSel] = useState<ChangeSelection>(null)
-  const wt = useWorktreeInfo(hostId, worktree)
   // The diff tab showing, to highlight its row.
   const open = useStore((s) => {
     const ws = s.workspaces[key]
@@ -156,19 +159,6 @@ export function ChangesTab({
         busy={busy}
         canAct={canAct}
         connected={connected}
-        pullRequest={
-          wt && (
-            <PullRequestSection
-              hostId={hostId}
-              worktree={worktree}
-              branchName={wt.info.branch}
-              defaultBranch={wt.repo.defaultBranch}
-              branch={supported ? (entry?.branch ?? null) : null}
-              connected={connected}
-              canAct={canAct}
-            />
-          )
-        }
       />
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {entry?.error && (
@@ -358,8 +348,7 @@ function ListHeader({
   branch,
   busy,
   canAct,
-  connected,
-  pullRequest
+  connected
 }: {
   hostId: string
   worktree: string
@@ -368,8 +357,6 @@ function ListHeader({
   busy: string | null
   canAct: boolean
   connected: boolean
-  /** The branch's PR (or "Create pull request"), under the branch bar. */
-  pullRequest?: React.ReactNode
 }) {
   const count = changedFileCount(status)
   let adds = 0
@@ -392,7 +379,6 @@ function ListHeader({
           canAct={canAct}
         />
       )}
-      {pullRequest}
       <div className="flex h-9 items-center gap-2 px-3 text-sm">
         <span className="text-soft">
           {status ? `${count} changed file${count === 1 ? '' : 's'}` : 'Changes'}
@@ -616,13 +602,16 @@ function EntryActions({
   changes,
   actions,
   disabled,
-  all
+  all,
+  noDiscard
 }: {
   side: ChangeSide
   changes: GitFileChange[]
   actions: GroupActions
   disabled: boolean
   all?: boolean
+  /** Leave out discard / delete (a file row has them in its context menu). */
+  noDiscard?: boolean
 }) {
   const n = changes.length
   // One file, a selection of `n`, or the whole group.
@@ -664,11 +653,12 @@ function EntryActions({
   if (side === 'staged') {
     return (
       <>
-        {btn(
-          label('Discard changes', (f) => `Discard changes to ${f}`, 'Discard all changes'),
-          <Undo2 />,
-          () => actions.discard(side, changes)
-        )}
+        {!noDiscard &&
+          btn(
+            label('Discard changes', (f) => `Discard changes to ${f}`, 'Discard all changes'),
+            <Undo2 />,
+            () => actions.discard(side, changes)
+          )}
         {btn(
           label('Unstage', (f) => `Unstage ${f}`, 'Unstage all'),
           <Minus />,
@@ -679,17 +669,19 @@ function EntryActions({
   }
   return (
     <>
-      {side === 'untracked'
-        ? btn(
-            label('Delete', (f) => `Delete ${f}`, 'Delete all'),
-            <Trash2 />,
-            () => actions.discard(side, changes)
-          )
-        : btn(
-            label('Discard changes', (f) => `Discard changes to ${f}`, 'Discard all changes'),
-            <Undo2 />,
-            () => actions.discard(side, changes)
-          )}
+      {noDiscard
+        ? null
+        : side === 'untracked'
+          ? btn(
+              label('Delete', (f) => `Delete ${f}`, 'Delete all'),
+              <Trash2 />,
+              () => actions.discard(side, changes)
+            )
+          : btn(
+              label('Discard changes', (f) => `Discard changes to ${f}`, 'Discard all changes'),
+              <Undo2 />,
+              () => actions.discard(side, changes)
+            )}
       {btn(
         label('Stage', (f) => `Stage ${f}`, 'Stage all'),
         <Plus />,
@@ -728,42 +720,113 @@ function FileRow({
   const title = change.oldPath
     ? `${label}: ${change.oldPath} → ${change.path}`
     : `${label}: ${change.path}`
+  const menu = { actions, disabled }
   return (
-    <div
-      aria-selected={selected || active}
-      className={cn(
-        'group/row mx-1.5 flex h-7 items-center rounded-md',
-        active ? 'bg-card' : selected ? 'bg-hover-strong' : 'hover:bg-hover'
-      )}
-    >
-      <button
-        type="button"
-        onClick={onClick}
-        onDoubleClick={onDoubleClick}
-        title={title}
-        className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 pl-1.5 text-left text-sm"
-      >
-        <span className={cn('w-3 shrink-0 text-center font-mono text-xs', color)}>{letter}</span>
-        <span
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          aria-selected={selected || active}
           className={cn(
-            'shrink-0 truncate',
-            change.kind === 'deleted' ? 'text-quiet line-through' : 'text-soft'
+            'group/row mx-1.5 flex h-7 items-center rounded-md',
+            active ? 'bg-card' : selected ? 'bg-hover-strong' : 'hover:bg-hover'
           )}
         >
-          {name}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-xs text-dim" dir="rtl">
-          {/* rtl: long directories lose their start, not the part next to the name */}
-          <bdi>{dir}</bdi>
-        </span>
-        <span className="pr-1.5 group-focus-within/row:hidden group-hover/row:hidden">
-          <Counts additions={change.additions} deletions={change.deletions} />
-        </span>
-      </button>
-      <div className="hidden shrink-0 items-center pr-1 group-focus-within/row:flex group-hover/row:flex">
-        <EntryActions side={side} changes={targets} actions={actions} disabled={disabled} />
-      </div>
-    </div>
+          <button
+            type="button"
+            onClick={onClick}
+            onDoubleClick={onDoubleClick}
+            title={title}
+            className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 pl-1.5 text-left text-sm"
+          >
+            <span className={cn('w-3 shrink-0 text-center font-mono text-xs', color)}>
+              {letter}
+            </span>
+            <span
+              className={cn(
+                'shrink-0 truncate',
+                change.kind === 'deleted' ? 'text-quiet line-through' : 'text-soft'
+              )}
+            >
+              {name}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-dim" dir="rtl">
+              {/* rtl: long directories lose their start, not the part next to the name */}
+              <bdi>{dir}</bdi>
+            </span>
+            <span className="pr-1.5">
+              <Counts additions={change.additions} deletions={change.deletions} />
+            </span>
+          </button>
+          {/* has-[…]: stays while its menu is open (focus is in the portal). */}
+          <div className="hidden shrink-0 items-center pr-1 group-focus-within/row:flex group-hover/row:flex has-[[data-state=open]]:flex">
+            <EntryActions
+              side={side}
+              changes={targets}
+              actions={actions}
+              disabled={disabled}
+              noDiscard
+            />
+            {/* Discard for the keyboard too (the context menu needs a mouse). */}
+            {side !== 'conflicted' && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label="More actions"
+                  title="More actions"
+                  disabled={disabled}
+                  onClick={(e) => e.stopPropagation()}
+                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-hover-strong hover:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-hover-strong"
+                >
+                  <Ellipsis className="size-3.5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <RowMenuItems Item={DropdownMenuItem} side={side} targets={targets} {...menu} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      {side !== 'conflicted' && (
+        <ContextMenuContent className="w-56">
+          <RowMenuItems Item={ContextMenuItem} side={side} targets={targets} {...menu} />
+        </ContextMenuContent>
+      )}
+    </ContextMenu>
+  )
+}
+
+/** Stage / unstage and discard / delete for a row, in its context or "…" menu. */
+function RowMenuItems({
+  Item,
+  side,
+  targets,
+  actions,
+  disabled
+}: {
+  Item: typeof ContextMenuItem | typeof DropdownMenuItem
+  side: ChangeSide
+  targets: GitFileChange[]
+  actions: GroupActions
+  disabled: boolean
+}) {
+  const n = targets.length
+  const what = n > 1 ? ` ${n} files` : ''
+  return (
+    <>
+      <Item disabled={disabled} onSelect={() => actions.stage(side, targets)}>
+        {side === 'staged' ? <Minus /> : <Plus />}
+        {side === 'staged' ? 'Unstage' : 'Stage'}
+        {what}
+      </Item>
+      <Item
+        variant="destructive"
+        disabled={disabled}
+        onSelect={() => actions.discard(side, targets)}
+      >
+        {side === 'untracked' ? <Trash2 /> : <Undo2 />}
+        {side === 'untracked' ? `Delete${what}` : n > 1 ? `Discard${what}` : 'Discard changes'}
+      </Item>
+    </>
   )
 }
 

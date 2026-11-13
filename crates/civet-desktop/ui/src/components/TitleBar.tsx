@@ -12,11 +12,12 @@
 // lib/window-chrome.ts. A folder project (not a git repository) has no
 // branch details or worktree removal.
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ChevronDown,
   Copy,
   Diff,
+  ExternalLink,
   Folder,
   GitBranch,
   MoreHorizontal,
@@ -43,13 +44,15 @@ import {
   moveTab,
   newAgentTab,
   newTerminalTab,
+  openPullRequest,
   panesOfWorktree,
   pinTab,
   pushToast,
   splitFocused,
   useStore,
   wsKey,
-  tabPanes
+  tabPanes,
+  worktreePullRequest
 } from '@/state/store'
 import { FileIcon } from './FilesTab'
 import {
@@ -78,7 +81,8 @@ export function TitleBar() {
       // drags the window; buttons and tabs keep their clicks.
       data-tauri-drag-region="deep"
       data-titlebar-inset={sidebarOpen ? undefined : inset}
-      className="flex h-10 shrink-0 items-center gap-1 bg-background pr-2 pl-3 select-none"
+      // @container: the host stats collapse as the row narrows (StatsView.tsx).
+      className="@container flex h-10 shrink-0 items-center gap-1 bg-background pr-2 pl-3 select-none"
       style={!sidebarOpen && inset ? { paddingLeft: inset } : undefined}
     >
       {!sidebarOpen && (
@@ -158,6 +162,8 @@ function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string 
 function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: string }) {
   const wt = useWorktreeInfo(hostId, worktree)
   const host = useStore((s) => s.hosts[hostId])
+  // The sidebar row's menu has it too; this one is reachable from the keyboard.
+  const pr = useStore((s) => (wt ? worktreePullRequest(s, hostId, wt.info) : undefined))
   if (!wt) return null
   const { info } = wt
   const folder = isFolderRepo(wt.repo)
@@ -193,6 +199,12 @@ function WorktreeActions({ hostId, worktree }: { hostId: string; worktree: strin
             Branch details
           </DropdownMenuItem>
         )}
+        {pr && (
+          <DropdownMenuItem onSelect={() => void openPullRequest(pr)}>
+            <ExternalLink />
+            Open PR #{pr.number} on GitHub
+          </DropdownMenuItem>
+        )}
         {!info.isMain && (
           <>
             <DropdownMenuSeparator />
@@ -223,6 +235,13 @@ function Tabs({ hostId, worktree }: { hostId: string; worktree: string }) {
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: string; startX: number; moved: boolean } | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
+  // The strip scrolls when the tabs overflow: keep the active one in view.
+  useEffect(() => {
+    if (!activeTab) return
+    stripRef.current
+      ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(activeTab)}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTab])
 
   // Pointer events rather than HTML5 drag-and-drop: Tauri's native file-drop
   // handler swallows HTML5 drag events in the webview. The strip reorders

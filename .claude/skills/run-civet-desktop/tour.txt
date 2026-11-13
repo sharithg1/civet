@@ -1,0 +1,276 @@
+# UI catalog: every screen, panel, menu and dialog of the desktop app against
+# the mock backend. shoot.sh runs it at each window size; names are numbered
+# and stable so before/after runs pair up. `ss name -- description`: the
+# description lands in manifest.json and the generated README index.
+# Sidebar = `aside` (first), right panel = `aside >> nth=1`.
+# `js` runs with the app's store in scope (see SKILL.md).
+
+# ── Connect ──────────────────────────────────────────────────────────────
+ss 01-connect-empty -- First launch: no hosts yet, the connect screen.
+connect-try fail-box
+wait 2500
+ss 02-connect-error -- Connect screen after a host that never connects (error state).
+goto /?mock
+connect devbox
+wait 800
+toasts off
+unhover
+
+# ── Main window ─────────────────────────────────────────────────────────
+ss 03-main-no-tabs -- Connected, `main` worktree selected, no tabs open (empty work area with shortcuts).
+ss-el 04-sidebar aside -- Sidebar: actions, host, projects (civet, orca) with worktrees and status icons, folder project (notes), Settings.
+hover-worktree Implement QUIC resume
+wait 400
+ss-el 05-sidebar-row-hover aside -- Sidebar worktree row on hover: ahead/behind and agent spend replace its age.
+unhover
+hover-button Next worktree (⌥↓)
+wait 900
+ss 06-tooltip -- A tooltip (sidebar "Next worktree" button).
+unhover
+rclick orca
+wait 300
+ss 07-project-context-menu -- Right-click menu of a project row in the sidebar.
+key Escape
+hover-text devbox
+wait 200
+click-button devbox actions
+wait 300
+ss 08-host-actions-menu -- The host's "…" menu in the sidebar.
+key Escape
+click-text civet
+wait 300
+ss-el 09-sidebar-project-collapsed aside -- Sidebar with the civet project collapsed.
+click-text civet
+wait 300
+
+# ── Agent worktree and tabs ─────────────────────────────────────────────
+worktree Implement QUIC resume
+wait 800
+ss 10-agent-tab -- Worktree with a running Claude agent tab (terminal output, status in the tab and sidebar).
+click-button Worktree actions
+wait 300
+ss 11-worktree-actions-menu -- Title bar "Worktree actions" (…) menu.
+key Escape
+opt t
+wait 800
+ss 12-terminal-tab -- A plain terminal tab next to the agent tab.
+click .xterm
+key Meta+f
+wait 300
+type older
+wait 400
+ss 13-terminal-find -- Find-in-terminal bar with a query.
+key Escape
+key Meta+d
+wait 800
+ss 14-split-panes -- Two terminal panes split side by side in one tab.
+key Meta+w
+wait 400
+opt x
+wait 800
+ss 15-codex-tab -- A Codex agent tab.
+opt 1
+wait 500
+hover-text Claude 1
+click-button Show older history
+wait 1500
+unhover
+ss 16-terminal-history -- The older-history view opened above the live terminal (pane toolbar clock button, or scrolling to the top).
+
+# ── Switcher ────────────────────────────────────────────────────────────
+key Meta+k
+wait 400
+ss 17-worktree-switcher -- Worktree switcher / search (⌘K).
+type flaky
+wait 300
+ss 18-worktree-switcher-query -- Worktree switcher filtered by a query.
+key Escape
+
+# ── Right panel: Files ──────────────────────────────────────────────────
+right files
+wait 400
+ss-el 19-files-panel aside >> nth=1 -- Files tab: tree, go-to-file filter, toolbar.
+click-file README.md
+wait 800
+ss 20-markdown-preview -- A Markdown file open as a (preview) tab, rendered.
+click-button Show source
+wait 600
+ss 21-markdown-source -- The same Markdown file as highlighted source.
+dblclick-file Cargo.toml
+wait 800
+ss 22-code-file -- A code file (Cargo.toml) open with syntax highlighting.
+rclick-file Cargo.toml
+wait 300
+ss 23-file-context-menu -- Right-click menu of a file in the Files tab.
+key Escape
+click-file crates
+wait 400
+ss-el 24-files-folder-expanded aside >> nth=1 -- Files tree with a folder expanded.
+
+# ── Right panel: Changes ────────────────────────────────────────────────
+right changes
+wait 600
+ss 25-changes -- Changes tab: commit box, branch/upstream row, staged/unstaged files.
+hover-change session.rs
+wait 300
+ss-el 26-changes-row-hover aside >> nth=1 -- A Changes row on hover (its stage button).
+click-change session.rs
+wait 800
+ss 27-diff -- A file diff opened from the Changes tab.
+click-button More git actions
+wait 300
+ss 28-git-actions-menu -- The "More git actions" menu (fetch, pull, push, stash…).
+key Escape
+commit-message Resume QUIC sessions across network changes
+wait 300
+ss-el 29-commit-message aside >> nth=1 -- Commit box with a message typed (Commit enabled).
+
+# ── Right panel: Branch, Ports ──────────────────────────────────────────
+right branch
+wait 500
+ss 31-branch-with-pr -- Branch tab of a feature worktree: branch → base, HEAD and path (its PR is only in the worktree menu).
+right ports
+wait 500
+ss-el 32-ports aside >> nth=1 -- Ports tab: forwarded / listening ports on the host.
+
+# ── Other worktree states ───────────────────────────────────────────────
+worktree main
+right branch
+wait 500
+ss-el 33-branch-default-checkout aside >> nth=1 -- Branch tab of the main checkout.
+worktree Fix the flaky
+right changes
+wait 600
+ss 34-conflict -- A worktree with a merge conflict.
+worktree Redesign the
+wait 600
+ss 35-agent-needs-input -- A worktree whose agent is waiting for input / stopped.
+worktree scrollback-paging
+right changes
+wait 600
+ss 36-terminal-only-worktree -- A worktree with only a terminal session.
+click-text notes
+wait 800
+right files
+wait 400
+ss 37-folder-project -- A folder project (no git): files only, no Changes/Branch.
+
+# ── Host status and stats ───────────────────────────────────────────────
+worktree Implement QUIC resume
+wait 500
+click-text 42 ms
+wait 400
+ss 38-host-status-popover -- Status bar host popover (latency, transport, daemon).
+key Escape
+click-button Host stats
+wait 800
+ss 39-host-stats -- Host stats view: CPU, memory, network, disk, GPU, per-worktree usage.
+scroll 2000 main
+wait 600
+ss 40-host-stats-bottom -- Host stats view scrolled down (agent spend / usage).
+worktree Implement QUIC resume
+wait 400
+
+# ── Dialogs ─────────────────────────────────────────────────────────────
+js store.useStore.setState({ newWorktree: { hostId: 'devbox', repo: 'civet' } })
+wait 500
+ss 41-new-worktree -- New worktree dialog (empty).
+type NO-TICKET/sidebar-polish
+wait 300
+ss 42-new-worktree-filled -- New worktree dialog with a branch name typed.
+key Escape
+js prompts.openSendPrompt()
+wait 500
+ss 43-send-prompt -- Send prompt dialog (broadcast a prompt to agents).
+key Escape
+js store.useStore.setState({ addProject: { hostId: 'devbox' } })
+wait 500
+ss 44-add-project -- Add project dialog.
+key Escape
+click-button Clean up worktrees in civet
+wait 600
+ss 45-cleanup-worktrees -- Clean up worktrees dialog for a project.
+key Escape
+js store.useStore.setState({ removeWorktree: { hostId: 'devbox', worktree: '/home/dev/src/civet-worktrees/scrollback-paging' } })
+wait 500
+ss 46-remove-worktree -- Remove worktree confirmation.
+key Escape
+rclick orca
+wait 300
+menu-item Stop tracking project
+wait 500
+ss 47-remove-project -- Stop tracking project confirmation.
+key Escape
+
+# ── Settings ────────────────────────────────────────────────────────────
+js store.useStore.setState({ settings: 'general' })
+wait 600
+ss 48-settings-general -- Settings › General.
+js store.useStore.setState({ settings: 'hosts' })
+wait 600
+ss 49-settings-hosts -- Settings › Hosts.
+js store.useStore.setState({ settings: 'projects' })
+wait 600
+ss 50-settings-projects -- Settings › Projects.
+click-button Worktree setup…
+wait 600
+ss 51-settings-worktree-setup -- Settings › Projects with a project's worktree setup editor open.
+js store.useStore.setState({ settings: 'keyboard' })
+wait 600
+ss 52-settings-keyboard -- Settings › Keyboard shortcuts.
+click [aria-label="Search settings"]
+type agent
+wait 500
+ss 53-settings-search -- Settings search results.
+js store.useStore.setState({ settings: null })
+wait 400
+
+# ── Panels and window sizes ─────────────────────────────────────────────
+js store.useStore.setState({ sidebarOpen: false })
+wait 400
+ss 54-sidebar-hidden -- Sidebar hidden (⌥B).
+js store.useStore.setState({ sidebarOpen: true, rightPanelOpen: false })
+wait 400
+ss 55-right-panel-hidden -- Right panel hidden (⌥E).
+js store.useStore.setState({ rightPanelOpen: true })
+viewport 1000x700
+wait 600
+ss 56-narrow-window -- Narrow window (1000×700).
+viewport
+wait 400
+
+# ── Connection problems and other hosts ─────────────────────────────────
+opt t
+wait 800
+click .xterm
+type drop
+key Enter
+wait 1500
+ss 57-connection-dropped -- After the connection drops: reconnect banner / state.
+wait 6000
+ss 58-reconnected -- A few seconds later (reconnecting / reconnected).
+toasts on
+js store.pushToast({ kind: 'attention', status: 'done', title: 'Implement QUIC resume', body: 'Agent finished: all tasks complete' }, 0)
+js store.pushToast({ kind: 'error', title: 'Push failed', body: 'rejected: the remote has commits you do not have (fetch first)' }, 0)
+js store.pushToast({ kind: 'info', title: 'Worktree removed', body: 'scrollback-paging', action: { label: 'Undo', run: () => {} } }, 0)
+wait 600
+ss 59-toast -- Toast notifications (bottom right; hidden in the other screenshots).
+fresh
+connect old-box
+toasts off
+wait 1200
+ss 60-daemon-upgrade -- Host running an older civetd: the "upgrade available" prompt.
+fresh
+connect pre-git-box
+toasts off
+worktree Implement QUIC resume
+right changes
+wait 800
+ss 61-old-daemon-no-git -- Host whose civetd can't take git actions: Changes controls greyed out.
+
+# ── About window ────────────────────────────────────────────────────────
+goto /?about
+wait 800
+viewport 520x360
+wait 300
+ss 62-about -- The About window (separate small window).
