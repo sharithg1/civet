@@ -69,10 +69,12 @@ export function RightPanel() {
       />
       <div
         data-tauri-drag-region="deep"
-        className="flex h-10 shrink-0 items-center gap-0.5 px-2 select-none"
+        className="@container flex h-10 shrink-0 items-center gap-0.5 px-2 select-none"
       >
-        {/* Only the selected tab shows its label, so none of them is cut
-            to an ellipsis; the others are icons (and counts) with a tooltip. */}
+        {/* Every tab shows its icon and label. When the panel is too narrow
+            for all of them, only the selected tab keeps its label, so none is
+            cut to an ellipsis; the others fall back to icons (and counts)
+            with a tooltip. */}
         <div className="flex min-w-0 items-center gap-0.5" role="tablist">
           {tabs.map(([id, label, Icon]) => (
             <button
@@ -88,7 +90,9 @@ export function RightPanel() {
               )}
             >
               <Icon className="size-3.5 shrink-0" />
-              <span className={cn('min-w-0 truncate', tab !== id && 'sr-only')}>{label}</span>
+              <span className={cn('min-w-0 truncate', tab !== id && '@max-[21rem]:sr-only')}>
+                {label}
+              </span>
               {id === 'changes' && active && (
                 <ChangesCount
                   hostId={active.hostId}
