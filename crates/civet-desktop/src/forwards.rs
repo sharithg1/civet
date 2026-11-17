@@ -95,7 +95,9 @@ impl PortsState {
 
 /// Watch `session`'s ports until it closes: open the ports stream, forward
 /// every update, re-open it when it ends while the session lives on (a new
-/// connection after a reconnect). Stops for good on `Unsupported`.
+/// connection after a reconnect). `Unsupported` (a stream link) is reported
+/// and retried on the next link change: the failover dialer moves an `Auto`
+/// session back to QUIC once UDP works again.
 pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc<dyn UiEvents>) {
     let mut link = session.link_state();
     loop {
@@ -114,7 +116,10 @@ pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc
             Ok(w) => w,
             Err(RequestError::Rpc(e)) if e.code == ErrorCode::Unsupported => {
                 state.set(&*ui, PortsStatus::Unsupported, Some(e.message), Vec::new());
-                return;
+                if link.changed().await.is_err() {
+                    return;
+                }
+                continue;
             }
             Err(RequestError::Closed) => return,
             Err(e) => {
