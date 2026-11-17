@@ -1308,14 +1308,21 @@ async fn ports_are_watched_and_forwards_survive_a_daemon_restart() {
     })
     .await;
 
-    // Stopping closes the local listener.
+    // Stopping closes the local listener. It lives in the aborted accept
+    // task, which the runtime drops asynchronously, so wait for it.
     m.stop_forward(h, port).unwrap();
     assert_eq!(m.stop_forward(h, port).unwrap_err().code, "notFound");
-    assert!(
-        tokio::net::TcpStream::connect(("127.0.0.1", fwd.local_port))
-            .await
-            .is_err()
-    );
+    let deadline = tokio::time::Instant::now() + T;
+    while tokio::net::TcpStream::connect(("127.0.0.1", fwd.local_port))
+        .await
+        .is_ok()
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out: listener closed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     m.disconnect_host(h).await.unwrap();
     daemon.shutdown("test done").await;
 }
