@@ -95,7 +95,9 @@ impl PortsState {
 
 /// Watch `session`'s ports until it closes: open the ports stream, forward
 /// every update, re-open it when it ends while the session lives on (a new
-/// connection after a reconnect). Stops for good on `Unsupported`.
+/// connection after a reconnect). `Unsupported` (a stream link) is reported
+/// and retried on the next link change: the failover dialer moves an `Auto`
+/// session back to QUIC once UDP works again.
 pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc<dyn UiEvents>) {
     let mut link = session.link_state();
     loop {
@@ -110,11 +112,15 @@ pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc
                 return;
             }
         }
+        let generation = session.connection_generation();
         let mut watch = match session.watch_ports().await {
             Ok(w) => w,
             Err(RequestError::Rpc(e)) if e.code == ErrorCode::Unsupported => {
                 state.set(&*ui, PortsStatus::Unsupported, Some(e.message), Vec::new());
-                return;
+                if link.changed().await.is_err() {
+                    return;
+                }
+                continue;
             }
             Err(RequestError::Closed) => return,
             Err(e) => {
@@ -132,8 +138,11 @@ pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc
                 }
                 Ok(None) => break,
                 Err(e) => {
+                    // Same connection as the watch, and still up: an error
+                    // after a reconnect is the old connection going away.
                     let alive =
-                        matches!(&*session.link_state().borrow(), LinkState::Connected { .. });
+                        matches!(&*session.link_state().borrow(), LinkState::Connected { .. })
+                            && session.connection_generation() == generation;
                     if !got_any && alive {
                         // Reset at once on a live connection: the daemon
                         // does not know the ports stream.
