@@ -703,6 +703,13 @@ impl ClientSession {
         st.conn.clone().ok_or(RequestError::ConnectionLost)
     }
 
+    /// Changes every time the session gets a new connection (reconnect,
+    /// failover to or from the tunnel): tells whether something that failed
+    /// did so on the connection that is current now.
+    pub fn connection_generation(&self) -> u64 {
+        self.inner().lock().generation
+    }
+
     /// Listening-port updates from the daemon, on the current connection.
     /// The watch ends with the connection; open a new one after the next
     /// `SessionEvent::Connected`. `Rpc(Unsupported)` on stream links.

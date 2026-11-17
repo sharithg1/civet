@@ -112,6 +112,7 @@ pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc
                 return;
             }
         }
+        let generation = session.connection_generation();
         let mut watch = match session.watch_ports().await {
             Ok(w) => w,
             Err(RequestError::Rpc(e)) if e.code == ErrorCode::Unsupported => {
@@ -137,8 +138,11 @@ pub async fn watch_ports(session: ClientSession, state: Arc<PortsState>, ui: Arc
                 }
                 Ok(None) => break,
                 Err(e) => {
+                    // Same connection as the watch, and still up: an error
+                    // after a reconnect is the old connection going away.
                     let alive =
-                        matches!(&*session.link_state().borrow(), LinkState::Connected { .. });
+                        matches!(&*session.link_state().borrow(), LinkState::Connected { .. })
+                            && session.connection_generation() == generation;
                     if !got_any && alive {
                         // Reset at once on a live connection: the daemon
                         // does not know the ports stream.
