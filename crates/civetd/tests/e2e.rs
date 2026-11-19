@@ -1018,6 +1018,126 @@ async fn folder_projects_over_the_control_stream() {
     daemon.shutdown("test done").await;
 }
 
+/// Floating workspaces over the wire: created with roots, left out of the
+/// project lists, browsed through their links, and removed like a repo.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspaces_over_the_control_stream() {
+    use civet_proto::{ErrorCode, RepoId};
+    let (daemon, dir) = start_daemon().await;
+    let info = daemon.info().clone();
+    let notes = dir.path().join("notes");
+    std::fs::create_dir_all(notes.join("docs")).unwrap();
+    std::fs::write(notes.join("docs/todo.md"), "- ship\n").unwrap();
+    let hosts = dir.path().join("hosts");
+    std::fs::write(&hosts, "127.0.0.1 me\n").unwrap();
+    let sock = tokio::net::UnixStream::connect(daemon.socket_path())
+        .await
+        .unwrap();
+    let mut c = Raw::new(
+        civet_transport::connect_stream(sock, hello(&info, ClientId::generate().unwrap()), vec![])
+            .await
+            .unwrap(),
+    );
+    let err = c
+        .request(Request::CreateWorkspace {
+            name: "adhoc".into(),
+            roots: vec!["relative".into()],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    let Response::Workspace(ws) = c
+        .request(Request::CreateWorkspace {
+            name: "adhoc".into(),
+            roots: vec![notes.display().to_string()],
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("CreateWorkspace")
+    };
+    assert_eq!(ws.roots.len(), 1);
+    let Response::Workspace(ws) = c
+        .request(Request::SetWorkspaceRoots {
+            workspace: ws.id.clone(),
+            roots: vec![notes.display().to_string(), hosts.display().to_string()],
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("SetWorkspaceRoots")
+    };
+    let names: Vec<_> = ws.roots.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["notes", "hosts"]);
+    let Response::Workspaces(list) = c.request(Request::ListWorkspaces).await.unwrap() else {
+        panic!("ListWorkspaces")
+    };
+    assert_eq!(list, vec![ws.clone()]);
+    let Response::Projects(projects) = c.request(Request::ListProjects).await.unwrap() else {
+        panic!("ListProjects")
+    };
+    assert!(projects.is_empty());
+    let Response::Worktrees(w) = c
+        .request(Request::ListWorktrees {
+            repo: ws.id.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ListWorktrees")
+    };
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].path, ws.path);
+    let worktree = w[0].id.clone();
+    let Response::AllFiles(files) = c
+        .request(Request::ListAllFiles {
+            worktree: worktree.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ListAllFiles")
+    };
+    assert_eq!(files.paths, ["hosts", "notes/docs/todo.md"]);
+    let Response::FilePreview(preview) = c
+        .request(Request::ReadFile {
+            worktree: worktree.clone(),
+            path: "notes/docs/todo.md".into(),
+            max_bytes: 1024,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("ReadFile")
+    };
+    assert_eq!(preview.text, "- ship\n");
+    let err = c
+        .request(Request::GitStatus { worktree })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Unsupported);
+    c.request(Request::RemoveRepo {
+        repo: ws.id.clone(),
+    })
+    .await
+    .unwrap();
+    let Response::Workspaces(list) = c.request(Request::ListWorkspaces).await.unwrap() else {
+        panic!("ListWorkspaces")
+    };
+    assert!(list.is_empty());
+    assert!(notes.join("docs/todo.md").is_file());
+    let err = c
+        .request(Request::SetWorkspaceRoots {
+            workspace: RepoId::from("gone"),
+            roots: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+    c.conn.close().await;
+    daemon.shutdown("test done").await;
+}
+
 /// Graceful shutdown: every client (QUIC session and stream link) gets
 /// `Goodbye` before the connection closes; daemon.json and the socket are
 /// removed and the lock is released.

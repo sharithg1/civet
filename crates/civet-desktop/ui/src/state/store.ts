@@ -483,7 +483,7 @@ export async function refreshHost(hostId: string): Promise<void> {
 /** hostId → bumped when a project is untracked; older repo lists are dropped. */
 const reposGen = new Map<string, number>()
 
-async function refreshRepos(hostId: string): Promise<void> {
+export async function refreshRepos(hostId: string): Promise<void> {
   const gen = reposGen.get(hostId) ?? 0
   const repos = await backend().listRepos(hostId)
   // Why: a list taken before Stop tracking would bring the project back.
@@ -859,8 +859,15 @@ export async function disconnectHost(hostId: string): Promise<void> {
   })
 }
 
-/** A plain folder project: files and sessions in its root, no worktrees or git. */
-export const isFolderRepo = (repo: RepoInfo | undefined): boolean => repo?.kind === 'folder'
+/** A floating workspace: a daemon-owned folder with links to its roots (state/floating.ts). */
+export const isWorkspaceRepo = (repo: RepoInfo | undefined): boolean => repo?.kind === 'workspace'
+
+/**
+ * A project without git: a plain folder or a floating workspace. Files and
+ * sessions in its root, no worktrees, changes or pull requests.
+ */
+export const isFolderRepo = (repo: RepoInfo | undefined): boolean =>
+  repo?.kind === 'folder' || isWorkspaceRepo(repo)
 
 /** The worktree is a folder project's root (see isFolderRepo). */
 export function isFolderWorktree(hostId: string, worktree: string): boolean {
@@ -1283,13 +1290,18 @@ export function requestRemoveProject(hostId: string, repo: string): void {
   if (!r) return
   const n = projectPanes(hostId, repo).length
   const panes = n ? ` Its ${n} open pane${n === 1 ? '' : 's'} will be closed.` : ''
+  const workspace = isWorkspaceRepo(r)
+  const verb = workspace ? 'Remove' : 'Stop tracking'
   set({
     confirm: {
-      title: `Stop tracking ${r.name}?`,
-      body:
-        `${r.path} on ${get().hosts[hostId]?.label ?? hostId} leaves Civet; its files, branches ` +
-        `and worktrees stay on disk, and you can add it again any time.${panes}`,
-      confirmLabel: n ? `Stop tracking (closes ${n} pane${n === 1 ? '' : 's'})` : 'Stop tracking',
+      title: workspace ? `Remove workspace ${r.name}?` : `Stop tracking ${r.name}?`,
+      body: workspace
+        ? `Its links to the roots are removed, and its folder ${r.path} on ` +
+          `${get().hosts[hostId]?.label ?? hostId} too unless a task left files in it. ` +
+          `The roots themselves are not touched.${panes}`
+        : `${r.path} on ${get().hosts[hostId]?.label ?? hostId} leaves Civet; its files, branches ` +
+          `and worktrees stay on disk, and you can add it again any time.${panes}`,
+      confirmLabel: n ? `${verb} (closes ${n} pane${n === 1 ? '' : 's'})` : verb,
       // A pane opened (or closed) while asking: ask again with the new count
       // rather than close sessions the dialog didn't mention.
       onConfirm: () =>
@@ -1343,7 +1355,7 @@ export type AgentChoice = 'claude' | 'codex' | 'custom'
 
 function checkGitRepo(hostId: string, repo: string): void {
   if (isFolderRepo(get().repos[hostId]?.find((r) => r.id === repo))) {
-    throw new CivetError('unsupported', 'Folder projects have no worktrees')
+    throw new CivetError('unsupported', 'Folders and workspaces have no worktrees')
   }
 }
 

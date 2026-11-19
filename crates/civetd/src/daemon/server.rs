@@ -626,6 +626,15 @@ impl Server {
                 .await
                 .map(Response::HostFileChunk),
             Request::ListDirs { path } => s.list_dirs(&path).await.map(Response::Dirs),
+            Request::ListWorkspaces => Ok(Response::Workspaces(s.list_workspaces().await)),
+            Request::CreateWorkspace { name, roots } => s
+                .create_workspace(&name, &roots)
+                .await
+                .map(Response::Workspace),
+            Request::SetWorkspaceRoots { workspace, roots } => s
+                .set_workspace_roots(&workspace, &roots)
+                .await
+                .map(Response::Workspace),
             Request::HostStats { since, processes } => {
                 return Ok(Response::HostStats(
                     self.stats.request(since, processes).await,

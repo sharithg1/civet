@@ -54,6 +54,7 @@ import type {
   SpawnPaneRequest,
   TermSize,
   TransportChoice,
+  WorkspaceRoot,
   WorktreeInfo,
   PullRequestInfo,
   DirListing,
@@ -89,12 +90,14 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.6.2'
+export const MOCK_VERSION = '0.6.3'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
 /** Mock daemons have folder projects from this version on (PROJECTS_MIN_DAEMON_VERSION). */
 const MOCK_PROJECTS_VERSION = '0.1.17'
+/** Mock daemons have floating workspaces from this version on (WORKSPACES_MIN_DAEMON_VERSION). */
+const MOCK_WORKSPACES_VERSION = '0.6.3'
 /** Mock daemons list host directories from this version on (like LIST_DIRS_MIN_DAEMON_VERSION). */
 const MOCK_LIST_DIRS_VERSION = '0.1.18'
 /** Mock daemons report host stats from this version on (HOST_STATS_MIN_DAEMON_VERSION). */
@@ -723,10 +726,10 @@ class MockHost {
     return [...this.worktrees.values()].flat()
   }
 
-  /** The folder project whose root is `worktree`, if any. */
+  /** The folder project or floating workspace whose root is `worktree`, if any. */
   folderOf(worktree: string | null): RepoInfo | undefined {
     const wt = this.allWorktrees().find((w) => w.id === worktree)
-    return this.repos.find((r) => r.id === wt?.repo && r.kind === 'folder')
+    return this.repos.find((r) => r.id === wt?.repo && notGit(r))
   }
 
   /** `unsupported` like civetd: a folder project has no git. */
@@ -735,7 +738,7 @@ class MockHost {
     if (folder) {
       throw new CivetError(
         'unsupported',
-        `unsupported: ${folder.name} is a folder, not a git repository: no ${what}`
+        `unsupported: ${folder.name} is a ${notGitName(folder)}, not a git repository: no ${what}`
       )
     }
   }
@@ -862,6 +865,25 @@ const MOCK_FOLDER_FILES: Record<string, string> = {
   'meetings/2026-10-15.md': '# Planning\n\n- Markdown preview\n',
   'todo.txt': 'ship folder projects\nwrite the release notes\n',
   'debug.log': 'not ignored here\n'
+}
+
+/** A folder project or a floating workspace: no git. */
+const notGit = (r: RepoInfo): boolean => r.kind === 'folder' || r.kind === 'workspace'
+
+/** What a mock daemon calls a project that is not a repository. */
+const notGitName = (r: RepoInfo): string => (r.kind === 'workspace' ? 'workspace' : 'folder')
+
+/**
+ * A workspace directory's files: a few under each directory root's link,
+ * one for each file root's.
+ */
+function mockWorkspaceFiles(roots: WorkspaceRoot[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const r of roots) {
+    if (!r.isDir) out[r.name] = `# ${r.name}\n\n${r.path}\n`
+    else for (const [p, body] of Object.entries(MOCK_FOLDER_FILES)) out[`${r.name}/${p}`] = body
+  }
+  return out
 }
 
 /** The only worktree of a folder project: its root. */
@@ -1430,10 +1452,105 @@ export class MockBackend implements CivetBackend {
     return !v || versionAtLeast(v, MOCK_PROJECTS_VERSION)
   }
 
+  /** The daemon has floating workspaces (ListWorkspaces). */
+  private hasWorkspaces(hostId: string): boolean {
+    const v = this.host(hostId).summary.daemonVersion
+    return !v || versionAtLeast(v, MOCK_WORKSPACES_VERSION)
+  }
+
   async listRepos(hostId: string) {
     const repos = [...this.host(hostId).repos]
-    // An older daemon only answers ListRepos, which leaves folders out.
-    return this.hasProjects(hostId) ? repos : repos.filter((r) => r.kind !== 'folder')
+    // An older daemon only answers ListRepos, which leaves folders out, and
+    // one before workspaces has none to list.
+    return repos.filter(
+      (r) =>
+        (r.kind !== 'folder' || this.hasProjects(hostId)) &&
+        (r.kind !== 'workspace' || this.hasWorkspaces(hostId))
+    )
+  }
+
+  /** The host, if its daemon has floating workspaces. */
+  private workspacesHost(hostId: string): MockHost {
+    const h = this.host(hostId)
+    if (!this.hasWorkspaces(hostId))
+      throw new CivetError(
+        'unsupported',
+        `${hostId} runs civetd ${h.summary.daemonVersion}; this needs v${MOCK_WORKSPACES_VERSION} or newer (restart the daemon to upgrade)`
+      )
+    return h
+  }
+
+  /**
+   * Roots as civetd resolves them: `~` expanded, repeats dropped, kept roots
+   * keeping their link name and new ones getting a free one. A path with a
+   * `missing` component does not exist; a last component with an extension
+   * is a file.
+   */
+  private workspaceRoots(roots: string[], old: WorkspaceRoot[]): WorkspaceRoot[] {
+    const paths: string[] = []
+    for (const raw of roots.map((r) => r.trim()).filter(Boolean)) {
+      if (raw !== '~' && !raw.startsWith('~/') && !raw.startsWith('/'))
+        throw new CivetError(
+          'invalidArgument',
+          `invalid argument: root "${raw}" must be an absolute path or ~/...`
+        )
+      const abs =
+        raw === '~' ? MOCK_HOME : raw.startsWith('~/') ? `${MOCK_HOME}/${raw.slice(2)}` : raw
+      const path = abs.replace(/\/+$/, '') || '/'
+      if (path.split('/').includes('missing'))
+        throw new CivetError('invalidArgument', `invalid argument: ${path} does not exist`)
+      if (!paths.includes(path)) paths.push(path)
+    }
+    const kept = old.filter((r) => paths.includes(r.path))
+    const names = new Set(kept.map((r) => r.name))
+    return paths.map((path) => {
+      const was = kept.find((r) => r.path === path)
+      if (was) return was
+      const base = path.split('/').pop() || 'root'
+      let name = base
+      for (let n = 2; names.has(name); n++) name = `${base}-${n}`
+      names.add(name)
+      return { path, name, isDir: !/\.[a-z0-9]+$/i.test(base), missing: false }
+    })
+  }
+
+  async createWorkspace(hostId: string, name: string, roots: string[]) {
+    const h = this.workspacesHost(hostId)
+    const title = name.trim()
+    if (!title)
+      throw new CivetError('invalidArgument', 'invalid argument: a workspace needs a name')
+    if (h.repos.some((r) => r.kind === 'workspace' && r.name === title))
+      throw new CivetError('alreadyExists', `already exists: workspace ${title}`)
+    const slug =
+      title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'workspace'
+    const workspace: RepoInfo = {
+      id: `ws-${slug}`,
+      name: title,
+      path: `${MOCK_HOME}/.civet/workspaces/${slug}`,
+      defaultBranch: null,
+      kind: 'workspace',
+      roots: this.workspaceRoots(roots, [])
+    }
+    h.repos.push(workspace)
+    h.worktrees.set(workspace.id, [mockFolderRoot(workspace.id, workspace.path)])
+    h.event('reposChanged')
+    return workspace
+  }
+
+  async setWorkspaceRoots(hostId: string, workspace: string, roots: string[]) {
+    const h = this.workspacesHost(hostId)
+    const i = h.repos.findIndex((r) => r.id === workspace && r.kind === 'workspace')
+    const old = h.repos[i]
+    if (!old) throw new CivetError('notFound', `workspace ${workspace} not found`)
+    const next: RepoInfo = { ...old, roots: this.workspaceRoots(roots, old.roots ?? []) }
+    h.repos[i] = next
+    // The links changed: what the task itself wrote there is not mocked.
+    this.fs.delete(`${hostId}\u0000${next.path}`)
+    h.event('reposChanged')
+    return next
   }
 
   async addRepo(hostId: string, path: string) {
@@ -1870,10 +1987,10 @@ export class MockBackend implements CivetBackend {
     const h = this.host(hostId)
     const r = h.repos.find((x) => x.id === repo)
     if (!r) throw new CivetError('notFound', `repo ${repo} not found`)
-    if (r.kind === 'folder') {
+    if (notGit(r)) {
       throw new CivetError(
         'unsupported',
-        `unsupported: ${r.name} is a folder, not a git repository: no worktrees`
+        `unsupported: ${r.name} is a ${notGitName(r)}, not a git repository: no worktrees`
       )
     }
     const list = h.worktrees.get(repo) ?? []
@@ -1923,10 +2040,10 @@ export class MockBackend implements CivetBackend {
   private templateInfo(h: MockHost, repo: string): WorktreeTemplateInfo {
     const r = h.repos.find((x) => x.id === repo)
     if (!r) throw new CivetError('notFound', `repo ${repo} not found`)
-    if (r.kind === 'folder')
+    if (notGit(r))
       throw new CivetError(
         'unsupported',
-        `unsupported: ${r.name} is a folder, not a git repository: no worktree templates`
+        `unsupported: ${r.name} is a ${notGitName(r)}, not a git repository: no worktree templates`
       )
     const host = h.templates.get(repo) ?? EMPTY_TEMPLATE
     const raw = h.templateFiles.get(repo)
@@ -2054,8 +2171,16 @@ export class MockBackend implements CivetBackend {
   files(hostId: string, worktree: string): MockFs {
     const key = `${hostId}\u0000${worktree}`
     let fs = this.fs.get(key)
-    const seed = this.host(hostId).folderOf(worktree) ? MOCK_FOLDER_FILES : MOCK_FILES
-    if (!fs) this.fs.set(key, (fs = MockFs.seeded(seed)))
+    if (!fs) {
+      const folder = this.host(hostId).folderOf(worktree)
+      const seed =
+        folder?.kind === 'workspace'
+          ? mockWorkspaceFiles(folder.roots ?? [])
+          : folder
+            ? MOCK_FOLDER_FILES
+            : MOCK_FILES
+      this.fs.set(key, (fs = MockFs.seeded(seed)))
+    }
     return fs
   }
 

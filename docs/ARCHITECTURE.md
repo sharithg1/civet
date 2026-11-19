@@ -108,6 +108,19 @@ fix is not a faster language but a different transport model: mosh's.
    `PaneTerminal` per attached pane and emits "undo, server diff, redo" as one
    VT stream. xterm.js never knows predictions exist.
 
+10. **A floating workspace is a directory of links, not a new kind of
+    worktree.** A task that spans repos, or touches a few loose files, gets
+    a workspace: a directory the daemon owns (`<state>/workspaces/<name>`)
+    with a symlink to each root. Panes run there, so a shell sees the roots
+    as subdirectories, and the agent shims pass the directory roots as
+    `--add-dir`. To the protocol it is a folder project with one worktree,
+    which keeps panes, tabs and the Files tab unchanged; the file requests
+    alone learn that a workspace's paths may resolve inside its roots.
+    Nothing is copied or checked out, so a root that is a repository is
+    still that repository (its own worktrees, changes and PRs stay where
+    they are in the sidebar). Workspaces have their own requests and their
+    own state file, so older clients and daemons never meet one.
+
 ## How state sync works (the mosh model)
 
 ### Screen state

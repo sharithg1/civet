@@ -50,6 +50,47 @@ pub struct ProjectInfo {
     pub kind: ProjectKind,
 }
 
+/// One place a workspace points at ([`WorkspaceInfo::roots`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRoot {
+    /// Absolute path on the host: a repository, worktree, folder or file.
+    pub path: String,
+    /// Name of its link in the workspace directory (the path's last
+    /// component, numbered if another root has it: `app`, `app-2`).
+    pub name: String,
+    /// It is a directory (false for a file, and for a path that is gone).
+    pub is_dir: bool,
+    /// The path no longer exists.
+    pub missing: bool,
+}
+
+/// A floating workspace: a place for ad-hoc tasks that is no repository or
+/// folder of the user's. The daemon owns its directory
+/// (`<state>/workspaces/<name>`), which holds a link to each root and
+/// whatever the task leaves there.
+///
+/// To the worktree requests it is a [`ProjectKind::Folder`]:
+/// [`Request::ListWorktrees`] with its id answers one [`WorktreeInfo`], the
+/// workspace directory, which panes run in and whose files can be browsed
+/// (through the links too); git requests are `Unsupported`. Panes in it get
+/// [`crate::ENV_WORKSPACE_ROOTS`]. [`Request::ListRepos`] and
+/// [`Request::ListProjects`] leave workspaces out, so clients that predate
+/// them never see one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    /// Opaque id, in the same space as repository ids
+    /// ([`Request::ListWorktrees`], [`Request::RemoveRepo`]).
+    pub id: RepoId,
+    /// Display name.
+    pub name: String,
+    /// Absolute path of the workspace directory on the host.
+    pub path: String,
+    /// What it points at, in the order added.
+    pub roots: Vec<WorkspaceRoot>,
+}
+
 /// A git worktree of a repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1357,6 +1398,34 @@ pub enum Request {
         /// Most bytes wanted.
         len: u64,
     },
+    /// Every floating workspace. -> [`Response::Workspaces`]. Clients send
+    /// it only to daemons of at least
+    /// [`crate::WORKSPACES_MIN_DAEMON_VERSION`] (also
+    /// [`Request::CreateWorkspace`], [`Request::SetWorkspaceRoots`]). A
+    /// workspace is removed with [`Request::RemoveRepo`]: its links go, and
+    /// its directory if nothing else is left in it; the roots are untouched.
+    ListWorkspaces,
+    /// Create a floating workspace. -> [`Response::Workspace`]; every client
+    /// gets [`Event::ReposChanged`]. `InvalidArgument` for an empty name, a
+    /// root that does not exist or more than
+    /// [`crate::MAX_WORKSPACE_ROOTS`] roots.
+    CreateWorkspace {
+        /// Display name (also names its directory).
+        name: String,
+        /// Paths on the host, absolute or `~/...`; a root listed twice
+        /// counts once.
+        roots: Vec<String>,
+    },
+    /// Replace a workspace's roots: links of dropped roots are removed, new
+    /// ones are linked, kept ones keep their link name.
+    /// -> [`Response::Workspace`]. Panes already running keep the roots
+    /// they started with.
+    SetWorkspaceRoots {
+        /// The workspace.
+        workspace: RepoId,
+        /// The new roots (as in [`Request::CreateWorkspace`]).
+        roots: Vec<String>,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -1454,6 +1523,11 @@ pub enum Response {
     AgentActivity(crate::activity::AgentActivity),
     /// Reply to [`Request::ReadHostFile`].
     HostFileChunk(HostFileChunk),
+    /// Reply to [`Request::ListWorkspaces`].
+    Workspaces(Vec<WorkspaceInfo>),
+    /// Reply to [`Request::CreateWorkspace`] and
+    /// [`Request::SetWorkspaceRoots`].
+    Workspace(WorkspaceInfo),
 }
 
 /// Error category for a failed request.

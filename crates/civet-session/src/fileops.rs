@@ -23,7 +23,7 @@ use civet_proto::{FileOp, FileOpResult, MAX_UPLOAD_BYTES};
 use serde::{Deserialize, Serialize};
 
 use crate::SessionError;
-use crate::files::{blocking, canonical_root, resolve};
+use crate::files::{Scope, blocking, resolve};
 
 /// Trash entries older than this are purged.
 pub(crate) const TRASH_MAX_AGE: Duration = Duration::from_secs(3 * 24 * 3600);
@@ -45,14 +45,13 @@ struct TrashMeta {
     trashed_at_ms: u64,
 }
 
-/// Apply `op` in the worktree at `root`, trashing into `trash`.
+/// Apply `op` in the worktree of `scope`, trashing into `trash`.
 pub(crate) async fn apply(
-    root: &Path,
+    scope: Scope,
     trash: PathBuf,
     op: FileOp,
 ) -> Result<FileOpResult, SessionError> {
-    let root = canonical_root(root)?;
-    blocking(move || apply_sync(&root, &trash, op)).await
+    blocking(move || apply_sync(&scope, &trash, op)).await
 }
 
 fn done(path: &str) -> FileOpResult {
@@ -62,10 +61,10 @@ fn done(path: &str) -> FileOpResult {
     }
 }
 
-fn apply_sync(root: &Path, trash: &Path, op: FileOp) -> Result<FileOpResult, SessionError> {
+fn apply_sync(scope: &Scope, trash: &Path, op: FileOp) -> Result<FileOpResult, SessionError> {
     match op {
         FileOp::CreateFile { path } => {
-            let target = fresh(root, &path)?;
+            let target = fresh(scope, &path)?;
             std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -74,7 +73,7 @@ fn apply_sync(root: &Path, trash: &Path, op: FileOp) -> Result<FileOpResult, Ses
             Ok(done(&path))
         }
         FileOp::CreateDir { path } => {
-            let target = fresh(root, &path)?;
+            let target = fresh(scope, &path)?;
             std::fs::create_dir(&target).map_err(|e| io(&path, e))?;
             Ok(done(&path))
         }
@@ -85,14 +84,14 @@ fn apply_sync(root: &Path, trash: &Path, op: FileOp) -> Result<FileOpResult, Ses
                     data.len()
                 )));
             }
-            let target = fresh(root, &path)?;
+            let target = fresh(scope, &path)?;
             write_new(&target, &data).map_err(|e| io(&path, e))?;
             Ok(done(&path))
         }
         FileOp::Move { from, to } => {
-            let src = existing(root, &from)?;
+            let src = existing(scope, &from)?;
             refuse_repo_dir(&src, &from)?;
-            let dst = target(root, &to)?;
+            let dst = target(scope, &to)?;
             if let Ok(meta) = std::fs::symlink_metadata(&dst) {
                 // A case-only rename on a case-insensitive file system: the
                 // "existing" target is the source itself.
@@ -109,23 +108,23 @@ fn apply_sync(root: &Path, trash: &Path, op: FileOp) -> Result<FileOpResult, Ses
             Ok(done(&to))
         }
         FileOp::Copy { from, to } => {
-            let src = existing(root, &from)?;
-            let dst = fresh(root, &to)?;
+            let src = existing(scope, &from)?;
+            let dst = fresh(scope, &to)?;
             refuse_into_itself(&src, &dst, &from)?;
             copy_new(&src, &dst, Keep::Files).map_err(|e| io(&to, e))?;
             Ok(done(&to))
         }
         FileOp::Trash { path } => {
-            let src = existing(root, &path)?;
+            let src = existing(scope, &path)?;
             refuse_repo_dir(&src, &path)?;
-            let id = trash_entry(root, trash, &src, &path)?;
+            let id = trash_entry(&scope.root, trash, &src, &path)?;
             purge_trash(trash, civet_proto::now_ms());
             Ok(FileOpResult {
                 path: normalize(&path),
                 trash_id: Some(id),
             })
         }
-        FileOp::Restore { trash_id } => restore(root, trash, &trash_id),
+        FileOp::Restore { trash_id } => restore(scope, trash, &trash_id),
     }
 }
 
@@ -163,10 +162,10 @@ fn exists(path: &str) -> SessionError {
     SessionError::AlreadyExists(format!("{path:?}"))
 }
 
-/// The parent directory of `rel` (canonical, inside `root`, not in `.git`)
+/// The parent directory of `rel` (canonical, inside the scope, not in `.git`)
 /// joined with its last component, which is not followed. InvalidArgument
 /// for the root itself, `..`, absolute paths and anything naming `.git`.
-fn target(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
+fn target(scope: &Scope, rel: &str) -> Result<PathBuf, SessionError> {
     let invalid = |why: &str| SessionError::InvalidArgument(format!("{rel:?} {why}"));
     if rel.contains('\0') {
         return Err(invalid("is outside the worktree"));
@@ -188,7 +187,7 @@ fn target(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
         return Err(invalid("is the worktree root"));
     };
     let parent: PathBuf = names.iter().collect();
-    let dir = resolve(root, &parent.to_string_lossy())?;
+    let dir = resolve(scope, &parent.to_string_lossy())?;
     if !dir.is_dir() {
         return Err(SessionError::InvalidArgument(format!(
             "{:?} is not a directory",
@@ -196,7 +195,7 @@ fn target(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
         )));
     }
     // A symlink on the way may lead into .git.
-    let inside = dir.strip_prefix(root).unwrap_or(Path::new(""));
+    let inside = scope.inside(&dir);
     if inside.components().any(|c| is_git(c.as_os_str())) {
         return Err(invalid("is in .git, which is off limits"));
     }
@@ -204,15 +203,15 @@ fn target(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
 }
 
 /// [`target`] that must exist (`lstat`).
-fn existing(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
-    let path = target(root, rel)?;
+fn existing(scope: &Scope, rel: &str) -> Result<PathBuf, SessionError> {
+    let path = target(scope, rel)?;
     std::fs::symlink_metadata(&path).map_err(|e| io(rel, e))?;
     Ok(path)
 }
 
 /// [`target`] that must not exist yet.
-fn fresh(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
-    let path = target(root, rel)?;
+fn fresh(scope: &Scope, rel: &str) -> Result<PathBuf, SessionError> {
+    let path = target(scope, rel)?;
     if std::fs::symlink_metadata(&path).is_ok() {
         return Err(exists(rel));
     }
@@ -404,7 +403,7 @@ fn trash_entry(root: &Path, trash: &Path, src: &Path, rel: &str) -> Result<Strin
     }
 }
 
-fn restore(root: &Path, trash: &Path, id: &str) -> Result<FileOpResult, SessionError> {
+fn restore(scope: &Scope, trash: &Path, id: &str) -> Result<FileOpResult, SessionError> {
     let gone = || SessionError::NotFound(format!("trash entry {id:?}"));
     if !valid_trash_id(id) {
         return Err(gone());
@@ -415,14 +414,14 @@ fn restore(root: &Path, trash: &Path, id: &str) -> Result<FileOpResult, SessionE
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(gone)?;
     // Only into the worktree it came from.
-    if Path::new(&meta.root) != root {
+    if Path::new(&meta.root) != scope.root {
         return Err(gone());
     }
     let item = dir.join(TRASH_ITEM);
     if std::fs::symlink_metadata(&item).is_err() {
         return Err(gone());
     }
-    let dst = fresh(root, &meta.path)?;
+    let dst = fresh(scope, &meta.path)?;
     match move_entry(&item, &dst) {
         // Back in the worktree; what is left of the trash copy is purged.
         Ok(()) | Err(MoveError::Copied(_)) => {}

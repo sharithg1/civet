@@ -48,10 +48,23 @@ export type AgentStatusSource = 'escapeCode' | 'hook' | 'heuristic' | 'processEx
 export type KillSignal = 'hangup' | 'terminate' | 'kill'
 
 /**
- * A project is a git repository (worktrees, sessions, changes) or a plain
- * folder: one worktree (its root) with file tabs only.
+ * A project is a git repository (worktrees, sessions, changes), a plain
+ * folder: one worktree (its root) with files and sessions but no git, or a
+ * floating workspace: a folder the daemon owns, holding links to its roots
+ * (civetd >= 0.6.3).
  */
-export type ProjectKind = 'git' | 'folder'
+export type ProjectKind = 'git' | 'folder' | 'workspace'
+
+/** One place a floating workspace points at: a repo, worktree, folder or file on the host. */
+export type WorkspaceRoot = {
+  /** Absolute path on the host. */
+  path: string
+  /** Its link in the workspace directory (`app`, `app-2`). */
+  name: string
+  isDir: boolean
+  /** The path no longer exists. */
+  missing: boolean
+}
 
 export type RepoInfo = {
   id: RepoId
@@ -60,6 +73,8 @@ export type RepoInfo = {
   defaultBranch: string | null
   /** Missing from backends that predate folder projects: a repository. */
   kind?: ProjectKind
+  /** A workspace's roots (`kind: 'workspace'` only). */
+  roots?: WorkspaceRoot[]
 }
 
 export type WorktreeInfo = {

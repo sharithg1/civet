@@ -82,8 +82,9 @@ pub use control::{
     HostDir, HostDirListing, HostFileChunk, KillSignal, LaunchAgentRequest, PaneInfo, ProjectInfo,
     ProjectKind, PullRequestCheck, PullRequestDetail, PullRequestInfo, PullRequestState, RepoInfo,
     RepoLifecycle, Request, Response, ReviewDecision, ReviewThread, RpcError, SpawnPaneRequest,
-    StaleReason, SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle,
-    WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo, WorktreeUpdate,
+    StaleReason, SubscribeInfo, UpdateOutcome, UpdateStrategy, WorkspaceInfo, WorkspaceRoot,
+    WorktreeInfo, WorktreeLifecycle, WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo,
+    WorktreeUpdate,
 };
 pub use error::ProtoError;
 pub use frame::{
@@ -227,6 +228,15 @@ pub const AGENT_ACTIVITY_MIN_DAEMON_VERSION: &str = "0.4.6";
 /// protocol 1 after [`Request::TurnDiff`]).
 pub const HOST_FILE_MIN_DAEMON_VERSION: &str = "0.6.2";
 
+/// Oldest daemon that understands [`Request::ListWorkspaces`],
+/// [`Request::CreateWorkspace`] and [`Request::SetWorkspaceRoots`], i.e.
+/// floating workspaces (appended within protocol 1 after
+/// [`Request::ReadHostFile`]).
+pub const WORKSPACES_MIN_DAEMON_VERSION: &str = "0.6.3";
+
+/// Most roots of a [`WorkspaceInfo`].
+pub const MAX_WORKSPACE_ROOTS: usize = 32;
+
 /// Largest [`Request::ReadFileChunk`] / [`Request::ReadHostFile`] slice
 /// (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
@@ -255,6 +265,11 @@ pub const ENV_STATUS_FILE: &str = "CIVET_STATUS_FILE";
 /// `CIVET_PORT + 9`) that no other worktree is given. Stable for the
 /// worktree's lifetime.
 pub const ENV_PORT: &str = "CIVET_PORT";
+
+/// Environment variable set in every pane of a floating workspace
+/// ([`WorkspaceInfo`]): the absolute paths of its roots, one per line. The
+/// `claude` / `codex` shims pass each directory in it as `--add-dir`.
+pub const ENV_WORKSPACE_ROOTS: &str = "CIVET_WORKSPACE_ROOTS";
 
 /// Name of the per-user state directory under `$HOME` (`~/.civet`).
 pub const STATE_DIR_NAME: &str = ".civet";

@@ -20,7 +20,9 @@
 // with their count. While a removal runs the row is dimmed,
 // shows a spinner and ignores clicks and the context menu. A folder project
 // (not a git repository) is a single row that selects its root: it has no
-// worktrees. ⌘-click picks several worktrees for "Send prompt" (⇧⌘B; a bar
+// worktrees. Floating workspaces (state/floating.ts) come first in their
+// host's section, one row each like a folder, with their roots in the
+// tooltip and "Edit roots" / "Remove workspace" in the menu. ⌘-click picks several worktrees for "Send prompt" (⇧⌘B; a bar
 // above Settings shows the selection), and prompts queued on a worktree's
 // agents (state/prompts.ts) are listed under its row: click to edit, × to
 // cancel.
@@ -42,6 +44,7 @@ import {
   FolderPlus,
   GitBranchPlus,
   GitMerge,
+  Layers,
   Lock,
   MoreHorizontal,
   PanelLeft,
@@ -60,6 +63,7 @@ import {
   cycleWorktree,
   disconnectHost,
   isFolderRepo,
+  isWorkspaceRepo,
   openPullRequest,
   panesOfWorktree,
   reconnectHost,
@@ -87,6 +91,7 @@ import {
   useWorktreeLifecycle
 } from '@/state/lifecycle'
 import { useChanges } from '@/state/changes'
+import { hasFloatingWorkspaces, openWorkspaceDialog } from '@/state/floating'
 import {
   cancelQueuedPrompt,
   clearSelected,
@@ -109,7 +114,14 @@ import {
   worktreeTask,
   type ClearedLabel
 } from '@/lib/worktree-view'
-import type { PaneId, PaneInfo, PullRequestInfo, QueuedPrompt, WorktreeInfo } from '@/types'
+import type {
+  PaneId,
+  PaneInfo,
+  PullRequestInfo,
+  QueuedPrompt,
+  RepoInfo,
+  WorktreeInfo
+} from '@/types'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -269,6 +281,7 @@ function SidebarNav() {
         hint="⌘O"
         onClick={() => useStore.setState({ addProject: { hostId: null } })}
       />
+      <NavItem icon={<Layers />} label="New workspace" onClick={() => openWorkspaceDialog(null)} />
       <NavItem
         icon={<Send />}
         label="Send prompt"
@@ -418,8 +431,10 @@ function HostSection({
   const collapsed = usePrefs((s) => !!s.collapsedHosts[hostId])
   const savedRepoOrder = usePrefs((s) => s.repoOrder[hostId])
   const byId = new Map((repos ?? []).map((r) => [r.id, r]))
+  // Workspaces are listed apart from the projects, in the order created.
+  const workspaces = (repos ?? []).filter(isWorkspaceRepo)
   const repoIds = applyOrder(
-    (repos ?? []).map((r) => r.id),
+    (repos ?? []).filter((r) => !isWorkspaceRepo(r)).map((r) => r.id),
     savedRepoOrder
   )
   const repoReorder = useReorder(repoIds, (next) =>
@@ -484,6 +499,11 @@ function HostSection({
             <DropdownMenuItem onSelect={() => useStore.setState({ addProject: { hostId } })}>
               Add project…
             </DropdownMenuItem>
+            {hasFloatingWorkspaces(host) && (
+              <DropdownMenuItem onSelect={() => openWorkspaceDialog(hostId)}>
+                New workspace…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={() => useStore.setState({ showConnect: true })}>
               Connect another host…
             </DropdownMenuItem>
@@ -508,6 +528,7 @@ function HostSection({
       {!collapsed && host.transport === 'stream' && (
         <div className="mx-2 px-2 pb-1 text-2xs text-dim">via SSH tunnel (UDP unavailable)</div>
       )}
+      {!collapsed && workspaces.map((w) => <WorkspaceRow key={w.id} host={host} workspace={w} />)}
       {!collapsed && (
         <div ref={repoReorder.listRef}>
           {repoIds.map((id, i) =>
@@ -533,7 +554,7 @@ function HostSection({
           )}
         </div>
       )}
-      {!collapsed && repos && repos.length === 0 && (
+      {!collapsed && repos && repoIds.length === 0 && (
         <button
           type="button"
           className="mx-2 flex h-[30px] w-[calc(100%-16px)] cursor-pointer items-center gap-2.5 rounded-md px-2 text-base text-quiet hover:bg-hover hover:text-foreground"
@@ -605,6 +626,80 @@ function FolderProjectRow({
         </div>
       </ProjectMenu>
     </div>
+  )
+}
+
+/**
+ * A floating workspace: one row (its folder) that selects it. The roots are
+ * in the tooltip, and their count stays on the row.
+ */
+function WorkspaceRow({ host, workspace }: { host: HostView; workspace: RepoInfo }) {
+  const hostId = host.hostId
+  const wt = useStore((s) => s.worktrees[wtKey(hostId, workspace.id)]?.[0])
+  const selected = useStore(
+    (s) => !!wt && s.active?.hostId === hostId && s.active.worktree === wt.id
+  )
+  const connected = host.state === 'connected'
+  const roots = workspace.roots ?? []
+  const title = [
+    `${workspace.name} · workspace`,
+    `${host.label}:${workspace.path}`,
+    ...roots.map((r) => `→ ${r.path}${r.missing ? ' (missing)' : ''}`)
+  ].join('\n')
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="button"
+          tabIndex={-1}
+          data-wt={wt?.id}
+          data-workspace="true"
+          data-active={selected ? 'true' : 'false'}
+          title={title}
+          onClick={() => wt && selectWorktree(hostId, wt.id)}
+          className={cn(
+            'mx-2 mb-1 flex h-[30px] cursor-default items-center gap-2.5 rounded-md px-2',
+            selected ? 'bg-sidebar-accent' : 'hover:bg-hover'
+          )}
+        >
+          <Layers className="size-4 shrink-0 text-quiet" />
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate text-base',
+              selected ? 'text-foreground' : 'text-soft'
+            )}
+          >
+            {workspace.name}
+          </span>
+          <span
+            className={cn(
+              'shrink-0 font-mono text-2xs',
+              roots.some((r) => r.missing) ? 'text-status-wait' : 'text-dim'
+            )}
+          >
+            {roots.length === 1 ? '1 root' : `${roots.length} roots`}
+          </span>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-56" onCloseAutoFocus={restoreTerminalFocus}>
+        <ContextMenuItem
+          disabled={!connected}
+          onSelect={() => openWorkspaceDialog(hostId, workspace.id)}
+        >
+          <SquarePen />
+          Edit roots…
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          variant="destructive"
+          disabled={!connected}
+          onSelect={() => requestRemoveProject(hostId, workspace.id)}
+        >
+          <Trash2 />
+          Remove workspace…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

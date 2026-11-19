@@ -99,6 +99,12 @@ directory and itself; exit 127 if there is none) and execs it:
   (default `~/.codex/config.toml`) has its own `notify` line (yours wins).
 * Outside a Civet pane (`CIVET_STATUS_FILE` unset) both pass through
   unchanged.
+* In a pane of a floating workspace (`CIVET_WORKSPACE_ROOTS` set, one path
+  per line) both first get the workspace's directory roots, ahead of your
+  arguments: `claude --add-dir=<root> … [args]` (the `=` form, because
+  Claude Code's `--add-dir` takes several values and would swallow a prompt
+  after it) and `codex --add-dir <root> … [args]`. File roots are skipped,
+  and nothing is added if the arguments already contain `--add-dir`.
 
 So `claude` typed in a shell pane, `FOO=1 claude`, `env X=1 claude`,
 `cd sub && claude` and launch-dialog commands all report status. Login

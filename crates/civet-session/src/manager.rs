@@ -9,13 +9,14 @@ use std::time::{Duration, Instant};
 use civet_proto::{
     AgentStatus, ClientId, Event, InputMessage, KillSignal, LaunchAgentRequest, PaneId, PaneInfo,
     ProjectInfo, ProjectKind, PromptTrigger, QueuedPrompt, RepoId, RepoInfo, ScrollbackPage,
-    ScrollbackRequest, SpawnPaneRequest, TermSize, WorktreeId, WorktreeInfo, WorktreeSetup,
-    WorktreeTemplate, WorktreeTemplateInfo,
+    ScrollbackRequest, SpawnPaneRequest, TermSize, WorkspaceInfo, WorktreeId, WorktreeInfo,
+    WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::activity::{self, ActivityStore, PaneFacts, Recorder};
+use crate::files::Scope;
 use crate::git::{
     Git, branch_dir_name, canonical_lenient, canonical_or_same, parse_worktree_porcelain,
     path_string, repo_id_for,
@@ -26,6 +27,7 @@ use crate::prompts::{self, PromptQueues};
 use crate::subscription::Subscription;
 use crate::templates;
 use crate::watch::{WorktreeWatch, common_dir};
+use crate::workspaces::{self, StoredWorkspace, WORKSPACES_FILE};
 use crate::{ENV_WORKTREE, InputOutcome, KNOWN_AGENTS, SessionConfig, SessionError};
 
 /// Event broadcast capacity.
@@ -48,6 +50,22 @@ struct StoredRepo {
     /// Missing in files written before folder projects: a repository.
     #[serde(default)]
     kind: ProjectKind,
+    /// A floating workspace seen as a folder project (its directory is the
+    /// folder). Never in `repos.json`: workspaces have their own file.
+    #[serde(skip)]
+    workspace: bool,
+}
+
+impl From<&StoredWorkspace> for StoredRepo {
+    fn from(w: &StoredWorkspace) -> Self {
+        Self {
+            id: w.id.clone(),
+            name: w.name.clone(),
+            path: w.path.clone(),
+            kind: ProjectKind::Folder,
+            workspace: true,
+        }
+    }
 }
 
 impl StoredRepo {
@@ -58,8 +76,13 @@ impl StoredRepo {
     /// Unsupported for a folder project: `what` needs git.
     fn require_git(&self, what: &str) -> Result<(), SessionError> {
         if self.is_folder() {
+            let kind = if self.workspace {
+                "workspace"
+            } else {
+                "folder"
+            };
             return Err(SessionError::Unsupported(format!(
-                "{} is a folder, not a git repository: no {what}",
+                "{} is a {kind}, not a git repository: no {what}",
                 self.name
             )));
         }
@@ -90,6 +113,8 @@ struct Inner {
     panes: Mutex<BTreeMap<PaneId, Arc<Pane>>>,
     next_pane: AtomicU64,
     repos: tokio::sync::Mutex<Vec<StoredRepo>>,
+    /// Floating workspaces (`workspaces.json`, see [`crate::workspaces`]).
+    workspaces: tokio::sync::Mutex<Vec<StoredWorkspace>>,
     pushed_branches: crate::lifecycle::PushedBranches,
     /// Host-saved worktree templates by repo id (`worktree-templates.json`).
     templates: tokio::sync::Mutex<BTreeMap<String, WorktreeTemplate>>,
@@ -134,7 +159,7 @@ fn default_shell(configured: Option<&str>) -> String {
 }
 
 /// `~` / `~/x` → home-relative path.
-fn expand_home(p: &str) -> PathBuf {
+pub(crate) fn expand_home(p: &str) -> PathBuf {
     if p == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(p));
     }
@@ -199,6 +224,9 @@ impl SessionManager {
         std::fs::create_dir_all(config.state_dir.join("status"))?;
         let hook_files = hooks::install(&config.state_dir, config.cli_program.as_deref())?;
         let repos = load_repos(&config.state_dir.join(REPOS_FILE));
+        let stored_workspaces: Vec<StoredWorkspace> =
+            templates::load_json(&config.state_dir.join(WORKSPACES_FILE));
+        stored_workspaces.iter().for_each(workspaces::ensure_links);
         let host_templates =
             templates::load_json(&config.state_dir.join(templates::HOST_TEMPLATES_FILE));
         let ports = templates::load_json(&config.state_dir.join(templates::PORTS_FILE));
@@ -213,6 +241,7 @@ impl SessionManager {
             panes: Mutex::new(BTreeMap::new()),
             next_pane: AtomicU64::new(1),
             repos: tokio::sync::Mutex::new(repos),
+            workspaces: tokio::sync::Mutex::new(stored_workspaces),
             pushed_branches: Default::default(),
             templates: tokio::sync::Mutex::new(host_templates),
             ports: Mutex::new(ports),
@@ -291,15 +320,126 @@ impl SessionManager {
         }
     }
 
+    /// A registered project, or a floating workspace as the folder project
+    /// it is to everything but the workspace requests.
     async fn find_repo(&self, repo: &RepoId) -> Result<StoredRepo, SessionError> {
-        self.inner
+        let found = self
+            .inner
             .repos
             .lock()
             .await
             .iter()
             .find(|r| r.id == repo.0)
-            .cloned()
+            .cloned();
+        if let Some(r) = found {
+            return Ok(r);
+        }
+        self.inner
+            .workspaces
+            .lock()
+            .await
+            .iter()
+            .find(|w| w.id == repo.0)
+            .map(StoredRepo::from)
             .ok_or_else(|| SessionError::NotFound(format!("repo {repo}")))
+    }
+
+    // ----- floating workspaces -----------------------------------------
+
+    async fn save_workspaces(&self, list: &[StoredWorkspace]) -> Result<(), SessionError> {
+        let path = self.inner.config.state_dir.join(WORKSPACES_FILE);
+        let data = serde_json::to_vec_pretty(list).map_err(std::io::Error::other)?;
+        tokio::task::spawn_blocking(move || hooks::write_atomic(&path, &data))
+            .await
+            .map_err(std::io::Error::other)??;
+        Ok(())
+    }
+
+    /// The workspace whose directory is `worktree`, if it is one.
+    async fn workspace_at(&self, worktree: &WorktreeId) -> Option<StoredWorkspace> {
+        let list = self.inner.workspaces.lock().await;
+        list.iter().find(|w| w.path == worktree.0).cloned()
+    }
+
+    /// Floating workspaces, in the order created.
+    pub async fn list_workspaces(&self) -> Vec<WorkspaceInfo> {
+        let list = self.inner.workspaces.lock().await;
+        list.iter().map(StoredWorkspace::info).collect()
+    }
+
+    /// Create a floating workspace: a directory under
+    /// `<state>/workspaces` with a link to each of `roots` (paths anywhere
+    /// on the host, see [`crate::workspaces`]). Persists workspaces.json
+    /// and emits ReposChanged. AlreadyExists if the name is taken;
+    /// InvalidArgument for a bad name or root.
+    pub async fn create_workspace(
+        &self,
+        name: &str,
+        roots: &[String],
+    ) -> Result<WorkspaceInfo, SessionError> {
+        let name = workspaces::check_name(name)?;
+        let info = {
+            let mut list = self.inner.workspaces.lock().await;
+            if list.iter().any(|w| w.name == name) {
+                return Err(SessionError::AlreadyExists(format!("workspace {name}")));
+            }
+            let mut ws = workspaces::create(&self.inner.config.state_dir, &name)?;
+            let linked = workspaces::resolve_roots(roots, Path::new(&ws.path))
+                .and_then(|paths| workspaces::set_roots(&mut ws, paths));
+            if let Err(e) = linked {
+                workspaces::remove(&ws);
+                return Err(e);
+            }
+            list.push(ws.clone());
+            if let Err(e) = self.save_workspaces(&list).await {
+                list.pop();
+                workspaces::remove(&ws);
+                return Err(e);
+            }
+            tracing::info!(workspace = %ws.id, path = %ws.path, "workspace created");
+            ws.info()
+        };
+        self.emit(Event::ReposChanged);
+        Ok(info)
+    }
+
+    /// Replace a workspace's roots (see [`workspaces::set_roots`]). Emits
+    /// ReposChanged. Panes already running keep their environment.
+    pub async fn set_workspace_roots(
+        &self,
+        workspace: &RepoId,
+        roots: &[String],
+    ) -> Result<WorkspaceInfo, SessionError> {
+        let info = {
+            let mut list = self.inner.workspaces.lock().await;
+            let Some(i) = list.iter().position(|w| w.id == workspace.0) else {
+                return Err(SessionError::NotFound(format!("workspace {workspace}")));
+            };
+            let mut ws = list[i].clone();
+            let paths = workspaces::resolve_roots(roots, Path::new(&ws.path))?;
+            workspaces::set_roots(&mut ws, paths)?;
+            list[i] = ws.clone();
+            self.save_workspaces(&list).await?;
+            ws.info()
+        };
+        self.emit(Event::ReposChanged);
+        Ok(info)
+    }
+
+    /// Remove a workspace (see [`workspaces::remove`]); false if `id` is
+    /// none.
+    async fn remove_workspace(&self, id: &RepoId) -> Result<bool, SessionError> {
+        let mut list = self.inner.workspaces.lock().await;
+        let Some(i) = list.iter().position(|w| w.id == id.0) else {
+            return Ok(false);
+        };
+        let ws = list.remove(i);
+        if let Err(e) = self.save_workspaces(&list).await {
+            list.insert(i, ws);
+            return Err(e);
+        }
+        workspaces::remove(&ws);
+        Ok(true)
     }
 
     /// Registered repositories (folder projects left out: see
@@ -416,6 +556,7 @@ impl SessionManager {
                         .unwrap_or_else(|| path_string(&root)),
                     path: path_string(&root),
                     kind: ProjectKind::Folder,
+                    workspace: false,
                 }
             }
         };
@@ -470,6 +611,7 @@ impl SessionManager {
             name,
             path: path_string(&main_path),
             kind: ProjectKind::Git,
+            workspace: false,
         }))
     }
 
@@ -492,16 +634,22 @@ impl SessionManager {
         Ok(stored)
     }
 
-    /// Unregister a repository (files and worktrees are untouched).
+    /// Unregister a repository (files and worktrees are untouched), or
+    /// remove a floating workspace: its links, and its directory if that
+    /// leaves it empty.
     pub async fn remove_repo(&self, repo: &RepoId) -> Result<(), SessionError> {
-        {
+        let registered = {
             let mut repos = self.inner.repos.lock().await;
             let before = repos.len();
             repos.retain(|r| r.id != repo.0);
-            if repos.len() == before {
-                return Err(SessionError::NotFound(format!("repo {repo}")));
+            let found = repos.len() != before;
+            if found {
+                self.save_repos(&repos).await?;
             }
-            self.save_repos(&repos).await?;
+            found
+        };
+        if !registered && !self.remove_workspace(repo).await? {
+            return Err(SessionError::NotFound(format!("repo {repo}")));
         }
         self.emit(Event::ReposChanged);
         Ok(())
@@ -886,7 +1034,8 @@ impl SessionManager {
         worktree: &WorktreeId,
     ) -> Result<(StoredRepo, WorktreeInfo), SessionError> {
         let wanted = path_string(&canonical_lenient(Path::new(&worktree.0)));
-        let repos = self.inner.repos.lock().await.clone();
+        let mut repos = self.inner.repos.lock().await.clone();
+        repos.extend(self.inner.workspaces.lock().await.iter().map(Into::into));
         for r in repos {
             let Ok(list) = self.worktrees_of(&r, true).await else {
                 continue;
@@ -901,21 +1050,29 @@ impl SessionManager {
         Err(SessionError::NotFound(format!("worktree {worktree}")))
     }
 
-    /// A worktree's directory, for the file requests below.
-    async fn worktree_root(&self, worktree: &WorktreeId) -> Result<PathBuf, SessionError> {
-        let (_, w) = self.find_worktree(worktree).await?;
-        Ok(PathBuf::from(w.path))
+    /// What the file requests below may reach in a worktree: its
+    /// directory, and a workspace's roots through its links.
+    async fn file_scope(&self, worktree: &WorktreeId) -> Result<Scope, SessionError> {
+        Ok(self.listing_scope(worktree).await?.0)
     }
 
-    /// A worktree's directory, and the git to ask about ignored files (None
+    /// [`Self::file_scope`], and the git to ask about ignored files (None
     /// in a folder project, where nothing is ignored).
-    async fn listing_root(
+    async fn listing_scope(
         &self,
         worktree: &WorktreeId,
-    ) -> Result<(PathBuf, Option<&Git>), SessionError> {
+    ) -> Result<(Scope, Option<&Git>), SessionError> {
         let (r, w) = self.find_worktree(worktree).await?;
+        let root = Path::new(&w.path);
+        if r.workspace {
+            let links = match self.workspace_at(&w.id).await {
+                Some(ws) => ws.links(),
+                None => Vec::new(),
+            };
+            return Ok((Scope::workspace(root, links)?, Some(&self.inner.git)));
+        }
         let git = (!r.is_folder()).then_some(&self.inner.git);
-        Ok((PathBuf::from(w.path), git))
+        Ok((Scope::worktree(root)?, git))
     }
 
     /// One directory level of a worktree (`dir` relative to its root),
@@ -927,8 +1084,8 @@ impl SessionManager {
         dir: &str,
         include_ignored: bool,
     ) -> Result<civet_proto::DirListing, SessionError> {
-        let (root, git) = self.listing_root(worktree).await?;
-        crate::files::list_dir(git, &root, dir, include_ignored).await
+        let (scope, git) = self.listing_scope(worktree).await?;
+        crate::files::list_dir(git, &scope, dir, include_ignored).await
     }
 
     /// The subdirectories of any directory on the host (`~` expanded;
@@ -953,8 +1110,8 @@ impl SessionManager {
         path: &str,
         max_bytes: u64,
     ) -> Result<civet_proto::FilePreview, SessionError> {
-        let root = self.worktree_root(worktree).await?;
-        crate::files::read_file(&root, path, max_bytes).await
+        let scope = self.file_scope(worktree).await?;
+        crate::files::read_file(scope, path, max_bytes).await
     }
 
     /// Up to `len` bytes of a worktree file from `offset`, for downloads
@@ -966,8 +1123,8 @@ impl SessionManager {
         offset: u64,
         len: u64,
     ) -> Result<civet_proto::FileChunk, SessionError> {
-        let root = self.worktree_root(worktree).await?;
-        crate::files::read_chunk(&root, path, offset, len).await
+        let scope = self.file_scope(worktree).await?;
+        crate::files::read_chunk(scope, path, offset, len).await
     }
 
     /// Up to `len` bytes of a regular file anywhere on the host from
@@ -1004,9 +1161,9 @@ impl SessionManager {
         worktree: &WorktreeId,
         op: civet_proto::FileOp,
     ) -> Result<civet_proto::FileOpResult, SessionError> {
-        let root = self.worktree_root(worktree).await?;
+        let scope = self.file_scope(worktree).await?;
         let trash = self.inner.config.state_dir.join(TRASH_DIR);
-        crate::fileops::apply(&root, trash, op).await
+        crate::fileops::apply(scope, trash, op).await
     }
 
     /// Every tracked and untracked, not ignored file of a worktree (every
@@ -1015,8 +1172,8 @@ impl SessionManager {
         &self,
         worktree: &WorktreeId,
     ) -> Result<civet_proto::FileList, SessionError> {
-        let (root, git) = self.listing_root(worktree).await?;
-        crate::files::list_all(git, &root).await
+        let (scope, git) = self.listing_scope(worktree).await?;
+        crate::files::list_all(git, &scope).await
     }
 
     /// `git worktree remove [--force]`. Refuses the main worktree. With
@@ -1471,6 +1628,9 @@ impl SessionManager {
             env.push((ENV_WORKTREE.into(), w.0.clone()));
             if let Some(port) = self.worktree_port(w).await {
                 env.push((civet_proto::ENV_PORT.into(), port.to_string()));
+            }
+            if let Some(ws) = self.workspace_at(w).await {
+                env.push((civet_proto::ENV_WORKSPACE_ROOTS.into(), ws.roots_env()));
             }
         }
         env.extend(req.env.iter().cloned());

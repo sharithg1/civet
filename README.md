@@ -40,6 +40,12 @@ If UDP is blocked, Civet falls back to an SSH tunnel on its own.
 Every task gets its own git worktree and branch, so agents never step on each
 other. Create, switch (<kbd>⌘K</kbd>) and remove worktrees from the sidebar.
 
+### Workspaces for tasks across repos
+A task that spans several repos, or just a few files somewhere on the host,
+gets a workspace: pick its roots (repos, worktrees, folders, single files)
+and start shells and agents there. Each root shows up as a folder of the
+workspace, and Claude Code and Codex are given them as extra directories.
+
 ### Knows what your agents are doing
 Claude Code and Codex report **running**, **needs input** and **done** right
 in the sidebar, with notifications when an agent finishes or waits on you.

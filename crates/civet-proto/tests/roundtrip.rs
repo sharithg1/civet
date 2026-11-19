@@ -269,6 +269,15 @@ fn all_requests() -> Vec<Request> {
         Request::GitBranch {
             worktree: WorktreeId::from("/w"),
         },
+        Request::ListWorkspaces,
+        Request::CreateWorkspace {
+            name: "release".into(),
+            roots: vec!["~/src/api".into(), "/etc/hosts".into()],
+        },
+        Request::SetWorkspaceRoots {
+            workspace: RepoId::from("ws1"),
+            roots: vec![],
+        },
         Request::ListProjects,
         Request::AddProject {
             path: "~/notes".into(),
@@ -600,6 +609,11 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
         Ok(Response::Project(ProjectInfo {
             repo: repo(),
             kind: ProjectKind::Folder,
+        })),
+        Ok(Response::Workspaces(vec![workspace()])),
+        Ok(Response::Workspace(WorkspaceInfo {
+            roots: vec![],
+            ..workspace()
         })),
         Ok(Response::GitBranch(GitBranchInfo {
             branch: Some("feat/x".into()),
@@ -1037,6 +1051,57 @@ fn clipboard_event_is_appended() {
         v,
         serde_json::json!({"clipboard": {"pane": 3, "text": "hi"}})
     );
+}
+
+fn workspace() -> WorkspaceInfo {
+    WorkspaceInfo {
+        id: RepoId::from("ws1"),
+        name: "release".into(),
+        path: "/home/u/.civet/workspaces/release".into(),
+        roots: vec![
+            WorkspaceRoot {
+                path: "/home/u/src/api".into(),
+                name: "api".into(),
+                is_dir: true,
+                missing: false,
+            },
+            WorkspaceRoot {
+                path: "/etc/hosts".into(),
+                name: "hosts".into(),
+                is_dir: false,
+                missing: false,
+            },
+        ],
+    }
+}
+
+#[test]
+fn workspace_requests_are_appended() {
+    // Appended within protocol 1 after ReadHostFile (47) / HostFileChunk (37).
+    assert_eq!(encode(&Request::ListWorkspaces).unwrap(), vec![48]);
+    let req = encode(&Request::CreateWorkspace {
+        name: "a".into(),
+        roots: vec!["/b".into()],
+    })
+    .unwrap();
+    assert_eq!(req, vec![49, 1, b'a', 1, 2, b'/', b'b']);
+    let req = encode(&Request::SetWorkspaceRoots {
+        workspace: RepoId::from("w"),
+        roots: vec![],
+    })
+    .unwrap();
+    assert_eq!(req, vec![50, 1, b'w', 0]);
+    assert_eq!(encode(&Response::Workspaces(vec![])).unwrap(), vec![38, 0]);
+    assert_eq!(encode(&Response::Workspace(workspace())).unwrap()[0], 39);
+    let v = serde_json::to_value(Response::Workspace(workspace())).unwrap();
+    assert_eq!(v["workspace"]["roots"][0]["isDir"], true);
+    assert_eq!(v["workspace"]["roots"][1]["name"], "hosts");
+    let v = serde_json::to_value(Request::SetWorkspaceRoots {
+        workspace: RepoId::from("w"),
+        roots: vec!["/a".into()],
+    })
+    .unwrap();
+    assert_eq!(v["setWorkspaceRoots"]["workspace"], "w");
 }
 
 #[test]

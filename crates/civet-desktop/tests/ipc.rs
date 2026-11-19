@@ -170,6 +170,14 @@ fn every_command_through_ipc() {
         ("list_repos", json!({ "hostId": "x" })),
         ("add_repo", json!({ "hostId": "x", "path": "/r" })),
         ("remove_repo", json!({ "hostId": "x", "repo": "r" })),
+        (
+            "create_workspace",
+            json!({ "hostId": "x", "name": "w", "roots": ["/r"] }),
+        ),
+        (
+            "set_workspace_roots",
+            json!({ "hostId": "x", "workspace": "w", "roots": [] }),
+        ),
         ("list_dirs", json!({ "hostId": "x", "path": "~/src" })),
         (
             "host_stats",

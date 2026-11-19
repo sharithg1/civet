@@ -20,6 +20,8 @@
     "allow-list-repos",
     "allow-add-repo",
     "allow-remove-repo",
+    "allow-create-workspace",
+    "allow-set-workspace-roots",
     "allow-list-dirs",
     "allow-host-stats",
     "allow-worktree-template",

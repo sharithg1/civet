@@ -141,6 +141,7 @@ function PanelBody({ hostId, worktree, tab }: { hostId: string; worktree: string
         worktree={worktree}
         root={wt.info.path}
         connected={connected}
+        // A workspace's roots may be repositories: it keeps the ignored toggle.
         folder={wt.repo.kind === 'folder'}
       />
     )

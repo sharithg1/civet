@@ -15,6 +15,8 @@ const COMMANDS: &[&str] = &[
     "list_repos",
     "add_repo",
     "remove_repo",
+    "create_workspace",
+    "set_workspace_roots",
     "list_dirs",
     "host_stats",
     "worktree_template",

@@ -193,9 +193,51 @@ fi
     )
 }
 
+/// Shim lines for a pane of a floating workspace: put `--add-dir` for each
+/// directory in `CIVET_WORKSPACE_ROOTS` (one path per line) before the
+/// user's arguments, unless they pass `--add-dir` themselves. `flag` is the
+/// text before the path: `--add-dir=` for Claude Code, whose `--add-dir`
+/// takes several values and would swallow a prompt after it, or `--add-dir`
+/// with `separate` for a program that takes the path as the next argument.
+fn shim_add_dirs(flag: &str, separate: bool) -> String {
+    let add = if separate {
+        format!(r#"set -- "$@" {flag} "$d""#)
+    } else {
+        format!(r#"set -- "$@" "{flag}$d""#)
+    };
+    format!(
+        r#"if [ -n "${{CIVET_WORKSPACE_ROOTS:-}}" ]; then
+  own=
+  for a in "$@"; do
+    case "$a" in --add-dir|--add-dir=*) own=1 ;; esac
+  done
+  if [ -z "$own" ]; then
+    n=$#
+    old_ifs=$IFS
+    IFS='
+'
+    set -f
+    for d in $CIVET_WORKSPACE_ROOTS; do
+      if [ -d "$d" ]; then {add}; fi
+    done
+    set +f
+    IFS=$old_ifs
+    # The new arguments were appended: rotate the user's own behind them.
+    while [ "$n" -gt 0 ]; do
+      a=$1
+      shift
+      set -- "$@" "$a"
+      n=$((n - 1))
+    done
+  fi
+fi
+"#
+    )
+}
+
 fn claude_shim(shim_dir: &Path, settings: &Path) -> String {
     format!(
-        r#"{head}settings={settings}
+        r#"{head}{add_dirs}settings={settings}
 if [ -z "${{CIVET_STATUS_FILE:-}}" ] || [ ! -f "$settings" ]; then
   exec "$real" "$@"
 fi
@@ -207,6 +249,7 @@ done
 exec "$real" --settings "$settings" "$@"
 "#,
         head = shim_find_real("claude", shim_dir),
+        add_dirs = shim_add_dirs("--add-dir=", false),
         settings = sh_quote(&settings.to_string_lossy()),
     )
 }
@@ -218,7 +261,7 @@ fn codex_shim(shim_dir: &Path, script: &Path) -> String {
         serde_json::Value::String(script.to_string_lossy().into_owned())
     );
     format!(
-        r#"{head}if [ -z "${{CIVET_STATUS_FILE:-}}" ]; then
+        r#"{head}{add_dirs}if [ -z "${{CIVET_STATUS_FILE:-}}" ]; then
   exec "$real" "$@"
 fi
 for a in "$@"; do
@@ -234,6 +277,7 @@ fi
 exec "$real" -c {notify} "$@"
 "#,
         head = shim_find_real("codex", shim_dir),
+        add_dirs = shim_add_dirs("--add-dir", true),
         notify = sh_quote(&notify),
     )
 }
@@ -775,6 +819,38 @@ mod tests {
             "{out}"
         );
         assert_eq!(run("codex -c notify=[] x", true), "[-c][notify=[]][x]");
+        // In a floating workspace: its directory roots become --add-dir,
+        // ahead of the user's arguments; a file root or the user's own
+        // --add-dir adds none.
+        let (a, b) = (dir.path().join("root a"), dir.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(dir.path().join("f"), "").unwrap();
+        let roots = format!(
+            "{}\n{}\n{}",
+            a.display(),
+            dir.path().join("f").display(),
+            b.display()
+        );
+        let in_ws = |cmd: &str| run(&format!("CIVET_WORKSPACE_ROOTS='{roots}' {cmd}"), false);
+        assert_eq!(
+            in_ws("claude 'fix it' '*'"),
+            format!(
+                "[--add-dir={}][--add-dir={}][fix it][*]",
+                a.display(),
+                b.display()
+            )
+        );
+        assert_eq!(
+            in_ws("codex exec hi"),
+            format!(
+                "[--add-dir][{}][--add-dir][{}][exec][hi]",
+                a.display(),
+                b.display()
+            )
+        );
+        assert_eq!(in_ws("claude --add-dir /x"), "[--add-dir][/x]");
+        assert_eq!(in_ws("codex --add-dir=/x"), "[--add-dir=/x]");
         // The user's own notify setting wins.
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex/config.toml"), "notify = [\"x\"]\n").unwrap();

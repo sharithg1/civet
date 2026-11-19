@@ -3514,3 +3514,230 @@ async fn update_worktree_from_main() {
         Err(SessionError::InvalidArgument(m)) if m.contains("detached")
     ));
 }
+
+/// A floating workspace: a daemon-owned directory with links to roots
+/// anywhere on the host, a folder project to the worktree requests.
+#[tokio::test(flavor = "multi_thread")]
+async fn floating_workspaces() {
+    use civet_proto::{ENV_WORKSPACE_ROOTS, FileKind, FileOp};
+    let f = fixture();
+    let repo_dir = make_repo(&f.root);
+    std::fs::write(repo_dir.join(".gitignore"), "*.log\n").unwrap();
+    std::fs::write(repo_dir.join("a.log"), "log\n").unwrap();
+    let notes = f.root.join("notes");
+    std::fs::create_dir_all(notes.join("docs")).unwrap();
+    std::fs::write(notes.join("docs/readme.md"), "# Notes\n").unwrap();
+    let todo = f.root.join("todo.md");
+    std::fs::write(&todo, "- ship\n").unwrap();
+    std::fs::write(f.root.join("secret"), "s\n").unwrap();
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let repo = f.mgr.add_repo(&s(&repo_dir)).await.unwrap();
+    let mut events = f.mgr.subscribe_events();
+
+    // Bad names and roots create nothing.
+    assert!(matches!(
+        f.mgr.create_workspace("  ", &[]).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        f.mgr.create_workspace("x", &[s(&f.root.join("nope"))]).await,
+        Err(SessionError::InvalidArgument(m)) if m.contains("does not exist")
+    ));
+    assert!(f.mgr.list_workspaces().await.is_empty());
+    assert!(!f.root.join("state/workspaces/x").exists());
+
+    let ws = f
+        .mgr
+        .create_workspace("Cross repo", &[s(&repo_dir), s(&notes), s(&todo)])
+        .await
+        .unwrap();
+    next_event(&mut events, |e| matches!(e, Event::ReposChanged)).await;
+    let dir = f.root.join("state/workspaces/cross-repo");
+    assert_eq!(ws.path, s(&dir));
+    assert_eq!(ws.name, "Cross repo");
+    let names: Vec<_> = ws.roots.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["proj", "notes", "todo.md"]);
+    assert!(ws.roots[0].is_dir && !ws.roots[2].is_dir);
+    assert_eq!(std::fs::read_link(dir.join("proj")).unwrap(), repo_dir);
+    assert_eq!(f.mgr.list_workspaces().await, vec![ws.clone()]);
+    assert!(matches!(
+        f.mgr.create_workspace("Cross repo", &[]).await,
+        Err(SessionError::AlreadyExists(_))
+    ));
+
+    // Clients that predate workspaces never see one.
+    assert_eq!(f.mgr.list_repos().await.unwrap(), vec![repo.clone()]);
+    assert_eq!(f.mgr.list_projects().await.unwrap().len(), 1);
+
+    // One "worktree": the workspace directory.
+    let wts = f.mgr.list_worktrees(&ws.id).await.unwrap();
+    assert_eq!(wts.len(), 1);
+    assert_eq!(wts[0].path, ws.path);
+    assert!(wts[0].is_main && wts[0].branch.is_none());
+    let wt = wts[0].id.clone();
+
+    // Files reach the roots through their links, with git's ignore rules
+    // inside a root that is a repository, and nothing else on the host.
+    let root = f.mgr.list_files(&wt, "", false).await.unwrap();
+    let listed: Vec<_> = root
+        .entries
+        .iter()
+        .map(|e| (e.name.as_str(), e.kind))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("notes", FileKind::Dir),
+            ("proj", FileKind::Dir),
+            ("todo.md", FileKind::Symlink)
+        ]
+    );
+    let names = |l: civet_proto::DirListing| -> Vec<String> {
+        l.entries.into_iter().map(|e| e.name).collect()
+    };
+    let proj = f.mgr.list_files(&wt, "proj", false).await.unwrap();
+    assert_eq!(names(proj), [".gitignore", "README"]);
+    let proj = f.mgr.list_files(&wt, "proj", true).await.unwrap();
+    assert_eq!(names(proj), [".gitignore", "a.log", "README"]);
+    let docs = f.mgr.list_files(&wt, "notes/docs", false).await.unwrap();
+    assert_eq!(names(docs), ["readme.md"]);
+    assert_eq!(
+        f.mgr.read_file(&wt, "todo.md", 1024).await.unwrap().text,
+        "- ship\n"
+    );
+    assert_eq!(
+        f.mgr
+            .read_file(&wt, "proj/README", 1024)
+            .await
+            .unwrap()
+            .text,
+        "hi\n"
+    );
+    assert_eq!(
+        f.mgr.list_all_files(&wt).await.unwrap().paths,
+        [
+            "notes/docs/readme.md",
+            "proj/.gitignore",
+            "proj/README",
+            "todo.md"
+        ]
+    );
+    f.mgr
+        .file_op(
+            &wt,
+            FileOp::CreateFile {
+                path: "notes/docs/new.md".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(notes.join("docs/new.md").is_file());
+    f.mgr
+        .file_op(
+            &wt,
+            FileOp::CreateFile {
+                path: "plan.md".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(dir.join("plan.md").is_file());
+    for outside in ["../../../secret", "proj/../../secret"] {
+        assert!(
+            matches!(
+                f.mgr.read_file(&wt, outside, 1024).await,
+                Err(SessionError::InvalidArgument(_))
+            ),
+            "{outside}"
+        );
+    }
+    std::os::unix::fs::symlink(f.root.join("secret"), dir.join("sneaky")).unwrap();
+    assert!(matches!(
+        f.mgr.read_file(&wt, "sneaky", 1024).await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        f.mgr
+            .file_op(
+                &wt,
+                FileOp::CreateFile {
+                    path: "proj/.git/x".into()
+                }
+            )
+            .await,
+        Err(SessionError::InvalidArgument(_))
+    ));
+    std::fs::remove_file(dir.join("sneaky")).unwrap();
+
+    // No git or worktrees of its own.
+    assert!(matches!(
+        f.mgr.git_status(&wt).await,
+        Err(SessionError::Unsupported(m)) if m.contains("is a workspace")
+    ));
+    assert!(matches!(
+        f.mgr.create_worktree(&ws.id, "feat", None, None).await,
+        Err(SessionError::Unsupported(_))
+    ));
+    // The root that is a registered repository is still that repository.
+    let proj_wt = WorktreeId(s(&repo_dir));
+    assert!(f.mgr.git_status(&proj_wt).await.is_ok());
+
+    // Panes run in the workspace directory and know the roots.
+    let mut spawn = sh(&format!(
+        "pwd; echo \"$(printenv {ENV_WORKSPACE_ROOTS} | wc -l | tr -d ' ') roots\"; cat todo.md; sleep 5"
+    ));
+    spawn.worktree = Some(wt.clone());
+    let pane = f.mgr.spawn_pane(spawn).await.unwrap();
+    wait_screen(&f.mgr, pane.id, "cross-repo").await;
+    wait_screen(&f.mgr, pane.id, "3 roots").await;
+    wait_screen(&f.mgr, pane.id, "- ship").await;
+    f.mgr.kill_pane(pane.id, KillSignal::Kill).unwrap();
+
+    // Roots are replaced as a whole: a dropped root loses its link only.
+    let changed = f
+        .mgr
+        .set_workspace_roots(&ws.id, &[s(&notes)])
+        .await
+        .unwrap();
+    next_event(&mut events, |e| matches!(e, Event::ReposChanged)).await;
+    assert_eq!(changed.roots.len(), 1);
+    assert_eq!(changed.roots[0].name, "notes");
+    assert!(std::fs::symlink_metadata(dir.join("proj")).is_err());
+    assert!(repo_dir.join("README").is_file());
+    assert!(matches!(
+        f.mgr.read_file(&wt, "todo.md", 1024).await,
+        Err(SessionError::NotFound(_))
+    ));
+    assert!(matches!(
+        f.mgr.set_workspace_roots(&RepoId("nope".into()), &[]).await,
+        Err(SessionError::NotFound(_))
+    ));
+
+    // Workspaces survive a restart.
+    drop(f.mgr);
+    let restart = || {
+        let mut cfg = SessionConfig::new(f.root.join("state"));
+        cfg.shell = Some("/bin/sh".into());
+        SessionManager::new(cfg).unwrap()
+    };
+    let mgr = restart();
+    assert_eq!(mgr.list_workspaces().await, vec![changed.clone()]);
+    assert_eq!(mgr.list_worktrees(&ws.id).await.unwrap()[0].id, wt);
+    assert_eq!(mgr.list_repos().await.unwrap(), vec![repo]);
+
+    // Removal: the links go; the directory stays while the task's own
+    // file is in it; the roots are untouched.
+    let mut events = mgr.subscribe_events();
+    mgr.remove_repo(&ws.id).await.unwrap();
+    next_event(&mut events, |e| matches!(e, Event::ReposChanged)).await;
+    assert!(mgr.list_workspaces().await.is_empty());
+    assert!(std::fs::symlink_metadata(dir.join("notes")).is_err());
+    assert!(dir.join("plan.md").is_file());
+    assert!(notes.join("docs/readme.md").is_file());
+    assert!(matches!(
+        mgr.list_worktrees(&ws.id).await,
+        Err(SessionError::NotFound(_))
+    ));
+    drop(mgr);
+    assert!(restart().list_workspaces().await.is_empty());
+}

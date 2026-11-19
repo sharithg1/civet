@@ -823,6 +823,68 @@ describe('store', () => {
     expect(useStore.getState().workspaces[store.wsKey('h', '/notes')]!.tabs).toHaveLength(2)
   })
 
+  it('a floating workspace is a project without git, removed as a workspace', async () => {
+    const removeRepo = vi.fn(async () => {})
+    const listPullRequests = vi.fn(async () => [])
+    const ws: RepoInfo = {
+      id: 'w',
+      name: 'release',
+      path: '/state/workspaces/release',
+      defaultBranch: null,
+      kind: 'workspace',
+      roots: [{ path: '/r', name: 'r', isDir: true, missing: false }]
+    }
+    const repo: RepoInfo = { id: 'r', name: 'repo', path: '/r', defaultBranch: 'main', kind: 'git' }
+    const root: WorktreeInfo = {
+      id: ws.path,
+      repo: 'w',
+      path: ws.path,
+      branch: null,
+      head: null,
+      isMain: true,
+      locked: false
+    }
+    useStore.setState({
+      backend: fakeBackend({ removeRepo, listPullRequests, listRepos: async () => [repo] }),
+      hosts: {
+        h: { ...summary('h'), rttMs: null, message: null, bootstrap: null, errorCode: null }
+      },
+      repos: { h: [repo, ws] },
+      worktrees: { [store.wtKey('h', 'w')]: [root] },
+      panes: { h: {} },
+      workspaces: {},
+      active: null,
+      confirm: null
+    })
+    expect(store.isWorkspaceRepo(ws)).toBe(true)
+    expect(store.isWorkspaceRepo(repo)).toBe(false)
+    expect(store.isFolderRepo(ws)).toBe(true)
+    expect(store.isFolderWorktree('h', ws.path)).toBe(true)
+    store.refreshPullRequests('h', 'w')
+    expect(listPullRequests).not.toHaveBeenCalled()
+    await expect(
+      store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'w',
+        branch: 'x',
+        base: null,
+        steps: [],
+        prompt: ''
+      })
+    ).rejects.toMatchObject({ code: 'unsupported' })
+
+    store.selectWorktree('h', ws.path)
+    store.requestRemoveProject('h', 'w')
+    const confirm = useStore.getState().confirm!
+    expect(confirm.title).toBe('Remove workspace release?')
+    expect(confirm.confirmLabel).toBe('Remove')
+    expect(confirm.body).toContain('roots themselves are not touched')
+    confirm.onConfirm()
+    await vi.waitFor(() => expect(removeRepo).toHaveBeenCalledWith('h', 'w'))
+    await vi.waitFor(() => expect(useStore.getState().repos.h).toEqual([repo]))
+    expect(useStore.getState().active).toBeNull()
+  })
+
   it('files open in tabs of their own, once each, next to pane tabs', async () => {
     const key = store.wsKey('h', '/w')
     const killPane = vi.fn(async () => {})
