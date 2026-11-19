@@ -81,3 +81,36 @@ export function formatFileSize(bytes: number): string {
   }
   return `${u === 0 || n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[u]}`
 }
+
+/** An `http(s)://` URL in a line. */
+export type UrlMatch = {
+  /** Start in the line (UTF-16 index) … */
+  start: number
+  /** … and end (exclusive). */
+  end: number
+  url: string
+}
+
+// Up to whitespace, quotes, angle brackets or a box-drawing border.
+const URL = /https?:\/\/[^\s"'`<>\u2500-\u257f]+/g
+const CLOSERS: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
+
+/** The web URLs in `text`, without the punctuation of the sentence around them. */
+export function findUrls(text: string): UrlMatch[] {
+  const out: UrlMatch[] = []
+  for (const m of text.matchAll(URL)) {
+    let url = m[0]
+    for (;;) {
+      const last = url[url.length - 1]!
+      const opener = CLOSERS[last]
+      // "(see https://a.b/c)" ends before the bracket; ".../Rust_(language)" keeps its own.
+      const unbalanced = opener && url.split(opener).length < url.split(last).length
+      if (!unbalanced && !'.,;:!?*'.includes(last)) break
+      url = url.slice(0, -1)
+    }
+    // Something after the scheme.
+    if (!/^https?:\/\/[^/?#]/.test(url)) continue
+    out.push({ start: m.index, end: m.index + url.length, url })
+  }
+  return out
+}

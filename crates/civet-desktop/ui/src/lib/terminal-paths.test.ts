@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_CANDIDATES_PER_LINE,
   findPathCandidates,
+  findUrls,
   formatFileSize,
   relativeTo
 } from './terminal-paths'
@@ -74,5 +75,39 @@ describe('formatFileSize', () => {
     expect(formatFileSize(1500)).toBe('1.5 KB')
     expect(formatFileSize(340_000)).toBe('340 KB')
     expect(formatFileSize(2_340_000)).toBe('2.3 MB')
+  })
+})
+
+describe('findUrls', () => {
+  const urls = (text: string) => findUrls(text).map((u) => u.url)
+
+  it('finds web URLs and where they are', () => {
+    const text = 'Local: http://localhost:5173/ and docs at https://example.com/a?b=1#c'
+    const found = findUrls(text)
+    expect(found.map((u) => u.url)).toEqual([
+      'http://localhost:5173/',
+      'https://example.com/a?b=1#c'
+    ])
+    expect(text.slice(found[1]!.start, found[1]!.end)).toBe('https://example.com/a?b=1#c')
+  })
+
+  it('leaves the surrounding punctuation out', () => {
+    expect(urls('See https://example.com/docs.')).toEqual(['https://example.com/docs'])
+    expect(urls('(PR: https://github.com/o/r/pull/48), merged')).toEqual([
+      'https://github.com/o/r/pull/48'
+    ])
+    expect(urls('https://en.wikipedia.org/wiki/Rust_(language)')).toEqual([
+      'https://en.wikipedia.org/wiki/Rust_(language)'
+    ])
+    expect(urls('"https://a.dev/x" <https://b.dev/y> │https://c.dev/z│')).toEqual([
+      'https://a.dev/x',
+      'https://b.dev/y',
+      'https://c.dev/z'
+    ])
+  })
+
+  it('ignores other schemes and bare schemes', () => {
+    expect(urls('file:///etc/passwd ftp://x.y/z ssh://h javascript:alert(1)')).toEqual([])
+    expect(urls('use https:// or http://.')).toEqual([])
   })
 })

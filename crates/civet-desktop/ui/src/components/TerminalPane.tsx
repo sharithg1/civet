@@ -70,6 +70,10 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
         if (!useStore.getState().settings) findShortcut.current(action)
       },
       onLargePaste: showPasteAsFileTip,
+      // In this Mac's default browser.
+      onOpenUrl: (url) => {
+        backend.openWebUrl(url).catch((err: unknown) => reportError('Could not open the link', err))
+      },
       fileLinks: {
         stat: (path) => {
           const s = useStore.getState()

@@ -4,7 +4,7 @@
 // Civet, open on this Mac, download and open from a remote host).
 
 import type { IBufferLine, ILink, ILinkProvider, Terminal } from '@xterm/xterm'
-import { findPathCandidates } from '../lib/terminal-paths'
+import { findPathCandidates, findUrls } from '../lib/terminal-paths'
 import type { HostFile } from '../types'
 
 /** A file named in a pane's output. */
@@ -97,6 +97,26 @@ export function fileLinkProvider(
         })
         callback(links.length ? links : undefined)
       })
+    }
+  }
+}
+
+/** Links for the `http(s)://` URLs in a line; a click hands the URL to `onOpen`. */
+export function webLinkProvider(term: Terminal, onOpen: (url: string) => void): ILinkProvider {
+  return {
+    provideLinks(y, callback) {
+      const line = term.buffer.active.getLine(y - 1)
+      if (!line) return callback(undefined)
+      const { text, cols } = lineCells(line)
+      const links: ILink[] = findUrls(text).map((u) => ({
+        range: {
+          start: { x: cols[u.start]! + 1, y },
+          end: { x: cols[u.end - 1]! + 1, y }
+        },
+        text: u.url,
+        activate: () => onOpen(u.url)
+      }))
+      callback(links.length ? links : undefined)
     }
   }
 }

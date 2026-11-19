@@ -1,7 +1,13 @@
 import type { IBufferLine, ILink, Terminal } from '@xterm/xterm'
 import { describe, expect, it, vi } from 'vitest'
 import type { HostFile } from '../types'
-import { FileResolver, type FileLink, fileLinkProvider, lineCells } from './file-links'
+import {
+  FileResolver,
+  type FileLink,
+  fileLinkProvider,
+  lineCells,
+  webLinkProvider
+} from './file-links'
 
 /** A buffer line of `text`; characters in `wide` take two cells. */
 function bufferLine(text: string, wide = ''): IBufferLine {
@@ -97,5 +103,24 @@ describe('FileResolver', () => {
       throw new Error('not connected')
     })
     expect(await r.resolve('a')).toBeNull()
+  })
+})
+
+describe('webLinkProvider', () => {
+  it('links URLs at their cells and opens the clicked one', () => {
+    const term = termWith([bufferLine('好 see https://example.com/a. ok', '好')])
+    const opened: string[] = []
+    let links: ILink[] | undefined
+    webLinkProvider(term, (url) => opened.push(url)).provideLinks(1, (l) => {
+      links = l
+    })
+    expect(links?.map((l) => l.text)).toEqual(['https://example.com/a'])
+    expect(links![0]!.range).toEqual({ start: { x: 8, y: 1 }, end: { x: 28, y: 1 } })
+    links![0]!.activate({} as MouseEvent, links![0]!.text)
+    expect(opened).toEqual(['https://example.com/a'])
+    webLinkProvider(term, () => {}).provideLinks(5, (l) => {
+      links = l
+    })
+    expect(links).toBeUndefined()
   })
 })

@@ -29,7 +29,7 @@ import {
   pasteFileName
 } from './file-drop'
 import { attachWebgl, type WebglHandle } from './webgl'
-import { FileResolver, type FileLink, fileLinkProvider } from './file-links'
+import { FileResolver, type FileLink, fileLinkProvider, webLinkProvider } from './file-links'
 import type { HostFile } from '../types'
 
 export const RESIZE_DEBOUNCE_MS = 100
@@ -47,6 +47,8 @@ export type PaneControllerCallbacks = {
   onFind?: (action: FindAction) => void
   /** A plain text paste (Cmd+V) was large: a hint toward Paste as File. */
   onLargePaste?: () => void
+  /** An `http(s)://` URL in the output was clicked. */
+  onOpenUrl?: (url: string) => void
   /**
    * Files named in the output become links: `stat` asks the host whether a
    * printed path (absolute, `~/…` or relative to the pane's directory) is a
@@ -144,6 +146,11 @@ export class PaneController {
       () => d3.dispose()
     )
 
+    const openUrl = this.cb.onOpenUrl
+    if (openUrl) {
+      const links = this.term.registerLinkProvider(webLinkProvider(this.term, openUrl))
+      this.cleanups.push(() => links.dispose())
+    }
     const files = this.cb.fileLinks
     if (files) {
       const links = this.term.registerLinkProvider(
