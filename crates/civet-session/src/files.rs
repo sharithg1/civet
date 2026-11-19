@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 
 use civet_proto::{
     DirListing, FileChunk, FileEntry, FileKind, FileList, FilePreview, HostDir, HostDirListing,
-    MAX_ALL_FILES, MAX_DIR_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_PREVIEW_BYTES,
+    HostFileChunk, MAX_ALL_FILES, MAX_DIR_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_PREVIEW_BYTES,
 };
 
 use crate::SessionError;
@@ -304,6 +304,52 @@ pub(crate) async fn read_chunk(
         file.take(len.min(MAX_FILE_CHUNK_BYTES))
             .read_to_end(&mut data)?;
         Ok(FileChunk {
+            size: meta.len(),
+            data,
+        })
+    })
+    .await
+}
+
+/// Up to `len` bytes (at most [`MAX_FILE_CHUNK_BYTES`]) of the regular file
+/// at `path` (absolute, anywhere on the host) from `offset`, with its
+/// canonical path. NotFound when nothing is there, InvalidArgument for a
+/// directory, fifo or device.
+pub(crate) async fn read_host_chunk(
+    path: PathBuf,
+    offset: u64,
+    len: u64,
+) -> Result<HostFileChunk, SessionError> {
+    use std::io::{Seek, SeekFrom};
+    blocking(move || {
+        let missing = |e: std::io::Error| match e.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+                SessionError::NotFound(path.display().to_string())
+            }
+            _ => SessionError::Io(e),
+        };
+        let canon = std::fs::canonicalize(&path).map_err(missing)?;
+        // O_NONBLOCK keeps a fifo from blocking the open.
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&canon)
+            .map_err(missing)?;
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(SessionError::InvalidArgument(format!(
+                "{} is not a regular file",
+                canon.display()
+            )));
+        }
+        let mut data = Vec::new();
+        if len > 0 {
+            file.seek(SeekFrom::Start(offset))?;
+            file.take(len.min(MAX_FILE_CHUNK_BYTES))
+                .read_to_end(&mut data)?;
+        }
+        Ok(HostFileChunk {
+            path: canon.to_string_lossy().into_owned(),
             size: meta.len(),
             data,
         })

@@ -29,6 +29,8 @@ import {
   pasteFileName
 } from './file-drop'
 import { attachWebgl, type WebglHandle } from './webgl'
+import { FileResolver, type FileLink, fileLinkProvider } from './file-links'
+import type { HostFile } from '../types'
 
 export const RESIZE_DEBOUNCE_MS = 100
 
@@ -45,6 +47,15 @@ export type PaneControllerCallbacks = {
   onFind?: (action: FindAction) => void
   /** A plain text paste (Cmd+V) was large: a hint toward Paste as File. */
   onLargePaste?: () => void
+  /**
+   * Files named in the output become links: `stat` asks the host whether a
+   * printed path (absolute, `~/…` or relative to the pane's directory) is a
+   * file, `open` is a click on one (see file-links).
+   */
+  fileLinks?: {
+    stat: (path: string) => Promise<HostFile>
+    open: (event: MouseEvent, link: FileLink) => void
+  }
   /** False while the host is not connected: input errors are expected then (no toast). */
   canReportInputError?: () => boolean
 }
@@ -132,6 +143,14 @@ export class PaneController {
       () => d2.dispose(),
       () => d3.dispose()
     )
+
+    const files = this.cb.fileLinks
+    if (files) {
+      const links = this.term.registerLinkProvider(
+        fileLinkProvider(this.term, new FileResolver(files.stat), files.open)
+      )
+      this.cleanups.push(() => links.dispose())
+    }
 
     // Shift+Enter inserts a newline (see newline-keys); Option+Left/Right move
     // by word (see word-keys); Cmd+F finds (see

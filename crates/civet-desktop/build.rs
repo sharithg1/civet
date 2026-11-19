@@ -43,6 +43,8 @@ const COMMANDS: &[&str] = &[
     "file_op",
     "upload_to_worktree",
     "download_file",
+    "stat_host_file",
+    "open_host_file",
     "list_panes",
     "spawn_pane",
     "launch_agent",

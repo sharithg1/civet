@@ -208,8 +208,39 @@ const commands = {
     p.getByText(text.join(' '), { exact: true }).first().click({ button: 'right' }),
   // Click any element by its exact visible text (nav items that aren't buttons).
   'click-text': async (...text) => p.getByText(text.join(' '), { exact: true }).first().click(),
+  // Hover / click text printed in the visible terminal (the last row that has
+  // it), e.g. a file link: `hover-term README.md`, `click-term /tmp/a.png`.
+  'hover-term': async (...text) => termMouse(text.join(' '), false),
+  'click-term': async (...text) => termMouse(text.join(' '), true),
   // Move the mouse out of the way (drops hover states and tooltips).
   unhover: async () => p.mouse.move(0, 0)
+}
+
+// Where `text` is drawn in the visible terminal pane: the middle of its cells.
+async function termMouse(text, click) {
+  const at = await p.evaluate(async (text) => {
+    const { paneController } = await import('/src/terminal/pane-registry.ts')
+    const el = [...document.querySelectorAll('[data-pane-id]')].find((e) => e.offsetParent)
+    const term = paneController(el?.dataset.hostId, Number(el?.dataset.paneId))?.term
+    if (!term) return null
+    const buf = term.buffer.active
+    const screen = el.querySelector('.xterm-screen').getBoundingClientRect()
+    for (let row = term.rows - 1; row >= 0; row--) {
+      const col = buf.getLine(buf.viewportY + row)?.translateToString().indexOf(text) ?? -1
+      if (col < 0) continue
+      return {
+        x: screen.left + ((col + text.length / 2) * screen.width) / term.cols,
+        y: screen.top + ((row + 0.5) * screen.height) / term.rows
+      }
+    }
+    return null
+  }, text)
+  if (!at) throw new Error(`"${text}" is not on the terminal screen`)
+  await p.mouse.move(at.x - 3, at.y)
+  await p.mouse.move(at.x, at.y)
+  // File links are checked against the host before they exist.
+  await p.waitForTimeout(250)
+  if (click) await p.mouse.click(at.x, at.y)
 }
 
 let failed = false

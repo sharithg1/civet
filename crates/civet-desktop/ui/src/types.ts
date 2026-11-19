@@ -325,6 +325,24 @@ export type GitAction =
   | 'stashAll'
   | 'stashPop'
 
+/** A regular file anywhere on a host (`stat_host_file`, civetd >= 0.6.2). */
+export type HostFile = {
+  /** Canonical absolute path on the host. */
+  path: string
+  /** Size in bytes. */
+  size: number
+}
+
+/** What `open_host_file` did. */
+export type OpenedFile = {
+  /** The file on this Mac. */
+  path: string
+  /** It was copied from a remote host into Downloads first. */
+  downloaded: boolean
+  /** Shown in Finder instead of opened: it could run. */
+  revealed: boolean
+}
+
 export type CommandSpec = { program: string; args: string[] }
 
 export type SpawnPaneRequest = {

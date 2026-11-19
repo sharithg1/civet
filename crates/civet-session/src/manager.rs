@@ -970,6 +970,33 @@ impl SessionManager {
         crate::files::read_chunk(&root, path, offset, len).await
     }
 
+    /// Up to `len` bytes of a regular file anywhere on the host from
+    /// `offset` (`len` 0: only check it is there), for opening a file named
+    /// in a pane. `path` is absolute, `~/…`, or relative to `cwd` (an
+    /// absolute directory).
+    pub async fn read_host_file(
+        &self,
+        path: &str,
+        cwd: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> Result<civet_proto::HostFileChunk, SessionError> {
+        if path.is_empty() || path.contains('\0') {
+            return Err(SessionError::InvalidArgument("not a file path".into()));
+        }
+        let mut file = expand_home(path);
+        if file.is_relative() {
+            let base = cwd.map(Path::new).filter(|c| c.is_absolute());
+            let Some(base) = base else {
+                return Err(SessionError::InvalidArgument(format!(
+                    "{path:?} is relative and there is no directory to resolve it against"
+                )));
+            };
+            file = base.join(file);
+        }
+        crate::files::read_host_chunk(file, offset, len).await
+    }
+
     /// Create, move, copy, write, trash or restore worktree files (see
     /// [`crate::fileops`]). Trash goes to `<state>/trash`.
     pub async fn file_op(

@@ -13,6 +13,7 @@ import {
   pushToast,
   reportError
 } from '@/state/store'
+import { hostFilesSupported } from '@/state/fileops'
 import { setPrefs, usePrefs } from '@/state/prefs'
 import { PaneController } from '@/terminal/pane-controller'
 import { registerPane } from '@/terminal/pane-registry'
@@ -20,6 +21,7 @@ import type { LineRange } from '@/terminal/pane-stream'
 import type { PaneId } from '@/types'
 import { cn } from '@/lib/utils'
 import { paneDot } from '@/lib/worktree-view'
+import { FileLinkMenu, type FileLinkTarget } from './FileLinkMenu'
 import { HistoryView } from './HistoryView'
 import { IconButton } from './IconButton'
 import { StatusDot } from './StatusDot'
@@ -42,6 +44,7 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
   const [renderer, setRenderer] = useState<{ kind: 'webgl' | 'dom'; reason?: string } | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [gaps, setGaps] = useState<LineRange[]>([])
+  const [fileLink, setFileLink] = useState<FileLinkTarget | null>(null)
   const find = useTerminalFind(controller)
   // The controller outlives renders; route its find shortcuts to the latest hook.
   const findShortcut = useRef(find.shortcut)
@@ -67,6 +70,17 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
         if (!useStore.getState().settings) findShortcut.current(action)
       },
       onLargePaste: showPasteAsFileTip,
+      fileLinks: {
+        stat: (path) => {
+          const s = useStore.getState()
+          if (s.hosts[hostId]?.state !== 'connected' || !hostFilesSupported(hostId))
+            return Promise.reject(new Error('file links are not available'))
+          // Relative paths are relative to where the pane started (an
+          // agent's worktree).
+          return backend.statHostFile(hostId, path, s.panes[hostId]?.[pane]?.cwd ?? null)
+        },
+        open: (event, link) => setFileLink({ ...link, x: event.clientX, y: event.clientY })
+      },
       canReportInputError: () => useStore.getState().hosts[hostId]?.state === 'connected'
     })
     c.mount(el)
@@ -166,6 +180,13 @@ export function TerminalPane({ hostId, pane, focused, multiPane }: Props) {
         <HistoryView controller={controller} gaps={gaps} onClose={() => setHistoryOpen(false)} />
       )}
       <div ref={containerRef} className="terminal-host relative min-h-0 flex-1" />
+      <FileLinkMenu
+        hostId={hostId}
+        worktree={info?.worktree ?? null}
+        target={fileLink}
+        onClose={() => setFileLink(null)}
+        onClosed={() => controller?.focus()}
+      />
       {exited && (
         <div className="pointer-events-none absolute right-3 bottom-2 rounded-[5px] border border-border bg-chrome px-2 py-0.5 font-mono text-2xs text-muted-foreground">
           [process exited{info?.exitCode != null ? ` with code ${info.exitCode}` : ''}]

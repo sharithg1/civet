@@ -246,6 +246,14 @@ fn every_command_through_ipc() {
             "download_file",
             json!({ "hostId": "x", "worktree": "/w", "path": "a", "dest": "/tmp/a" }),
         ),
+        (
+            "stat_host_file",
+            json!({ "hostId": "x", "path": "a.png", "cwd": "/w" }),
+        ),
+        (
+            "open_host_file",
+            json!({ "hostId": "x", "path": "~/a.png", "cwd": null }),
+        ),
         ("list_panes", json!({ "hostId": "x" })),
         ("spawn_pane", json!({ "hostId": "x", "request": spawn })),
         ("launch_agent", json!({ "hostId": "x", "request": launch })),

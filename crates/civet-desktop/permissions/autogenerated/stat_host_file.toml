@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stat-host-file"
+description = "Enables the stat_host_file command without any pre-configured scope."
+commands.allow = ["stat_host_file"]
+
+[[permission]]
+identifier = "deny-stat-host-file"
+description = "Denies the stat_host_file command without any pre-configured scope."
+commands.deny = ["stat_host_file"]
