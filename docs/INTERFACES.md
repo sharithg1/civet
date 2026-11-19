@@ -212,7 +212,9 @@ pub enum TransportError {
     #[error("connection closed: {0}")]
     Closed(String),
     /// The daemon closed the connection with code 3: a newer connection with
-    /// the same ClientId took over.
+    /// the same ClientId took over. The string is the close reason:
+    /// `REPLACED_BY_RESUME` when that connection resumed this session (so
+    /// it is a dial of the same `ClientSession`), anything else otherwise.
     #[error("connection taken over by another connection of this client: {0}")]
     Replaced(String),
 }
@@ -527,12 +529,22 @@ pub trait Dialer: Send + Sync + 'static {
     /// recovered (None). Default: ignored.
     fn link_trouble(&self, since: Option<std::time::Instant>) {}
     /// While connected over a link whose kind != `kind()` (a fallback), the
-    /// session calls `dial_preferred` this often and adopts the result on
-    /// success (resume). Default None.
+    /// session calls `dial_preferred` again this long after the previous
+    /// call ended (asked each time, so a dialer can back off) and adopts
+    /// the result on success (resume). Default None.
     fn upgrade_interval(&self) -> Option<std::time::Duration> { None }
-    /// Dial only the preferred link. Default: `dial`.
+    /// Dial only the preferred link. A non-fatal error leaves the session
+    /// on the fallback; a dialer may return one without dialing while the
+    /// preferred link has not proven itself. Default: `dial`.
     fn dial_preferred(&self, hello: ClientHello, pipelined: Vec<ClientMessage>)
         -> BoxFuture<'_, Result<Connected, TransportError>>;
+    /// Reachability check without a hello (the daemon keeps the session's
+    /// current connection); resolves to how long it took. `QuicDialer`:
+    /// `QuicClient::probe`, a handshake closed with code 0 and reason
+    /// `PROBE_CLOSE_REASON` ("probe"; the daemon sees
+    /// `TransportError::is_probe_close()` and logs it at debug).
+    /// Default: `Ok(Duration::ZERO)` at once.
+    fn probe(&self) -> BoxFuture<'_, Result<Duration, TransportError>>;
 }
 
 /// QUIC first, fallback (SSH stdio tunnel) when it fails; back to QUIC when
@@ -546,7 +558,10 @@ pub struct FailoverConfig {
     pub primary_timeout: Duration,         // 3 s, bound on one primary dial
     pub fail_over_after_attempts: u32,     // 2 consecutive failed primary dials
     pub fail_over_after: Duration,         // 3 s of trouble (or one 3 s attempt)
-    pub probe_interval: Duration,          // 10 s, retry the primary while on the fallback
+    pub probe_interval: Duration,          // 10 s, probe the primary while on the fallback
+    pub probes_to_return: u32,             // 3 probes in a row before moving back (0: dial without probing)
+    pub flap_window: Duration,             // 5 min: a failover this soon after moving back doubles the probe interval
+    pub max_probe_interval: Duration,      // 2 min, cap of the doubled interval
 }
 ```
 
@@ -556,6 +571,18 @@ after `fail_over_after_attempts` failures or an attempt that took
 UDP blocked also succeeds). Once the session reports trouble lasting
 `fail_over_after`, it races primary and fallback (first hello wins).
 Fatal errors (`is_fatal`, `Rejected`) are returned as-is.
+
+Moving back has hysteresis (a link that answers one moment and stalls the
+next must not make the session swap links all the time).
+`dial_preferred` first only probes the primary (`Dialer::probe`, bounded by
+`primary_timeout`) and returns a non-fatal error; the call whose probe is
+the `probes_to_return`-th success in a row goes on to dial the primary, and
+a failed probe or dial starts the count again. So with the defaults a
+session stays on the fallback for at least 30 s. `upgrade_interval()` is the
+current probe interval: `probe_interval`, doubled (up to
+`max_probe_interval`) at each failover that comes within `flap_window` of
+the last move back to the primary, and reset to `probe_interval` by a
+failover after a longer stay.
 
 ```rust
 
@@ -579,10 +606,13 @@ pub struct ClientSessionConfig {
     pub client_version: String,  // env!("CARGO_PKG_VERSION")
     /// Send a Ping when nothing was received for this long. Default 1 s.
     pub heartbeat: std::time::Duration,
-    /// A ping unanswered for this long => `LinkState::Recovering`. Default 1 s.
+    /// Floor of the stall threshold (see "Stall detection" below): with a
+    /// ping outstanding, nothing received for the threshold =>
+    /// `LinkState::Recovering`. Default 1 s.
     pub stall_after: std::time::Duration,
     /// While Recovering for this long, dial a fresh connection in parallel
-    /// (with the resume token) and keep whichever answers first. Default 3 s.
+    /// (with the resume token) and keep whichever answers first. Stretched
+    /// by the same factor as the stall threshold. Default 3 s.
     pub race_after: std::time::Duration,
     /// Reconnect backoff schedule after a connection is lost; the last value
     /// repeats forever. Default [0, 100, 250, 500, 1000, 2000, 5000] ms.
@@ -712,8 +742,14 @@ Required behavior:
      pane's state and emit `SessionEvent::Event(Event::PaneClosed)`; later
      `send_input` for it returns 0 without buffering.
    Always store the new `resume_token`.
-   - **Replaced** (QUIC close code 3) while no dial of its own is in flight:
-     another connection with this `ClientId` took over. The session redials
+   - **Replaced** (QUIC close code 3). By a dial of its own, i.e. while
+     one is in flight or with close reason `REPLACED_BY_RESUME` (the daemon
+     sends it when the newer connection resumed the session, which only
+     the session holding the resume token can do: a dial the dialer gave
+     up on after its hello was accepted, such as a timed-out one or the
+     loser of a failover race): an ordinary loss, redialed at once with the
+     resume token. Otherwise another client with this `ClientId` took
+     over. The session redials
      once after `REPLACED_RETRY_DELAY` (1 s); a second takeover within
      `REPLACED_WINDOW` (30 s) ends it with `LinkState::Failed { reason:
      REPLACED_REASON, needs_bootstrap: false }`, so two clients sharing an
@@ -727,15 +763,36 @@ Required behavior:
      input refused under daemon PTY backpressure gets applied.
    - **Failover.** With a dialer whose `upgrade_interval()` is Some (the
      `FailoverDialer`), while connected over a non-preferred link the
-     session periodically dials `dial_preferred` (resume token + pipelined
-     re-subscribes) and adopts it on success. `LinkState::Connected.transport`
-     is the kind of the current connection.
+     session periodically calls `dial_preferred` (resume token + pipelined
+     re-subscribes; every `upgrade_interval()`) and adopts the connection
+     when it returns one. `LinkState::Connected.transport` is the kind of
+     the current connection.
 5. **Stall detection.** Track `last_rx` (any frame). If nothing was received
-   for `heartbeat`, send `Ping`. If a ping is unanswered for `stall_after`,
-   go `Recovering` and call `dialer.rebind()`. If still recovering after
-   `race_after`, dial a second connection in parallel; first to complete the
-   hello wins, the other is closed. When any frame arrives on the current
-   connection, go back to `Connected` (`rtt_ms` from QUIC stats or ping RTT).
+   for `heartbeat`, send `Ping`. With a ping outstanding, if nothing at all
+   (the pong or any other frame) was received for the *stall threshold*
+   since it was sent, go `Recovering` and call `dialer.rebind()`. The
+   threshold scales with the link's latency:
+
+   ```
+   threshold = clamp(max(2 * srtt + 4 * rttvar, 3 * quic_rtt), stall_after, MAX_STALL_AFTER)
+   ```
+
+   `srtt` / `rttvar` are RFC 6298 estimates over the round trips of answered
+   pings (kept across reconnects; a ping is sent right after the first
+   connect to get one), `quic_rtt` is the QUIC connection's smoothed RTT
+   (None on stream links), `MAX_STALL_AFTER` is 10 s. `2 * srtt + 4 * rttvar`
+   is how long a ping takes when one packet is lost and the transport
+   repairs it (a retransmission timeout plus the retransmit's round trip);
+   only silence beyond that means more than "slow". With RTTs under about
+   a third of `stall_after` the threshold is `stall_after`, as before; with
+   no estimate yet it is `3 * stall_after`. If still recovering after
+   `race_after * (threshold / stall_after)`, dial a second connection in
+   parallel; the first to complete the hello wins, the other is closed.
+   When any frame arrives on the current connection, go back to `Connected`
+   (`rtt_ms` from QUIC stats or ping RTT). A race dial already in flight is
+   *not* cancelled then: the daemon may have accepted its hello and closed
+   the current connection as replaced. It is adopted if it completes and
+   ignored if it fails.
 6. **Requests in flight** when a connection dies fail with
    `RequestError::ConnectionLost`, except `subscribe` (re-sent automatically).
 7. The session never sleeps the thread and never drops screen events.
@@ -1983,7 +2040,11 @@ Remote/host side (`~/.civet`, or `$CIVET_STATE_DIR`):
 | `hooks/zsh/.zshenv` | zsh `ZDOTDIR` shim for panes |
 | `logs/civetd.log` | daemon log when detached |
 
-Client side (`~/.civet` on the laptop): `client-id-desktop` (hex, the
+Client side (`~/.civet` on the laptop; `~/.civet-dev` for debug builds of
+the desktop): `logs/civet-desktop.log` (the desktop app's tracing output,
+also on stderr; `CIVET_LOG` filter, default `info`; renamed to
+`civet-desktop.log.1` when it reaches 8 MiB, so at most 16 MiB in all),
+`client-id-desktop` (hex, the
 desktop's `ClientId`), `client-id` (legacy, unused by the shipped clients), `ssh/` (ssh
 ControlPath sockets, 0700), `dist/` (optional `civetd-<triple>` binaries for
 dev; also `CIVET_DIST_DIR`).
@@ -2013,8 +2074,8 @@ dev; also `CIVET_DIST_DIR`).
 | ALPN | `civet/1` | `civet_proto::ALPN` |
 | QUIC idle timeout | 6 h | transport |
 | Client keep-alive | 2 s | transport |
-| Heartbeat / stall | 1 s / 1 s | `ClientSessionConfig` |
-| Parallel re-dial after | 3 s | `ClientSessionConfig` |
+| Heartbeat / stall | 1 s / max(1 s, 2·srtt + 4·rttvar, 3·QUIC RTT), ≤ 10 s | `ClientSessionConfig`, `civet_transport::MAX_STALL_AFTER` |
+| Parallel re-dial after | 3 s × (stall threshold / 1 s) | `ClientSessionConfig` |
 | UI "reconnecting" threshold | 1 s | desktop |
 | Resume TTL on daemon | 24 h | civetd |
 | Max in-flight updates per pane | 8 | `civet_proto::MAX_INFLIGHT_UPDATES` |
@@ -2031,4 +2092,6 @@ dev; also `CIVET_DIST_DIR`).
 | "Replaced" retry delay / give-up window | 1 s / 30 s | `civet_transport::{REPLACED_RETRY_DELAY, REPLACED_WINDOW}` |
 | Unacked input retransmit | after 1 s without ack progress, ≤ 64 KiB | `civet_transport::session::INPUT_RETRANSMIT_AFTER` |
 | Failover: primary timeout / after / probe | 3 s (2 attempts) / 3 s / 10 s | `civet_transport::FailoverConfig` |
+| Failover: probes before moving back / flap window / max probe interval | 3 in a row / 5 min / 2 min | `civet_transport::FailoverConfig` |
+| Desktop log file | `logs/civet-desktop.log`, rotated to `.log.1` at 8 MiB | `civet_desktop::logfile` |
 | Desktop channel flush | 4 ms or 256 KiB | desktop |

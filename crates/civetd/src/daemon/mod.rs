@@ -283,6 +283,8 @@ async fn accept_quic(server: Arc<server::Server>, quic: Arc<QuicServer>) {
             drop(permit);
             match r {
                 Ok(conn) => server.handle_connection(conn).await,
+                // A client on its fallback link checking that QUIC works.
+                Err(e) if e.is_probe_close() => tracing::debug!(%remote, "QUIC probe"),
                 Err(e) => tracing::info!(%remote, error = %e, "QUIC handshake failed"),
             }
         });

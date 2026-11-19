@@ -7,7 +7,7 @@ mod common;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use civet_proto::{ClientHello, ClientMessage, Event, PaneId};
@@ -194,6 +194,16 @@ async fn refused_input_is_retransmitted() {
 struct Blockable {
     inner: Arc<QuicDialer>,
     blocked: Arc<AtomicBool>,
+    /// Probes answered / failed.
+    probes: Arc<AtomicU64>,
+}
+
+fn blockable(daemon: &Arc<TestDaemon>, blocked: bool) -> Blockable {
+    Blockable {
+        inner: quic(daemon),
+        blocked: Arc::new(AtomicBool::new(blocked)),
+        probes: Arc::new(AtomicU64::new(0)),
+    }
 }
 
 impl Dialer for Blockable {
@@ -216,6 +226,23 @@ impl Dialer for Blockable {
     fn kind(&self) -> TransportKind {
         TransportKind::Quic
     }
+    fn probe(&self) -> BoxFuture<'_, Result<Duration, TransportError>> {
+        Box::pin(async move {
+            self.probes.fetch_add(1, Ordering::SeqCst);
+            if self.blocked.load(Ordering::SeqCst) {
+                return Err(TransportError::Timeout("blocked"));
+            }
+            self.inner.probe().await
+        })
+    }
+}
+
+/// Wait until the session is connected over `kind`.
+async fn on_transport(ev: &mut Events, kind: TransportKind) {
+    next_event(ev, |e| {
+        matches!(e, SessionEvent::Link(LinkState::Connected { transport, .. }) if *transport == kind)
+    })
+    .await;
 }
 
 fn transport(s: &ClientSession) -> Option<TransportKind> {
@@ -232,19 +259,17 @@ fn transport(s: &ClientSession) -> Option<TransportKind> {
 async fn failover_to_fallback_and_back() {
     let (key, cid) = hello_template();
     let daemon = TestDaemon::new(key.clone());
-    let blocked = Arc::new(AtomicBool::new(false));
-    let primary: Arc<dyn Dialer> = Arc::new(Blockable {
-        inner: quic(&daemon),
-        blocked: blocked.clone(),
-    });
+    let primary = blockable(&daemon, false);
+    let blocked = primary.blocked.clone();
     let failover = Arc::new(FailoverDialer::new(
-        primary,
+        Arc::new(primary),
         stream(&daemon),
         FailoverConfig {
             primary_timeout: Duration::from_millis(500),
             fail_over_after_attempts: 2,
             fail_over_after: Duration::from_millis(300),
             probe_interval: Duration::from_millis(300),
+            ..FailoverConfig::default()
         },
     ));
     let (s, mut ev) = ClientSession::connect(fast(session_config(key, cid)), failover.clone())
@@ -305,15 +330,149 @@ async fn failover_to_fallback_and_back() {
     s.close().await;
 }
 
+/// Moving back from the fallback has hysteresis: the primary must answer
+/// `probes_to_return` probes in a row (no hello, so the daemon keeps the
+/// fallback connection) before the session dials it, and a failed probe
+/// starts the count again.
+#[tokio::test]
+async fn failback_waits_for_consecutive_probes() {
+    let (key, cid) = hello_template();
+    let daemon = TestDaemon::new(key.clone());
+    // Blocked at first: the first connect lands on the fallback.
+    let primary = blockable(&daemon, true);
+    let (blocked, probes) = (primary.blocked.clone(), primary.probes.clone());
+    let failover = Arc::new(FailoverDialer::new(
+        Arc::new(primary),
+        stream(&daemon),
+        FailoverConfig {
+            primary_timeout: Duration::from_millis(500),
+            fail_over_after_attempts: 1,
+            probe_interval: Duration::from_millis(200),
+            probes_to_return: 3,
+            ..FailoverConfig::default()
+        },
+    ));
+    let (s, mut ev) = ClientSession::connect(fast(session_config(key, cid)), failover.clone())
+        .await
+        .unwrap();
+    assert_eq!(transport(&s), Some(TransportKind::Stream));
+
+    // Probes fail while UDP is blocked; the session stays where it is.
+    assert!(eventually(T, || probes.load(Ordering::SeqCst) >= 2).await);
+    assert_eq!(daemon.hellos.load(Ordering::SeqCst), 1);
+
+    // UDP works again. Two good probes are not enough...
+    let before = probes.load(Ordering::SeqCst);
+    blocked.store(false, Ordering::SeqCst);
+    assert!(eventually(T, || probes.load(Ordering::SeqCst) >= before + 2).await);
+    assert_eq!(transport(&s), Some(TransportKind::Stream));
+    assert_eq!(
+        daemon.hellos.load(Ordering::SeqCst),
+        1,
+        "a probe is not a hello"
+    );
+    // ...and a failed one starts over: three more are needed.
+    blocked.store(true, Ordering::SeqCst);
+    let before = probes.load(Ordering::SeqCst);
+    assert!(eventually(T, || probes.load(Ordering::SeqCst) > before).await);
+    blocked.store(false, Ordering::SeqCst);
+    let before = probes.load(Ordering::SeqCst);
+    on_transport(&mut ev, TransportKind::Quic).await;
+    assert!(
+        probes.load(Ordering::SeqCst) >= before + 3,
+        "moved back after {} probes",
+        probes.load(Ordering::SeqCst) - before
+    );
+    assert!(!failover.on_fallback());
+    assert_eq!(daemon.hellos.load(Ordering::SeqCst), 2);
+    s.close().await;
+}
+
+/// A move back to the primary that is followed by another failover within
+/// `flap_window` did not hold: each one doubles the probe interval, up to
+/// `max_probe_interval`.
+#[tokio::test]
+async fn failback_backs_off_when_the_primary_keeps_failing() {
+    let (key, cid) = hello_template();
+    let daemon = TestDaemon::new(key.clone());
+    let primary = blockable(&daemon, false);
+    let blocked = primary.blocked.clone();
+    let base = Duration::from_millis(100);
+    let failover = Arc::new(FailoverDialer::new(
+        Arc::new(primary),
+        stream(&daemon),
+        FailoverConfig {
+            primary_timeout: Duration::from_millis(500),
+            fail_over_after_attempts: 2,
+            fail_over_after: Duration::from_millis(300),
+            probe_interval: base,
+            probes_to_return: 1,
+            flap_window: Duration::from_secs(60),
+            max_probe_interval: base * 4,
+        },
+    ));
+    let (s, mut ev) = ClientSession::connect(fast(session_config(key, cid)), failover.clone())
+        .await
+        .unwrap();
+    assert_eq!(transport(&s), Some(TransportKind::Quic));
+
+    // First failover: the base interval. Each one after a move back that
+    // did not last: twice the previous, capped.
+    for expect in [base, base * 2, base * 4, base * 4] {
+        blocked.store(true, Ordering::SeqCst);
+        daemon.mute_current();
+        on_transport(&mut ev, TransportKind::Stream).await;
+        assert_eq!(failover.upgrade_interval(), Some(expect));
+        blocked.store(false, Ordering::SeqCst);
+        on_transport(&mut ev, TransportKind::Quic).await;
+    }
+    s.close().await;
+}
+
+/// With `flap_window` over, a failover is a new incident: the base interval.
+#[tokio::test]
+async fn failback_backoff_resets_after_a_stable_stay() {
+    let (key, cid) = hello_template();
+    let daemon = TestDaemon::new(key.clone());
+    let primary = blockable(&daemon, false);
+    let blocked = primary.blocked.clone();
+    let base = Duration::from_millis(100);
+    let failover = Arc::new(FailoverDialer::new(
+        Arc::new(primary),
+        stream(&daemon),
+        FailoverConfig {
+            primary_timeout: Duration::from_millis(500),
+            fail_over_after_attempts: 2,
+            fail_over_after: Duration::from_millis(300),
+            probe_interval: base,
+            probes_to_return: 1,
+            flap_window: Duration::from_millis(400),
+            max_probe_interval: base * 8,
+        },
+    ));
+    let (s, mut ev) = ClientSession::connect(fast(session_config(key, cid)), failover.clone())
+        .await
+        .unwrap();
+    for stay in [Duration::ZERO, Duration::from_millis(600)] {
+        tokio::time::sleep(stay).await;
+        blocked.store(true, Ordering::SeqCst);
+        daemon.mute_current();
+        on_transport(&mut ev, TransportKind::Stream).await;
+        // The second failover comes more than flap_window after the move
+        // back: no doubling (compare the test above).
+        assert_eq!(failover.upgrade_interval(), Some(base));
+        blocked.store(false, Ordering::SeqCst);
+        on_transport(&mut ev, TransportKind::Quic).await;
+    }
+    s.close().await;
+}
+
 /// UDP blocked from the start: the first connect itself falls back.
 #[tokio::test]
 async fn failover_on_first_connect() {
     let (key, cid) = hello_template();
     let daemon = TestDaemon::new(key.clone());
-    let primary: Arc<dyn Dialer> = Arc::new(Blockable {
-        inner: quic(&daemon),
-        blocked: Arc::new(AtomicBool::new(true)),
-    });
+    let primary: Arc<dyn Dialer> = Arc::new(blockable(&daemon, true));
     let failover = Arc::new(FailoverDialer::new(
         primary,
         stream(&daemon),

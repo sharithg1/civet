@@ -40,15 +40,23 @@ pub enum TransportError {
     #[error("connection closed: {0}")]
     Closed(String),
     /// The daemon closed this connection because a newer connection with the
-    /// same `ClientId` took over (QUIC close code 3). Redialing would just
-    /// kick the other connection off in turn; `ClientSession` stops with
-    /// `LinkState::Failed { reason: REPLACED_REASON, needs_bootstrap: false }`
-    /// unless the newer connection is its own (racing) dial.
+    /// same `ClientId` took over (QUIC close code 3); the string is the
+    /// close reason. Unless that connection is a dial of the same session
+    /// (one in flight, or reason [`REPLACED_BY_RESUME`]), redialing would
+    /// just kick the other client off in turn, and `ClientSession` ends up
+    /// `LinkState::Failed { reason: REPLACED_REASON, needs_bootstrap: false }`.
     #[error("connection taken over by another connection of this client: {0}")]
     Replaced(String),
 }
 
 impl TransportError {
+    /// True for what a server sees when a client's reachability probe
+    /// (`QuicClient::probe`) closes its connection: not a failure.
+    pub fn is_probe_close(&self) -> bool {
+        matches!(self, TransportError::Closed(m)
+            if *m == format!("closed by peer (code {}): {}", close_code::NORMAL, crate::quic::PROBE_CLOSE_REASON))
+    }
+
     /// True if retrying the same dial cannot help (Rejected with
     /// BadKey/VersionMismatch/BadMagic, FingerprintMismatch).
     pub fn is_fatal(&self) -> bool {
@@ -77,6 +85,15 @@ pub mod close_code {
     /// Daemon shutting down.
     pub const SHUTTING_DOWN: u32 = 4;
 }
+
+/// Close reason the daemon sends with [`close_code::REPLACED`] when the
+/// newer connection resumed this client's session. A resume token is only
+/// ever handed to the session it belongs to, so that newer connection is a
+/// dial of the same `ClientSession` (one it may have abandoned since: a
+/// cancelled or timed-out dial, the loser of a failover race), never another
+/// client. Any other reason means a connection that did not resume took the
+/// client id over.
+pub const REPLACED_BY_RESUME: &str = "replaced by a resume of the same session";
 
 /// Map a quinn connection error into a `TransportError`.
 pub(crate) fn from_conn_error(e: &quinn::ConnectionError) -> TransportError {

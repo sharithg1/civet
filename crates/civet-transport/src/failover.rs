@@ -10,9 +10,20 @@
 //!   has lasted `fail_over_after`, dials race primary and fallback and keep
 //!   whichever completes its hello first.
 //! * On the fallback, dials go to the fallback. The session calls
-//!   [`Dialer::dial_preferred`] every `probe_interval` (via
-//!   [`Dialer::upgrade_interval`]); when that succeeds it adopts the new
-//!   connection (resume) and the fallback connection is dropped.
+//!   [`Dialer::dial_preferred`] every probe interval (via
+//!   [`Dialer::upgrade_interval`]). Moving back has hysteresis, so a link
+//!   that works one moment and stalls the next does not make the session
+//!   swap links all the time:
+//!   * Each call first only *probes* the primary ([`Dialer::probe`]: for
+//!     QUIC a handshake without a hello, which leaves the session's
+//!     connection alone) and returns an error. Only the call whose probe is
+//!     the `probes_to_return`-th success in a row goes on to dial; a failed
+//!     probe or dial starts the count again. When that dial succeeds the
+//!     session adopts the connection (resume) and drops the fallback one.
+//!   * A move back that is followed by another failover within
+//!     `flap_window` did not hold: the probe interval doubles (up to
+//!     `max_probe_interval`). A failover after a longer stay on the primary
+//!     resets it to `probe_interval`.
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -36,8 +47,20 @@ pub struct FailoverConfig {
     /// Fail over once trouble (or a single primary attempt) has lasted this
     /// long. Default 3 s.
     pub fail_over_after: Duration,
-    /// While on the fallback, try the primary this often. Default 10 s.
+    /// While on the fallback, probe the primary this often (doubled after
+    /// each move back that did not hold, see `flap_window`). Default 10 s.
     pub probe_interval: Duration,
+    /// Consecutive successful probes of the primary (each within
+    /// `primary_timeout`) before the session moves back to it; 0 = dial it
+    /// without probing. Default 3: with the default interval a session
+    /// stays on the fallback for at least 30 s.
+    pub probes_to_return: u32,
+    /// A failover this soon after moving back to the primary doubles the
+    /// probe interval; a later one resets it. Default 5 min.
+    pub flap_window: Duration,
+    /// Upper bound of the doubled probe interval. Default 2 min (at most
+    /// 6 min on the fallback between attempts to move back).
+    pub max_probe_interval: Duration,
 }
 
 impl Default for FailoverConfig {
@@ -47,15 +70,24 @@ impl Default for FailoverConfig {
             fail_over_after_attempts: 2,
             fail_over_after: Duration::from_secs(3),
             probe_interval: Duration::from_secs(10),
+            probes_to_return: 3,
+            flap_window: Duration::from_secs(300),
+            max_probe_interval: Duration::from_secs(120),
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct State {
     on_fallback: bool,
     primary_failures: u32,
     trouble_since: Option<Instant>,
+    /// Successful probes of the primary in a row (while on the fallback).
+    probes_ok: u32,
+    /// Current (backed-off) probe interval.
+    probe_interval: Duration,
+    /// When the session last moved back from the fallback to the primary.
+    returned_at: Option<Instant>,
 }
 
 /// Primary-with-fallback dialer (see the module docs).
@@ -89,11 +121,19 @@ impl FailoverDialer {
         fallback: Arc<dyn Dialer>,
         config: FailoverConfig,
     ) -> Self {
+        let state = State {
+            on_fallback: false,
+            primary_failures: 0,
+            trouble_since: None,
+            probes_ok: 0,
+            probe_interval: config.probe_interval,
+            returned_at: None,
+        };
         Self {
             primary,
             fallback,
             config,
-            state: Mutex::new(State::default()),
+            state: Mutex::new(state),
         }
     }
 
@@ -125,6 +165,7 @@ impl FailoverDialer {
             Ok(_) => {
                 if st.on_fallback {
                     tracing::info!("preferred link works again; leaving the fallback");
+                    st.returned_at = Some(Instant::now());
                 }
                 st.on_fallback = false;
                 st.primary_failures = 0;
@@ -132,6 +173,7 @@ impl FailoverDialer {
             Err(e) if !is_final(e) => st.primary_failures += 1,
             Err(_) => {}
         }
+        st.probes_ok = 0;
         r
     }
 
@@ -144,11 +186,67 @@ impl FailoverDialer {
         if r.is_ok() {
             let mut st = self.lock();
             if !st.on_fallback {
-                tracing::info!("preferred link unavailable; using the fallback");
+                // Back here soon after the last move to the primary: that
+                // move did not hold, so wait longer before the next one.
+                let flapped = st
+                    .returned_at
+                    .is_some_and(|t| t.elapsed() < self.config.flap_window);
+                st.probe_interval = if flapped {
+                    (st.probe_interval * 2)
+                        .min(self.config.max_probe_interval)
+                        .max(self.config.probe_interval)
+                } else {
+                    self.config.probe_interval
+                };
+                st.probes_ok = 0;
+                tracing::info!(
+                    flapped,
+                    probe_interval_ms = st.probe_interval.as_millis() as u64,
+                    "preferred link unavailable; using the fallback"
+                );
             }
             st.on_fallback = true;
         }
         r
+    }
+
+    /// One probe of the primary on behalf of [`Dialer::dial_preferred`].
+    /// Ok: the primary has now answered `probes_to_return` probes in a row,
+    /// go on and dial it.
+    async fn prove_primary(&self) -> Result<(), TransportError> {
+        let need = self.config.probes_to_return;
+        if need == 0 {
+            return Ok(());
+        }
+        let r = match tokio::time::timeout(self.config.primary_timeout, self.primary.probe()).await
+        {
+            Ok(r) => r,
+            Err(_) => Err(TransportError::Timeout("primary link probe")),
+        };
+        let mut st = self.lock();
+        match r {
+            Ok(took) => {
+                st.probes_ok += 1;
+                tracing::debug!(
+                    took_ms = took.as_millis() as u64,
+                    ok = st.probes_ok,
+                    need,
+                    "preferred link answered a probe"
+                );
+                if st.probes_ok >= need {
+                    Ok(())
+                } else {
+                    Err(TransportError::Timeout(
+                        "preferred link is still proving itself",
+                    ))
+                }
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "preferred link probe failed");
+                st.probes_ok = 0;
+                Err(e)
+            }
+        }
     }
 
     /// Dial both; the first successful hello wins.
@@ -240,7 +338,7 @@ impl Dialer for FailoverDialer {
     }
 
     fn upgrade_interval(&self) -> Option<Duration> {
-        Some(self.config.probe_interval)
+        Some(self.lock().probe_interval)
     }
 
     fn dial_preferred(
@@ -248,6 +346,13 @@ impl Dialer for FailoverDialer {
         hello: ClientHello,
         pipelined: Vec<ClientMessage>,
     ) -> BoxFuture<'_, Result<Connected, TransportError>> {
-        Box::pin(self.dial_primary(hello, pipelined))
+        Box::pin(async move {
+            self.prove_primary().await?;
+            self.dial_primary(hello, pipelined).await
+        })
+    }
+
+    fn probe(&self) -> BoxFuture<'_, Result<Duration, TransportError>> {
+        self.primary.probe()
     }
 }
