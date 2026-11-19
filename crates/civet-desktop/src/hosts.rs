@@ -1540,6 +1540,7 @@ impl HostManager {
             .await
             .map_err(io)?;
         let mut offset = 0u64;
+        let mut total = None;
         let r: Result<u64, CmdError> = async {
             loop {
                 let (size, data) = expect_response!(
@@ -1547,6 +1548,14 @@ impl HostManager {
                     Response::FileChunk(c) => (c.size, c.data),
                     Response::HostFileChunk(c) => (c.size, c.data)
                 )?;
+                // Each slice reopens the source: one that changed size, or
+                // ended early, would be saved as a mix of two versions.
+                if *total.get_or_insert(size) != size || (data.is_empty() && offset < size) {
+                    return Err(CmdError::new(
+                        "io",
+                        "the file changed while it was downloaded; try again",
+                    ));
+                }
                 if data.is_empty() {
                     break;
                 }

@@ -49,9 +49,10 @@ const statIn =
 
 describe('lineCells', () => {
   it('maps text to cells past wide characters and blanks', () => {
-    const { text, cols } = lineCells(bufferLine('好 a.md', '好'))
+    const { text, cols, ends } = lineCells(bufferLine('好 a.md', '好'))
     expect(text).toBe('好 a.md')
     expect(cols).toEqual([0, 2, 3, 4, 5, 6])
+    expect(ends).toEqual([1, 2, 3, 4, 5, 6])
   })
 })
 
@@ -69,6 +70,25 @@ describe('fileLinkProvider', () => {
     expect(links![0]!.range).toEqual({ start: { x: 10, y: 1 }, end: { x: 22, y: 1 } })
     links![1]!.activate({} as MouseEvent, links![1]!.text)
     expect(opened).toEqual([{ file: app, line: 12 }])
+  })
+
+  it('covers both cells of a wide character at the end', async () => {
+    const term = termWith([bufferLine('notes/笔记 https://a.dev/记', '笔记')])
+    const notes = { path: '/w/notes/笔记', size: 1 }
+    const links = await provide(term, new FileResolver(statIn({ 'notes/笔记': notes })), 1)
+    expect(links![0]!.range).toEqual({ start: { x: 1, y: 1 }, end: { x: 10, y: 1 } })
+    let web: ILink[] | undefined
+    webLinkProvider(term, () => {}).provideLinks(1, (l) => {
+      web = l
+    })
+    expect(web![0]!.range).toEqual({ start: { x: 12, y: 1 }, end: { x: 27, y: 1 } })
+  })
+
+  it('drops the answer for a row that was redrawn meanwhile', async () => {
+    const lines = [bufferLine('see /tmp/shot.png')]
+    const links = provide(termWith(lines), new FileResolver(statIn({ '/tmp/shot.png': shot })), 1)
+    lines[0] = bufferLine('$ clear           ')
+    expect(await links).toBeUndefined()
   })
 
   it('has no links for a line without files, or one that is gone', async () => {

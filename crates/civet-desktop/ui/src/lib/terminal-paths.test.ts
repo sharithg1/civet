@@ -31,6 +31,12 @@ describe('findPathCandidates', () => {
     expect(text.slice(b!.start, b!.end)).toBe('lib/x.rs:7')
   })
 
+  it('keeps a decomposed accent in the name', () => {
+    const text = 'saved /tmp/cafe\u0301.png ok'
+    const [c] = findPathCandidates(text)
+    expect(c).toEqual({ start: 6, end: 20, path: '/tmp/cafe\u0301.png', line: null })
+  })
+
   it('drops the end of a sentence', () => {
     const text = 'It is in docs/guide.md.'
     const [c] = findPathCandidates(text)

@@ -216,21 +216,29 @@ const commands = {
   unhover: async () => p.mouse.move(0, 0)
 }
 
-// Where `text` is drawn in the visible terminal pane: the middle of its cells.
+// Where `text` is drawn in a visible terminal pane: the middle of its cells.
 async function termMouse(text, click) {
   const at = await p.evaluate(async (text) => {
     const { paneController } = await import('/src/terminal/pane-registry.ts')
-    const el = [...document.querySelectorAll('[data-pane-id]')].find((e) => e.offsetParent)
-    const term = paneController(el?.dataset.hostId, Number(el?.dataset.paneId))?.term
-    if (!term) return null
-    const buf = term.buffer.active
-    const screen = el.querySelector('.xterm-screen').getBoundingClientRect()
-    for (let row = term.rows - 1; row >= 0; row--) {
-      const col = buf.getLine(buf.viewportY + row)?.translateToString().indexOf(text) ?? -1
-      if (col < 0) continue
-      return {
-        x: screen.left + ((col + text.length / 2) * screen.width) / term.cols,
-        y: screen.top + ((row + 0.5) * screen.height) / term.rows
+    const { lineCells } = await import('/src/terminal/file-links.ts')
+    const panes = [...document.querySelectorAll('[data-pane-id]')].filter((e) => e.offsetParent)
+    for (const el of panes) {
+      const term = paneController(el.dataset.hostId, Number(el.dataset.paneId))?.term
+      if (!term) continue
+      const buf = term.buffer.active
+      const screen = el.querySelector('.xterm-screen').getBoundingClientRect()
+      for (let row = term.rows - 1; row >= 0; row--) {
+        const line = buf.getLine(buf.viewportY + row)
+        if (!line) continue
+        // String offsets are not columns: wide characters take two cells.
+        const { text: shown, cols, ends } = lineCells(line)
+        const i = shown.indexOf(text)
+        if (i < 0) continue
+        const mid = (cols[i] + ends[i + text.length - 1] + 1) / 2
+        return {
+          x: screen.left + (mid * screen.width) / term.cols,
+          y: screen.top + ((row + 0.5) * screen.height) / term.rows
+        }
       }
     }
     return null

@@ -21,7 +21,8 @@ export const MAX_CANDIDATES_PER_LINE = 6
 
 // A run of characters a path is usually printed with (no spaces, quotes or
 // brackets), then an optional `:line` / `:line:col`.
-const TOKEN = /[\p{L}\p{N}_.~/+@%-]+(?::\d+(?::\d+)?)?/gu
+// Marks too: a decomposed "é" is a letter and a combining accent.
+const TOKEN = /[\p{L}\p{M}\p{N}_.~/+@%-]+(?::\d+(?::\d+)?)?/gu
 /** `name.ext`, the extension starting with a letter (not `0.6.1`). */
 const BARE_FILE = /^[^/]*[^/.]\.[A-Za-z][A-Za-z0-9]{0,9}$/
 

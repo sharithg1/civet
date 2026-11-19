@@ -51,21 +51,26 @@ export class FileResolver {
 }
 
 /**
- * A buffer line's text and, for each UTF-16 unit of it, the cell (0-based
- * column) it is drawn in: wide characters take two cells, so string
- * indices are not columns.
+ * A buffer line's text and, for each UTF-16 unit of it, the cells (0-based
+ * columns) it is drawn in, first (`cols`) and last (`ends`): wide
+ * characters take two cells, so string indices are not columns.
  */
-export function lineCells(line: IBufferLine): { text: string; cols: number[] } {
+export function lineCells(line: IBufferLine): { text: string; cols: number[]; ends: number[] } {
   let text = ''
   const cols: number[] = []
+  const ends: number[] = []
   for (let x = 0; x < line.length; x++) {
     const cell = line.getCell(x)
-    if (!cell || cell.getWidth() === 0) continue
+    const width = cell?.getWidth() ?? 0
+    if (!cell || width === 0) continue
     const chars = cell.getChars() || ' '
     text += chars
-    for (let i = 0; i < chars.length; i++) cols.push(x)
+    for (let i = 0; i < chars.length; i++) {
+      cols.push(x)
+      ends.push(x + width - 1)
+    }
   }
-  return { text, cols }
+  return { text, cols, ends }
 }
 
 /** Links for the files named in a line, checked against the host. */
@@ -78,10 +83,13 @@ export function fileLinkProvider(
     provideLinks(y, callback) {
       const line = term.buffer.active.getLine(y - 1)
       if (!line) return callback(undefined)
-      const { text, cols } = lineCells(line)
+      const { text, cols, ends } = lineCells(line)
       const candidates = findPathCandidates(text)
       if (!candidates.length) return callback(undefined)
       void Promise.all(candidates.map((c) => resolver.resolve(c.path))).then((files) => {
+        // The row was redrawn while the host answered: these are not its links.
+        const now = term.buffer.active.getLine(y - 1)
+        if (!now || lineCells(now).text !== text) return callback(undefined)
         const links: ILink[] = []
         candidates.forEach((c, i) => {
           const file = files[i]
@@ -89,7 +97,7 @@ export function fileLinkProvider(
           links.push({
             range: {
               start: { x: cols[c.start]! + 1, y },
-              end: { x: cols[c.end - 1]! + 1, y }
+              end: { x: ends[c.end - 1]! + 1, y }
             },
             text: text.slice(c.start, c.end),
             activate: (event) => onOpen(event, { file, line: c.line })
@@ -107,11 +115,11 @@ export function webLinkProvider(term: Terminal, onOpen: (url: string) => void): 
     provideLinks(y, callback) {
       const line = term.buffer.active.getLine(y - 1)
       if (!line) return callback(undefined)
-      const { text, cols } = lineCells(line)
+      const { text, cols, ends } = lineCells(line)
       const links: ILink[] = findUrls(text).map((u) => ({
         range: {
           start: { x: cols[u.start]! + 1, y },
-          end: { x: cols[u.end - 1]! + 1, y }
+          end: { x: ends[u.end - 1]! + 1, y }
         },
         text: u.url,
         activate: () => onOpen(u.url)
