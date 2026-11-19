@@ -801,6 +801,39 @@ async fn file_ops_uploads_and_downloads() {
         "{names:?}"
     );
 
+    // A file anywhere on the host, named as a pane would: found relative
+    // to a directory, and copied into a folder without replacing anything.
+    let cwd = Some(root.display().to_string());
+    let file = m
+        .stat_host_file(h, "./big.bin".into(), cwd.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        (file.path.as_str(), file.size),
+        (root.join("big.bin").to_str().unwrap(), data.len() as u64)
+    );
+    let err = m
+        .stat_host_file(h, "nope.bin".into(), cwd.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "notFound");
+    assert!(m.is_local(h).unwrap());
+    let downloads = local.path().join("downloads");
+    for name in ["big.bin", "big (2).bin"] {
+        let got = m
+            .download_host_file(h, "big.bin".into(), cwd.clone(), &downloads)
+            .await
+            .unwrap();
+        assert_eq!(got, downloads.join(name));
+        assert!(std::fs::read(&got).unwrap() == data);
+    }
+    assert!(
+        m.download_host_file(h, "nope.bin".into(), cwd.clone(), &downloads)
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_dir(&downloads).unwrap().count(), 2);
+
     // Trash and restore.
     let t = m
         .file_op(h, wt.clone(), FileOp::Trash { path: "in".into() })

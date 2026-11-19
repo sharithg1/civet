@@ -31,6 +31,9 @@ import {
   wsKey
 } from './store'
 
+/** Oldest civetd with `ReadHostFile` (civet_proto::HOST_FILE_MIN_DAEMON_VERSION). */
+export const HOST_FILE_MIN_DAEMON_VERSION = '0.6.2'
+
 /** Oldest civetd with `FileOp` / `ReadFileChunk` (civet_proto::FILE_OPS_MIN_DAEMON_VERSION). */
 export const FILE_OPS_MIN_DAEMON_VERSION = '0.1.15'
 
@@ -51,6 +54,15 @@ export function fileOpsSupported(hostId: string): boolean {
   const v = useStore.getState().hosts[hostId]?.daemonVersion
   return !!v && versionAtLeast(v, FILE_OPS_MIN_DAEMON_VERSION)
 }
+
+/** The host's daemon can read files by host path (else panes have no file links). */
+export function hostFilesSupported(hostId: string): boolean {
+  const v = useStore.getState().hosts[hostId]?.daemonVersion
+  return !!v && versionAtLeast(v, HOST_FILE_MIN_DAEMON_VERSION)
+}
+
+/** This Mac: its files open where they are; a remote host's are downloaded first. */
+export const isLocalHost = (hostId: string) => hostId === 'local'
 
 /** Entries cut or copied in the Files tab, waiting for a paste. */
 export type FileClip = {
@@ -392,5 +404,30 @@ export async function downloadEntry(hostId: string, worktree: string, path: stri
     if (dest) pushToast({ kind: 'info', title: `Downloaded ${baseName(path)} to ${dest}` }, 4000)
   } catch (err) {
     reportError(`Could not download ${baseName(path)}`, err)
+  }
+}
+
+/**
+ * Open a file from anywhere on the host (`path` absolute there) in its
+ * default app on this Mac; from a remote host it is downloaded first.
+ */
+export async function openHostFile(hostId: string, path: string): Promise<void> {
+  const name = baseName(path)
+  try {
+    const opened = await b().openHostFile(hostId, path, null)
+    if (opened.revealed) {
+      pushToast(
+        {
+          kind: 'info',
+          title: `${name} can run, so it was shown in Finder instead of opened`,
+          body: opened.downloaded ? opened.path : undefined
+        },
+        6000
+      )
+    } else if (opened.downloaded) {
+      pushToast({ kind: 'info', title: `Downloaded ${name} to ${opened.path}` }, 4000)
+    }
+  } catch (err) {
+    reportError(`Could not open ${name}`, err)
   }
 }

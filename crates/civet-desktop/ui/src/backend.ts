@@ -40,6 +40,8 @@ import type {
   PullRequestInfo,
   DirListing,
   HostDirListing,
+  HostFile,
+  OpenedFile,
   FileList,
   FileOp,
   FileOpResult,
@@ -228,6 +230,17 @@ export interface CivetBackend {
   ): Promise<DroppedFile[]>
   /** Save a worktree file on this Mac, asking where; the chosen path, or null if cancelled. */
   downloadFile(hostId: string, worktree: WorktreeId, path: string): Promise<string | null>
+  /**
+   * The regular file at `path` anywhere on the host (absolute, `~/…`, or
+   * relative to `cwd`); `notFound` when there is none (civetd >= 0.6.2).
+   */
+  statHostFile(hostId: string, path: string, cwd: string | null): Promise<HostFile>
+  /**
+   * Open that file in its default app: where it is on This Mac, after
+   * copying it into Downloads from a remote host. Files that could run are
+   * shown in Finder instead.
+   */
+  openHostFile(hostId: string, path: string, cwd: string | null): Promise<OpenedFile>
   listPanes(hostId: string): Promise<PaneInfo[]>
   spawnPane(hostId: string, request: SpawnPaneRequest): Promise<PaneInfo>
   launchAgent(
@@ -485,6 +498,12 @@ export class TauriBackend implements CivetBackend {
     if (!dest) return null
     await this.call<number>('download_file', { hostId, worktree, path, dest })
     return dest
+  }
+  statHostFile(hostId: string, path: string, cwd: string | null) {
+    return this.call<HostFile>('stat_host_file', { hostId, path, cwd })
+  }
+  openHostFile(hostId: string, path: string, cwd: string | null) {
+    return this.call<OpenedFile>('open_host_file', { hostId, path, cwd })
   }
   listPanes(hostId: string) {
     return this.call<PaneInfo[]>('list_panes', { hostId })

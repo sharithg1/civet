@@ -465,6 +465,20 @@ pub struct FileChunk {
     pub data: Vec<u8>,
 }
 
+/// A slice of a file anywhere on the host ([`Response::HostFileChunk`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostFileChunk {
+    /// The file's canonical absolute path (`~`, `cwd` and symlinks
+    /// resolved).
+    pub path: String,
+    /// Size of the whole file in bytes.
+    pub size: u64,
+    /// Bytes from the requested offset; empty at the end of the file.
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+}
+
 /// One subdirectory in a [`HostDirListing`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1322,6 +1336,27 @@ pub enum Request {
         /// Context lines around each hunk (`-U`).
         context_lines: u32,
     },
+    /// Up to `len` bytes of a regular file anywhere on the host from
+    /// `offset` (capped at [`crate::MAX_FILE_CHUNK_BYTES`]), for opening a
+    /// file an agent named in a pane (often outside every worktree: a
+    /// screenshot in `/tmp`, a report under `~`). `len` 0 only checks that
+    /// the file exists. -> [`Response::HostFileChunk`]. Not limited to
+    /// worktrees: a client can already read any file through a pane.
+    /// `NotFound` when nothing is there, `InvalidArgument` for a directory
+    /// or other non-regular file. Clients send it only to daemons of at
+    /// least [`crate::HOST_FILE_MIN_DAEMON_VERSION`].
+    ReadHostFile {
+        /// Absolute, `~/…`, or relative to `cwd`.
+        path: String,
+        /// Absolute directory a relative `path` is resolved against (the
+        /// pane's working directory); without it a relative path is
+        /// `InvalidArgument`.
+        cwd: Option<String>,
+        /// Start, in bytes.
+        offset: u64,
+        /// Most bytes wanted.
+        len: u64,
+    },
 }
 
 /// Successful responses. Append-only.
@@ -1417,6 +1452,8 @@ pub enum Response {
     AgentUsage(crate::usage::AgentUsage),
     /// Reply to [`Request::AgentActivity`].
     AgentActivity(crate::activity::AgentActivity),
+    /// Reply to [`Request::ReadHostFile`].
+    HostFileChunk(HostFileChunk),
 }
 
 /// Error category for a failed request.

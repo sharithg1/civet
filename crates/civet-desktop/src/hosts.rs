@@ -6,7 +6,7 @@
 //! in-process daemon.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -1506,8 +1506,25 @@ impl HostManager {
         path: String,
         dest: String,
     ) -> Result<u64, CmdError> {
-        use tokio::io::AsyncWriteExt;
         self.check_daemon_version(host_id, civet_proto::FILE_OPS_MIN_DAEMON_VERSION)?;
+        self.save_chunks(host_id, &dest, |offset| Request::ReadFileChunk {
+            worktree: worktree.clone(),
+            path: path.clone(),
+            offset,
+            len: civet_proto::MAX_FILE_CHUNK_BYTES,
+        })
+        .await
+    }
+
+    /// Write the file `request(offset)` reads slice by slice to `dest`,
+    /// through a part file (see [`Self::download_file`]). The bytes written.
+    async fn save_chunks(
+        &self,
+        host_id: &str,
+        dest: &str,
+        request: impl Fn(u64) -> Request,
+    ) -> Result<u64, CmdError> {
+        use tokio::io::AsyncWriteExt;
         let io = |e: std::io::Error| CmdError::new("io", format!("{dest}: {e}"));
         // Unique and exclusive: concurrent downloads to one `dest` never
         // share (or truncate) each other's part file.
@@ -1523,21 +1540,28 @@ impl HostManager {
             .await
             .map_err(io)?;
         let mut offset = 0u64;
+        let mut total = None;
         let r: Result<u64, CmdError> = async {
             loop {
-                let request = Request::ReadFileChunk {
-                    worktree: worktree.clone(),
-                    path: path.clone(),
-                    offset,
-                    len: civet_proto::MAX_FILE_CHUNK_BYTES,
-                };
-                let chunk = expect_response!(self.request(host_id, request).await?, Response::FileChunk(c) => c)?;
-                if chunk.data.is_empty() {
+                let (size, data) = expect_response!(
+                    self.request(host_id, request(offset)).await?,
+                    Response::FileChunk(c) => (c.size, c.data),
+                    Response::HostFileChunk(c) => (c.size, c.data)
+                )?;
+                // Each slice reopens the source: one that changed size, or
+                // ended early, would be saved as a mix of two versions.
+                if *total.get_or_insert(size) != size || (data.is_empty() && offset < size) {
+                    return Err(CmdError::new(
+                        "io",
+                        "the file changed while it was downloaded; try again",
+                    ));
+                }
+                if data.is_empty() {
                     break;
                 }
-                file.write_all(&chunk.data).await.map_err(io)?;
-                offset += chunk.data.len() as u64;
-                if offset >= chunk.size {
+                file.write_all(&data).await.map_err(io)?;
+                offset += data.len() as u64;
+                if offset >= size {
                     break;
                 }
             }
@@ -1552,6 +1576,69 @@ impl HostManager {
             let _ = tokio::fs::remove_file(&part).await;
         }
         r
+    }
+
+    /// True for This Mac: the host's files are this machine's files.
+    pub fn is_local(&self, host_id: &str) -> Result<bool, CmdError> {
+        Ok(matches!(self.host(host_id)?.target, HostTarget::Local))
+    }
+
+    /// `stat_host_file`: the regular file at `path` on the host (absolute,
+    /// `~/…`, or relative to `cwd`), anywhere on it: its canonical path and
+    /// size. `notFound` when nothing is there, `invalidArgument` for a
+    /// directory.
+    pub async fn stat_host_file(
+        &self,
+        host_id: &str,
+        path: String,
+        cwd: Option<String>,
+    ) -> Result<HostFile, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::HOST_FILE_MIN_DAEMON_VERSION)?;
+        let request = Request::ReadHostFile {
+            path,
+            cwd,
+            offset: 0,
+            len: 0,
+        };
+        expect_response!(
+            self.request(host_id, request).await?,
+            Response::HostFileChunk(c) => HostFile { path: c.path, size: c.size }
+        )
+    }
+
+    /// Copy a file from anywhere on the host into `dir` on this Mac, under
+    /// its own name or "name (2).ext"… when that is taken (nothing is
+    /// replaced). A failed download leaves nothing behind. The new file.
+    pub async fn download_host_file(
+        &self,
+        host_id: &str,
+        path: String,
+        cwd: Option<String>,
+        dir: &Path,
+    ) -> Result<PathBuf, CmdError> {
+        // The canonical path: the name to save under, and the same file for
+        // every slice even if `cwd` or a symlink changes meanwhile.
+        let remote = self.stat_host_file(host_id, path, cwd).await?.path;
+        let name = Path::new(&remote)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "download".to_owned());
+        let dest = reserve_name(dir, &name).await?;
+        let r = self
+            .save_chunks(host_id, &dest.to_string_lossy(), |offset| {
+                Request::ReadHostFile {
+                    path: remote.clone(),
+                    cwd: None,
+                    offset,
+                    len: civet_proto::MAX_FILE_CHUNK_BYTES,
+                }
+            })
+            .await;
+        if let Err(e) = r {
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(e);
+        }
+        Ok(dest)
     }
 
     /// `list_panes` (also refreshes the pane cache used for notifications).
@@ -1884,6 +1971,50 @@ async fn sleep_until_opt(t: Option<Instant>) {
         Some(t) => tokio::time::sleep_until(t).await,
         None => std::future::pending().await,
     }
+}
+
+/// A regular file on a host (`stat_host_file`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostFile {
+    /// Canonical absolute path on the host.
+    pub path: String,
+    /// Size in bytes.
+    pub size: u64,
+}
+
+/// Create an empty `dir/name`, or `dir/stem (2).ext`… when taken, and
+/// return it: the name is held from here on, so two downloads of one name
+/// never collide. `dir` is created if missing.
+async fn reserve_name(dir: &Path, name: &str) -> Result<PathBuf, CmdError> {
+    let io = |e: std::io::Error| CmdError::new("io", format!("{}: {e}", dir.display()));
+    tokio::fs::create_dir_all(dir).await.map_err(io)?;
+    // Dotfiles keep their whole name before the counter.
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => name.split_at(i),
+        _ => (name, ""),
+    };
+    for n in 1..10_000u32 {
+        let candidate = if n == 1 {
+            dir.join(name)
+        } else {
+            dir.join(format!("{stem} ({n}){ext}"))
+        };
+        let created = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+            .await;
+        match created {
+            Ok(_) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io(e)),
+        }
+    }
+    Err(CmdError::new(
+        "alreadyExists",
+        format!("{}: too many files named {name}", dir.display()),
+    ))
 }
 
 /// One entry of a `prepare_file_drop` result.

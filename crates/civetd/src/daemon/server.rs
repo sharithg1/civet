@@ -616,6 +616,15 @@ impl Server {
                 .read_file_chunk(&worktree, &path, offset, len)
                 .await
                 .map(Response::FileChunk),
+            Request::ReadHostFile {
+                path,
+                cwd,
+                offset,
+                len,
+            } => s
+                .read_host_file(&path, cwd.as_deref(), offset, len)
+                .await
+                .map(Response::HostFileChunk),
             Request::ListDirs { path } => s.list_dirs(&path).await.map(Response::Dirs),
             Request::HostStats { since, processes } => {
                 return Ok(Response::HostStats(

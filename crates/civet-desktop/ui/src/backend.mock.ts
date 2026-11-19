@@ -63,6 +63,8 @@ import type {
   FileOpResult,
   FilePreview,
   HostDirListing,
+  HostFile,
+  OpenedFile,
   GitAction,
   GitBranchInfo,
   GitDiffInfo,
@@ -87,7 +89,7 @@ import type {
 } from './types'
 
 /** This app's civetd version and the older one an "old" mock host runs. */
-export const MOCK_VERSION = '0.4.6'
+export const MOCK_VERSION = '0.6.2'
 export const MOCK_OLD_VERSION = '0.1.1'
 /** A civetd with git status but without git actions (before 0.1.14). */
 export const MOCK_PRE_GIT_ACTIONS_VERSION = '0.1.13'
@@ -869,6 +871,13 @@ function mockFolderRoot(repo: string, path: string): WorktreeInfo {
 
 /** Mock daemons support file ops from this version on (like FILE_OPS_MIN_DAEMON_VERSION). */
 const MOCK_FILE_OPS_VERSION = '0.1.15'
+/** Mock daemons read files by host path from this version on (HOST_FILE_MIN_DAEMON_VERSION). */
+const MOCK_HOST_FILE_VERSION = '0.6.2'
+/** Files outside every worktree, as an agent leaves them (`stat_host_file`). */
+const MOCK_HOST_FILES: Record<string, string> = {
+  '/tmp/civet-shots/home.png': 'not really a png\n',
+  '/home/dev/report.pdf': 'not really a pdf\n'
+}
 
 /** Every mock host's home directory. */
 export const MOCK_HOME = '/home/dev'
@@ -2173,6 +2182,48 @@ export class MockBackend implements CivetBackend {
       URL.revokeObjectURL(a.href)
     }
     return `~/Downloads/${name}`
+  }
+
+  /** The file `path` names on the host and its contents, or `notFound`. */
+  private hostFile(hostId: string, path: string, cwd: string | null): [HostFile, string] {
+    this.checkFiles(hostId, MOCK_HOST_FILE_VERSION)
+    let full = path === '~' || path.startsWith('~/') ? `/home/dev${path.slice(1)}` : path
+    if (!full.startsWith('/')) {
+      if (!cwd?.startsWith('/'))
+        throw new CivetError('invalidArgument', `"${path}" is relative and there is no directory`)
+      full = `${cwd}/${full}`
+    }
+    const parts: string[] = []
+    for (const part of full.split('/')) {
+      if (part === '..') parts.pop()
+      else if (part && part !== '.') parts.push(part)
+    }
+    full = `/${parts.join('/')}`
+    let body = MOCK_HOST_FILES[full]
+    for (const wt of this.host(hostId).allWorktrees()) {
+      if (body != null || !full.startsWith(`${wt.path}/`)) continue
+      body = this.files(hostId, wt.id).files.get(full.slice(wt.path.length + 1))
+    }
+    if (body == null) throw new CivetError('notFound', `${full} not found`)
+    return [{ path: full, size: new TextEncoder().encode(body).length }, body]
+  }
+
+  async statHostFile(hostId: string, path: string, cwd: string | null): Promise<HostFile> {
+    return this.hostFile(hostId, path, cwd)[0]
+  }
+
+  /** Files "opened" so far (exported for tests). */
+  readonly opened: OpenedFile[] = []
+
+  async openHostFile(hostId: string, path: string, cwd: string | null): Promise<OpenedFile> {
+    const [file] = this.hostFile(hostId, path, cwd)
+    const name = file.path.slice(file.path.lastIndexOf('/') + 1)
+    const opened: OpenedFile =
+      hostId === 'local'
+        ? { path: file.path, downloaded: false, revealed: name.endsWith('.sh') }
+        : { path: `/Users/dev/Downloads/${name}`, downloaded: true, revealed: false }
+    this.opened.push(opened)
+    return opened
   }
 
   async listPanes(hostId: string) {

@@ -423,6 +423,106 @@ pub async fn download_file(
 }
 
 #[tauri::command]
+pub async fn stat_host_file(
+    state: State<'_, AppState>,
+    host_id: String,
+    path: String,
+    cwd: Option<String>,
+) -> Res<crate::hosts::HostFile> {
+    state.hosts.stat_host_file(&host_id, path, cwd).await
+}
+
+/// What `open_host_file` did.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedFile {
+    /// The file on this Mac.
+    pub path: String,
+    /// It was copied from a remote host (into Downloads) first.
+    pub downloaded: bool,
+    /// Shown in Finder instead of opened (see [`open_host_file`]).
+    pub revealed: bool,
+}
+
+/// Open a file an agent named in a pane (`path` absolute, `~/…`, or
+/// relative to `cwd`, on the host) in its default app. On This Mac the file
+/// is opened where it is; from a remote host it is first copied into
+/// `~/Downloads` (never replacing anything).
+///
+/// `open` runs what it is given, so nothing runnable is opened, only shown
+/// in Finder: a local file with an execute bit, and a download that could
+/// not be marked as one (`com.apple.quarantine`, which makes macOS ask
+/// before running it, like a browser's downloads; they also never carry an
+/// execute bit).
+#[tauri::command]
+pub async fn open_host_file(
+    state: State<'_, AppState>,
+    host_id: String,
+    path: String,
+    cwd: Option<String>,
+) -> Res<OpenedFile> {
+    let (local, downloaded, reveal) = if state.hosts.is_local(&host_id)? {
+        let file = state.hosts.stat_host_file(&host_id, path, cwd).await?;
+        let local = std::path::PathBuf::from(file.path);
+        let reveal = is_executable(&local);
+        (local, false, reveal)
+    } else {
+        let dir = dirs::download_dir()
+            .ok_or_else(|| CmdError::new("io", "this Mac has no Downloads folder"))?;
+        let local = state
+            .hosts
+            .download_host_file(&host_id, path, cwd, &dir)
+            .await?;
+        let reveal = !quarantine(&local).await;
+        (local, true, reveal)
+    };
+    let mut open = tokio::process::Command::new("/usr/bin/open");
+    if reveal {
+        open.arg("-R");
+    }
+    // `--`: a name starting with `-` is not an option.
+    let status = open
+        .arg("--")
+        .arg(&local)
+        .status()
+        .await
+        .map_err(|e| CmdError::new("io", format!("open: {e}")))?;
+    if !status.success() {
+        return Err(CmdError::new(
+            "io",
+            format!("open {} failed ({status})", local.display()),
+        ));
+    }
+    Ok(OpenedFile {
+        path: local.to_string_lossy().into_owned(),
+        downloaded,
+        revealed: reveal,
+    })
+}
+
+/// Any execute bit (unreadable metadata counts: better shown than run).
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).map_or(true, |m| m.permissions().mode() & 0o111 != 0)
+}
+
+/// Mark `path` as downloaded (`com.apple.quarantine`), as browsers do.
+/// False if that failed.
+async fn quarantine(path: &std::path::Path) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    // flags;time;agent;uuid. 0081: downloaded, not yet approved by the user.
+    let value = format!("0081;{now:x};Civet;");
+    tokio::process::Command::new("/usr/bin/xattr")
+        .args(["-w", "com.apple.quarantine", &value, "--"])
+        .arg(path)
+        .status()
+        .await
+        .is_ok_and(|s| s.success())
+}
+
+#[tauri::command]
 pub async fn list_panes(state: State<'_, AppState>, host_id: String) -> Res<Vec<PaneInfo>> {
     state.hosts.list_panes(&host_id).await
 }
@@ -788,6 +888,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         file_op,
         upload_to_worktree,
         download_file,
+        stat_host_file,
+        open_host_file,
         list_panes,
         spawn_pane,
         launch_agent,
@@ -832,6 +934,37 @@ mod tests {
             vec![0, b'a', 0xff, 0x80]
         );
         assert_eq!(binary_string_bytes("\u{100}"), vec![b'?']);
+    }
+
+    #[test]
+    fn executables_are_not_opened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("run");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        assert!(!is_executable(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o744)).unwrap();
+        assert!(is_executable(&file));
+        assert!(is_executable(&dir.path().join("missing")));
+    }
+
+    #[tokio::test]
+    async fn downloads_are_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("-a b.png");
+        std::fs::write(&file, "x").unwrap();
+        assert!(quarantine(&file).await);
+        let out = std::process::Command::new("/usr/bin/xattr")
+            .args(["-p", "com.apple.quarantine", "--"])
+            .arg(&file)
+            .output()
+            .unwrap();
+        let value = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            value.starts_with("0081;") && value.trim_end().ends_with(";Civet;"),
+            "{value}"
+        );
+        assert!(!quarantine(&dir.path().join("missing")).await);
     }
 
     #[test]

@@ -156,6 +156,7 @@ Design-review commands (in addition to the table above):
 | `goto <path>` | Load a URL relative to the start URL (`goto /?about` is the About window). |
 | `toasts off` / `toasts on` | Hide / show toast notifications. |
 | `scroll <dy> <selector>` | Mouse wheel over an element. |
+| `hover-term <text>` / `click-term <text>` | Hover / click text printed in the visible terminal (the last row with it), e.g. a file link after `type echo README.md /tmp/civet-shots/home.png` + `key Enter`; a click opens its menu (`menu-item Download and Open`). |
 
 ## Run (human path)
 

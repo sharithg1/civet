@@ -349,6 +349,18 @@ fn all_requests() -> Vec<Request> {
             old_path: Some("src/old.rs".into()),
             context_lines: 3,
         },
+        Request::ReadHostFile {
+            path: "shots/a.png".into(),
+            cwd: Some("/home/u/repo".into()),
+            offset: 0,
+            len: 0,
+        },
+        Request::ReadHostFile {
+            path: "~/report.pdf".into(),
+            cwd: None,
+            offset: 8 << 20,
+            len: 8 << 20,
+        },
     ]
     .into_iter()
     .chain(git_actions().into_iter().map(|action| Request::GitAction {
@@ -662,6 +674,11 @@ fn all_responses() -> Vec<Result<Response, RpcError>> {
         Ok(Response::AgentUsage(agent_usage())),
         Ok(Response::AgentActivity(agent_activity())),
         Ok(Response::AgentActivity(AgentActivity::default())),
+        Ok(Response::HostFileChunk(HostFileChunk {
+            path: "/tmp/a.png".into(),
+            size: 3,
+            data: vec![1, 2, 3],
+        })),
         Err(RpcError::not_found(PaneId(3))),
         Err(RpcError::new(ErrorCode::Git, "fatal: bad ref")),
     ]
@@ -1518,4 +1535,27 @@ fn json_struct_variant_fields_are_camel_case() {
     for r in all_responses() {
         no_snake(&serde_json::to_value(&r).unwrap(), &format!("{r:?}"));
     }
+}
+
+#[test]
+fn read_host_file_is_appended() {
+    // Appended within protocol 1 after TurnDiff (46) / AgentActivity (36).
+    let req = encode(&Request::ReadHostFile {
+        path: "a".into(),
+        cwd: None,
+        offset: 0,
+        len: 0,
+    })
+    .unwrap();
+    assert_eq!(req, vec![47, 1, b'a', 0, 0, 0]);
+    let chunk = HostFileChunk {
+        path: "/a".into(),
+        size: 1,
+        data: vec![7],
+    };
+    let resp = encode(&Response::HostFileChunk(chunk.clone())).unwrap();
+    assert_eq!(resp, vec![37, 2, b'/', b'a', 1, 1, 7]);
+    let v = serde_json::to_value(Response::HostFileChunk(chunk)).unwrap();
+    assert_eq!(v["hostFileChunk"]["path"], "/a");
+    assert_eq!(v["hostFileChunk"]["size"], 1);
 }

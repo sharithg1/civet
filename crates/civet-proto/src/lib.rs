@@ -79,8 +79,8 @@ pub use control::{
     CreatePullRequest, DaemonInfo, DirListing, ErrorCode, Event, FileChunk, FileEntry, FileKind,
     FileList, FileOp, FileOpResult, FilePreview, GitAction, GitBlobRef, GitBranchInfo,
     GitChangeKind, GitDiffInfo, GitDiscardEntry, GitDiscardSnapshot, GitFileChange, GitStatusInfo,
-    HostDir, HostDirListing, KillSignal, LaunchAgentRequest, PaneInfo, ProjectInfo, ProjectKind,
-    PullRequestCheck, PullRequestDetail, PullRequestInfo, PullRequestState, RepoInfo,
+    HostDir, HostDirListing, HostFileChunk, KillSignal, LaunchAgentRequest, PaneInfo, ProjectInfo,
+    ProjectKind, PullRequestCheck, PullRequestDetail, PullRequestInfo, PullRequestState, RepoInfo,
     RepoLifecycle, Request, Response, ReviewDecision, ReviewThread, RpcError, SpawnPaneRequest,
     StaleReason, SubscribeInfo, UpdateOutcome, UpdateStrategy, WorktreeInfo, WorktreeLifecycle,
     WorktreeSetup, WorktreeTemplate, WorktreeTemplateInfo, WorktreeUpdate,
@@ -223,7 +223,12 @@ pub const AGENT_USAGE_MIN_DAEMON_VERSION: &str = "0.4.5";
 /// [`Request::AgentUsage`]).
 pub const AGENT_ACTIVITY_MIN_DAEMON_VERSION: &str = "0.4.6";
 
-/// Largest [`Request::ReadFileChunk`] slice (headroom under the frame limit).
+/// Oldest daemon that understands [`Request::ReadHostFile`] (appended within
+/// protocol 1 after [`Request::TurnDiff`]).
+pub const HOST_FILE_MIN_DAEMON_VERSION: &str = "0.6.2";
+
+/// Largest [`Request::ReadFileChunk`] / [`Request::ReadHostFile`] slice
+/// (headroom under the frame limit).
 pub const MAX_FILE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Largest [`Request::UploadFile`] payload, and of a [`FileOp::Write`]

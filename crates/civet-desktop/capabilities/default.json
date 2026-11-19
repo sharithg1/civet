@@ -48,6 +48,8 @@
     "allow-file-op",
     "allow-upload-to-worktree",
     "allow-download-file",
+    "allow-stat-host-file",
+    "allow-open-host-file",
     "allow-list-panes",
     "allow-spawn-pane",
     "allow-launch-agent",

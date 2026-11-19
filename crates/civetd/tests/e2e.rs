@@ -844,6 +844,43 @@ async fn file_ops_round_trip() {
         (100_000, &data[60_000..])
     );
 
+    // The same file by host path: relative to a directory, a slice, a
+    // check that it exists (len 0), and what is not a regular file.
+    let host_file = |path: &str, cwd: Option<&str>, offset: u64, len: u64| Request::ReadHostFile {
+        path: path.into(),
+        cwd: cwd.map(str::to_owned),
+        offset,
+        len,
+    };
+    let root = worktree.0.clone();
+    let abs = format!("{root}/blob.bin");
+    let Response::HostFileChunk(chunk) = c
+        .request(host_file("./blob.bin", Some(&root), 60_000, 1 << 20))
+        .await
+        .unwrap()
+    else {
+        panic!("ReadHostFile")
+    };
+    assert_eq!(
+        (chunk.path.as_str(), chunk.size, chunk.data.as_slice()),
+        (abs.as_str(), 100_000, &data[60_000..])
+    );
+    let Response::HostFileChunk(chunk) = c.request(host_file(&abs, None, 0, 0)).await.unwrap()
+    else {
+        panic!("ReadHostFile")
+    };
+    assert_eq!((chunk.size, chunk.data.len()), (100_000, 0));
+    for (path, cwd, code) in [
+        ("nope.bin", Some(root.as_str()), ErrorCode::NotFound),
+        ("blob.bin/x", Some(root.as_str()), ErrorCode::NotFound),
+        ("blob.bin", None, ErrorCode::InvalidArgument),
+        ("blob.bin", Some("rel"), ErrorCode::InvalidArgument),
+        (root.as_str(), None, ErrorCode::InvalidArgument),
+    ] {
+        let err = c.request(host_file(path, cwd, 0, 0)).await.unwrap_err();
+        assert_eq!(err.code, code, "{path} {cwd:?}: {err:?}");
+    }
+
     let err = c
         .request(op(FileOp::CreateFile {
             path: "README".into(),

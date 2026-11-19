@@ -208,8 +208,47 @@ const commands = {
     p.getByText(text.join(' '), { exact: true }).first().click({ button: 'right' }),
   // Click any element by its exact visible text (nav items that aren't buttons).
   'click-text': async (...text) => p.getByText(text.join(' '), { exact: true }).first().click(),
+  // Hover / click text printed in the visible terminal (the last row that has
+  // it), e.g. a file link: `hover-term README.md`, `click-term /tmp/a.png`.
+  'hover-term': async (...text) => termMouse(text.join(' '), false),
+  'click-term': async (...text) => termMouse(text.join(' '), true),
   // Move the mouse out of the way (drops hover states and tooltips).
   unhover: async () => p.mouse.move(0, 0)
+}
+
+// Where `text` is drawn in a visible terminal pane: the middle of its cells.
+async function termMouse(text, click) {
+  const at = await p.evaluate(async (text) => {
+    const { paneController } = await import('/src/terminal/pane-registry.ts')
+    const { lineCells } = await import('/src/terminal/file-links.ts')
+    const panes = [...document.querySelectorAll('[data-pane-id]')].filter((e) => e.offsetParent)
+    for (const el of panes) {
+      const term = paneController(el.dataset.hostId, Number(el.dataset.paneId))?.term
+      if (!term) continue
+      const buf = term.buffer.active
+      const screen = el.querySelector('.xterm-screen').getBoundingClientRect()
+      for (let row = term.rows - 1; row >= 0; row--) {
+        const line = buf.getLine(buf.viewportY + row)
+        if (!line) continue
+        // String offsets are not columns: wide characters take two cells.
+        const { text: shown, cols, ends } = lineCells(line)
+        const i = shown.indexOf(text)
+        if (i < 0) continue
+        const mid = (cols[i] + ends[i + text.length - 1] + 1) / 2
+        return {
+          x: screen.left + (mid * screen.width) / term.cols,
+          y: screen.top + ((row + 0.5) * screen.height) / term.rows
+        }
+      }
+    }
+    return null
+  }, text)
+  if (!at) throw new Error(`"${text}" is not on the terminal screen`)
+  await p.mouse.move(at.x - 3, at.y)
+  await p.mouse.move(at.x, at.y)
+  // File links are checked against the host before they exist.
+  await p.waitForTimeout(250)
+  if (click) await p.mouse.click(at.x, at.y)
 }
 
 let failed = false
