@@ -243,6 +243,38 @@ describe('store', () => {
       )
     })
 
+    it('leading NAME=value words in the agent command become the pane env', async () => {
+      const spawnPane = setup()
+      setPrefs({ agentCommand: 'CODE_MODE=1 MSG="a b" claude --model opus' })
+      await store.newAgentTab('h', '/m', 'claude')
+      await store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'r',
+        branch: '',
+        base: null,
+        steps: [{ kind: 'agent', cmd: '' }],
+        prompt: 'x=1 is wrong'
+      })
+      setPrefs({ agentCommand: 'claude' })
+      const env = [
+        ['CODE_MODE', '1'],
+        ['MSG', 'a b']
+      ]
+      expect(spawnPane.mock.calls.map(([, req]) => req)).toEqual([
+        expect.objectContaining({
+          command: { program: 'claude', args: ['--model', 'opus'] },
+          env,
+          agent: 'claude'
+        }),
+        expect.objectContaining({
+          command: { program: 'claude', args: ['--model', 'opus', 'x=1 is wrong'] },
+          env,
+          agent: 'claude'
+        })
+      ])
+      expect(store.parseCommand('FOO=1')).toBeNull()
+    })
+
     it('a Codex on-create step runs codex and gets the first task', async () => {
       const spawnPane = setup()
       await store.createWorktreeWithSteps({

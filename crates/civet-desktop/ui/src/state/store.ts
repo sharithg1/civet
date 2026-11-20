@@ -1376,10 +1376,25 @@ export async function launchAgentInNewWorktree(p: {
 
 // ── v3: agent tabs, on-create steps, removal, navigation ──────────────────
 
-/** Parse a command line typed by the user ("claude --model opus"). */
-export function parseCommand(line: string): CommandSpec | null {
+export type ParsedCommand = { command: CommandSpec; env: [string, string][] }
+
+/**
+ * Parse a command line typed by the user ("claude --model opus"). Leading
+ * `NAME=value` words become the pane's environment, as in a shell
+ * ("FOO=1 claude"): the daemon execs the program directly, so they would
+ * otherwise be taken as the program name.
+ */
+export function parseCommand(line: string): ParsedCommand | null {
   const words = splitShellWords(line)
-  return words.length ? { program: words[0]!, args: words.slice(1) } : null
+  const env: [string, string][] = []
+  let i = 0
+  for (; i < words.length; i++) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(words[i]!)
+    if (!m) break
+    env.push([m[1]!, m[2]!])
+  }
+  if (i >= words.length) return null
+  return { command: { program: words[i]!, args: words.slice(i + 1) }, env }
 }
 
 /**
@@ -1400,14 +1415,15 @@ export async function newAgentTab(
 ): Promise<void> {
   if (isRemoving(hostId, worktree)) return
   try {
-    const command = parseCommand(agentCommandFor(kind))
-    if (!command) throw new Error('No agent command configured')
+    const parsed = parseCommand(agentCommandFor(kind))
+    if (!parsed) throw new Error('No agent command configured')
+    const { command, env } = parsed
     const wt = worktreesOf(hostId).find((w) => w.id === worktree)
     const pane = await backend().spawnPane(hostId, {
       worktree,
       cwd: wt?.path ?? null,
       command,
-      env: [],
+      env,
       size: DEFAULT_SPAWN_SIZE,
       title: null,
       agent: agentOf(command, kind)
@@ -1478,7 +1494,8 @@ export async function createWorktreeWithSteps(p: {
     if (!st.agent) return null
     const spec = parseCommand(st.cmd)
     if (!spec) throw new Error(`Step ${i + 1}: enter a command`)
-    return i === firstAgent && prompt ? { ...spec, args: [...spec.args, prompt] } : spec
+    if (i !== firstAgent || !prompt) return spec
+    return { ...spec, command: { ...spec.command, args: [...spec.command.args, prompt] } }
   })
 
   let worktree: WorktreeInfo
@@ -1514,14 +1531,14 @@ export async function createWorktreeWithSteps(p: {
         12_000
       )
   } else if (firstAgent >= 0) {
-    const command = specs[firstAgent]!
+    const { command, env } = specs[firstAgent]!
     const res = await backend().launchAgent(p.hostId, {
       repo: p.repo,
       branch,
       base: p.base,
       worktreePath: null,
       command,
-      env: [],
+      env,
       size: DEFAULT_SPAWN_SIZE,
       title: prompt ? prompt.slice(0, 80) : branch,
       agent: agentOf(command, steps[firstAgent]!.agent!)
@@ -1541,12 +1558,12 @@ export async function createWorktreeWithSteps(p: {
       const pane = await backend().spawnPane(p.hostId, {
         worktree: worktree.id,
         cwd: worktree.path,
-        command: st.agent ? specs[i]! : null,
-        env: [],
+        command: st.agent ? specs[i]!.command : null,
+        env: st.agent ? specs[i]!.env : [],
         size: DEFAULT_SPAWN_SIZE,
         // Like launch_agent: the first agent of a new worktree is named after it.
         title: i === firstAgent ? (prompt ? prompt.slice(0, 80) : branch || null) : null,
-        agent: st.agent ? agentOf(specs[i]!, st.agent) : null
+        agent: st.agent ? agentOf(specs[i]!.command, st.agent) : null
       })
       addPaneSnapshot(p.hostId, pane)
       opened[i] = pane.id
