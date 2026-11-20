@@ -148,6 +148,11 @@ export class PaneController {
 
     const openUrl = this.cb.onOpenUrl
     if (openUrl) {
+      // Hyperlinks the program marks itself (OSC 8, as Claude Code does for
+      // URLs and "PR #7") come before any link provider. xterm's own handler
+      // for them is confirm() + window.open(), which do nothing in the app's
+      // webview, so they open the same way as printed URLs (http(s) only).
+      this.term.options.linkHandler = { activate: (_event, uri) => openUrl(uri) }
       const links = this.term.registerLinkProvider(webLinkProvider(this.term, openUrl))
       this.cleanups.push(() => links.dispose())
     }
