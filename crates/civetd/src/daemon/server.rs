@@ -194,8 +194,15 @@ impl Server {
             }
         };
         if let Some(old) = old_conn {
-            old.sender
-                .close(close_code::REPLACED, "replaced by a newer connection");
+            // A resumed hello can only come from the session that owned
+            // `old` (nobody else has its token): tell it so, and it will
+            // not mistake a dial of its own for another client.
+            let reason = if resumed {
+                civet_transport::REPLACED_BY_RESUME
+            } else {
+                "replaced by a newer connection"
+            };
+            old.sender.close(close_code::REPLACED, reason);
         }
         tracing::info!(
             client = %client.to_hex(),

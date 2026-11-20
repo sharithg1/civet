@@ -55,13 +55,16 @@ pub trait Dialer: Send + Sync + 'static {
     }
     /// While the session is connected over a link whose kind differs from
     /// [`Dialer::kind`] (i.e. on a fallback), it calls
-    /// [`Dialer::dial_preferred`] this often to move back. None (default):
+    /// [`Dialer::dial_preferred`] again this long after the previous call
+    /// ended (asked each time, so a dialer can back off). None (default):
     /// never.
     fn upgrade_interval(&self) -> Option<Duration> {
         None
     }
     /// Dial only the preferred link (used to move back from a fallback).
-    /// Default: [`Dialer::dial`].
+    /// A non-fatal error leaves the session on the fallback; a dialer may
+    /// return one without dialing while the preferred link has not proven
+    /// itself yet (see `FailoverDialer`). Default: [`Dialer::dial`].
     fn dial_preferred(
         &self,
         hello: ClientHello,
@@ -69,16 +72,24 @@ pub trait Dialer: Send + Sync + 'static {
     ) -> BoxFuture<'_, Result<Connected, TransportError>> {
         self.dial(hello, pipelined)
     }
+    /// Check that the link is reachable without saying hello (so the daemon
+    /// keeps the session's current connection); resolves to how long the
+    /// check took. Default: `Ok(Duration::ZERO)` at once (nothing to check
+    /// with).
+    fn probe(&self) -> BoxFuture<'_, Result<Duration, TransportError>> {
+        Box::pin(std::future::ready(Ok(Duration::ZERO)))
+    }
 }
 
 /// `LinkState::Failed::reason` when the daemon closed the connection because
-/// another connection with the same `ClientId` took over (twice within
+/// another client with the same `ClientId` took over (twice within
 /// [`REPLACED_WINDOW`]); see [`TransportError::Replaced`].
 pub const REPLACED_REASON: &str =
     "taken over by another connection with the same client id (close code 3)";
 
 /// After a first "replaced" close the session redials once after this delay
-/// (the replacing connection may have been a stale dial of its own).
+/// (a takeover by another client; see [`crate::REPLACED_BY_RESUME`] for how
+/// its own dials are told apart).
 pub const REPLACED_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// A second "replaced" close within this window ends the session with
@@ -98,6 +109,65 @@ const INPUT_RETRANSMIT_BYTES: usize = 64 * 1024;
 /// Consecutive connections lost sooner than this after they were
 /// established escalate the reconnect backoff (no instant redial loops).
 const SHORT_LIVED: Duration = Duration::from_millis(500);
+
+/// Upper bound of the latency-scaled stall threshold (see
+/// [`ClientSessionConfig::stall_after`]), unless the configured floor is
+/// higher.
+pub const MAX_STALL_AFTER: Duration = Duration::from_secs(10);
+
+/// Until the session has an RTT estimate (a stream link before its first
+/// pong), the stall threshold is the configured floor times this.
+const UNMEASURED_STALL_FACTOR: u32 = 3;
+
+/// Round-trip estimate from heartbeat pings (RFC 6298 smoothing).
+#[derive(Debug, Clone, Copy)]
+struct RttEstimate {
+    srtt: Duration,
+    rttvar: Duration,
+}
+
+impl RttEstimate {
+    fn update(prev: Option<Self>, sample: Duration) -> Self {
+        match prev {
+            None => Self {
+                srtt: sample,
+                rttvar: sample / 2,
+            },
+            Some(Self { srtt, rttvar }) => Self {
+                rttvar: (rttvar * 3 + srtt.abs_diff(sample)) / 4,
+                srtt: (srtt * 7 + sample) / 8,
+            },
+        }
+    }
+}
+
+/// Stall threshold for a link with the given RTT estimates.
+///
+/// A healthy link answers a ping in one round trip, and when one packet of
+/// that exchange is lost the transport repairs it by itself after about a
+/// retransmission timeout (`srtt + 4 * rttvar`, RFC 6298 / QUIC's PTO) plus
+/// the round trip of the retransmit: `2 * srtt + 4 * rttvar` in all. Only
+/// silence beyond that says more than "this link is slow", so that is the
+/// threshold. For QUIC the connection's own smoothed RTT is used as well
+/// (it has samples before the first ping is answered); it comes without a
+/// variance, so `rttvar = srtt / 4` is assumed: `3 * rtt`.
+///
+/// `floor` (the configured `stall_after`) is the lower bound, so on a link
+/// with an RTT below about a third of it nothing changes; [`MAX_STALL_AFTER`]
+/// is the upper bound. With no estimate at all the floor is tripled.
+fn stall_threshold(
+    floor: Duration,
+    ping: Option<RttEstimate>,
+    quic_rtt: Option<Duration>,
+) -> Duration {
+    let scaled = match (ping, quic_rtt) {
+        (None, None) => floor * UNMEASURED_STALL_FACTOR,
+        (p, q) => p
+            .map_or(Duration::ZERO, |e| e.srtt * 2 + e.rttvar * 4)
+            .max(q.map_or(Duration::ZERO, |r| r * 3)),
+    };
+    scaled.max(floor).min(MAX_STALL_AFTER.max(floor))
+}
 
 /// Dials QUIC connections on a shared endpoint.
 #[derive(Debug)]
@@ -123,6 +193,10 @@ impl Dialer for QuicDialer {
 
     fn kind(&self) -> TransportKind {
         TransportKind::Quic
+    }
+
+    fn probe(&self) -> BoxFuture<'_, Result<Duration, TransportError>> {
+        Box::pin(self.client.probe(&self.config))
     }
 }
 
@@ -175,10 +249,16 @@ pub struct ClientSessionConfig {
     pub client_version: String,
     /// Send a Ping when nothing was received for this long. Default 1 s.
     pub heartbeat: Duration,
-    /// A ping unanswered for this long => `LinkState::Recovering`. Default 1 s.
+    /// Floor of the stall threshold. With a ping outstanding, nothing
+    /// received (pong or anything else) for the threshold =>
+    /// `LinkState::Recovering`. The threshold scales with the measured RTT:
+    /// `max(stall_after, 2 * srtt + 4 * rttvar, 3 * QUIC rtt)`, at most
+    /// [`MAX_STALL_AFTER`]. Default 1 s.
     pub stall_after: Duration,
     /// While Recovering for this long, dial a fresh connection in parallel
-    /// (with the resume token) and keep whichever answers first. Default 3 s.
+    /// (with the resume token) and keep whichever answers first. Scaled by
+    /// the same factor as the stall threshold (threshold / `stall_after`),
+    /// so it stays as far above it as configured. Default 3 s.
     pub race_after: Duration,
     /// Reconnect backoff schedule after a connection is lost; the last value
     /// repeats forever. Default [0, 100, 250, 500, 1000, 2000, 5000] ms.
@@ -766,6 +846,8 @@ struct Supervisor {
     ping_out: Option<(RequestId, Instant)>,
     recovering_since: Option<Instant>,
     race_at: Option<Instant>,
+    /// Round trips of answered heartbeat pings (kept across reconnects).
+    rtt: Option<RttEstimate>,
     dial: Option<DialFuture>,
     dial_generation: u64,
     attempt: usize,
@@ -812,6 +894,7 @@ impl Supervisor {
             ping_out: None,
             recovering_since: None,
             race_at: None,
+            rtt: None,
             dial: None,
             dial_generation: 0,
             attempt: 0,
@@ -862,7 +945,7 @@ impl Supervisor {
                 Some(_) => upgrade,
             };
             let t = match (self.recovering_since, self.ping_out) {
-                (None, Some((_, sent))) => sent + cfg.stall_after,
+                (None, Some((_, sent))) => sent.max(self.last_rx) + self.stall_after(),
                 (None, None) => self.last_rx + cfg.heartbeat,
                 (Some(_), _) if self.dial.is_none() => self.race_at.unwrap_or(far),
                 _ => far,
@@ -873,6 +956,22 @@ impl Supervisor {
         } else {
             far
         }
+    }
+
+    /// Current stall threshold (see [`stall_threshold`]).
+    fn stall_after(&self) -> Duration {
+        let quic_rtt = self.inner.lock().conn.as_ref().and_then(|c| c.rtt());
+        stall_threshold(self.inner.config.stall_after, self.rtt, quic_rtt)
+    }
+
+    /// `race_after`, stretched by as much as `stall` exceeds its floor.
+    fn race_after(&self, stall: Duration) -> Duration {
+        let cfg = &self.inner.config;
+        if stall <= cfg.stall_after || cfg.stall_after.is_zero() {
+            return cfg.race_after;
+        }
+        cfg.race_after
+            .mul_f64(stall.as_secs_f64() / cfg.stall_after.as_secs_f64())
     }
 
     fn connected_state(&self) -> LinkState {
@@ -945,14 +1044,24 @@ impl Supervisor {
                 return;
             }
             if self.recovering_since.is_none() {
+                // Anything received since the ping went out proves the link
+                // alive as well as its pong would.
+                let stall = self.stall_after();
                 match self.ping_out {
-                    Some((_, sent)) if now >= sent + cfg.stall_after => {
+                    Some((_, sent)) if now >= sent.max(self.last_rx) + stall => {
+                        let race = self.race_after(stall);
+                        tracing::info!(
+                            stall_ms = stall.as_millis() as u64,
+                            race_ms = race.as_millis() as u64,
+                            srtt_ms = self.rtt.map(|e| e.srtt.as_millis() as u64),
+                            "nothing received from the daemon; link stalled"
+                        );
                         self.enter_recovering("no response from daemon");
                         if let Err(e) = self.inner.dialer.rebind() {
                             tracing::warn!(error = %e, "rebind failed");
                         }
                         self.send_ping();
-                        self.race_at = Some(now + cfg.race_after);
+                        self.race_at = Some(now + race);
                     }
                     None if now >= self.last_rx + cfg.heartbeat => self.send_ping(),
                     _ => {}
@@ -988,10 +1097,17 @@ impl Supervisor {
                 self.handle_message(msg);
             }
             Ok(None) => self.on_conn_lost("connection closed by daemon".into()),
-            // Kicked off by another connection with our client id. If a dial
-            // of our own is in flight, that dial is the newer connection:
-            // just a normal loss.
-            Err(TransportError::Replaced(why)) if self.dial.is_none() => {
+            // Replaced by a dial of our own: one still in flight (it is
+            // adopted when it completes), or one the daemon accepted after
+            // the dialer gave up on it (it resumed our session, which only
+            // we can). A normal loss; redial with the resume token.
+            Err(TransportError::Replaced(why))
+                if self.dial.is_some() || why == crate::REPLACED_BY_RESUME =>
+            {
+                self.on_conn_lost(format!("replaced by a dial of this session: {why}"));
+            }
+            // Kicked off by another client with our client id.
+            Err(TransportError::Replaced(why)) => {
                 let now = Instant::now();
                 if self
                     .last_replaced
@@ -1001,7 +1117,7 @@ impl Supervisor {
                     self.fail(REPLACED_REASON.to_string(), false);
                     return;
                 }
-                tracing::warn!(%why, "connection taken over by another connection of this client");
+                tracing::warn!(%why, "connection taken over by another client with this client id");
                 self.last_replaced = Some(now);
                 self.on_conn_lost(format!("replaced: {why}"));
                 self.next_dial_at = Some(now + REPLACED_RETRY_DELAY);
@@ -1047,15 +1163,25 @@ impl Supervisor {
         }
     }
 
-    /// The stalled connection delivered something: cancel any race dial.
+    /// The stalled connection delivered something.
+    ///
+    /// A race dial in flight is left running: the daemon may already have
+    /// accepted its hello, and then it has closed this connection as
+    /// replaced and the dialed one is the only one left. Dropping the dial
+    /// here would leave the session with neither (and used to make that
+    /// close look like a takeover by another client). If the dial completes
+    /// it is adopted; if it fails the session stays on this connection.
     fn recovered_in_place(&mut self) {
+        tracing::info!(
+            stalled_ms = self
+                .recovering_since
+                .map(|t| t.elapsed().as_millis() as u64),
+            dial_in_flight = self.dial.is_some(),
+            "link recovered in place"
+        );
         self.recovering_since = None;
         self.race_at = None;
         self.ping_out = None;
-        if self.dial.take().is_some() {
-            let g = self.dial_generation;
-            self.inner.lock().pending.retain(|_, p| p.generation() != g);
-        }
         self.inner.dialer.link_trouble(None);
         self.schedule_upgrade();
         let s = self.connected_state();
@@ -1127,6 +1253,7 @@ impl Supervisor {
                 },
                 Some(Pending::Ping { sent, .. }) => {
                     let rtt = Instant::now() - sent;
+                    self.rtt = Some(RttEstimate::update(self.rtt, rtt));
                     let prev = st.ping_rtt.replace(rtt);
                     if self.ping_out.is_some_and(|(pid, _)| pid == id) {
                         self.ping_out = None;
@@ -1327,7 +1454,14 @@ impl Supervisor {
                 tracing::debug!(error = %e, attempt = self.attempt, "dial failed");
                 let now = Instant::now();
                 if self.rx.is_some() {
-                    self.race_at = Some(now + self.inner.config.race_after);
+                    // Still stalled: race again later. (Recovered in place
+                    // meanwhile: nothing to do, the connection works.)
+                    if self.recovering_since.is_some() {
+                        let race = self.race_after(self.stall_after());
+                        self.race_at = Some(now + race);
+                    } else {
+                        self.schedule_upgrade();
+                    }
                 } else {
                     self.attempt += 1;
                     self.next_dial_at = Some(now + self.inner.config.backoff_at(self.attempt));
@@ -1462,7 +1596,12 @@ impl Supervisor {
         inner.dialer.link_trouble(None);
         self.schedule_upgrade();
         let s = self.connected_state();
+        tracing::info!(state = ?s, generation, first, "connection adopted");
         inner.set_link(s);
+        if self.rtt.is_none() {
+            // Measure the round trip now instead of after the first silence.
+            self.send_ping();
+        }
     }
 
     fn fail(&mut self, reason: String, needs_bootstrap: bool) {
@@ -1513,5 +1652,66 @@ impl Supervisor {
         self.dial = None;
         self.stopped = true;
         self.inner.set_link(LinkState::Closed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
+    const FLOOR: Duration = Duration::from_secs(1);
+
+    fn est(srtt: u32, rttvar: u32) -> Option<RttEstimate> {
+        Some(RttEstimate {
+            srtt: MS * srtt,
+            rttvar: MS * rttvar,
+        })
+    }
+
+    #[test]
+    fn stall_threshold_keeps_the_floor_on_fast_links() {
+        // LAN / same-continent links: exactly the configured value.
+        assert_eq!(stall_threshold(FLOOR, est(20, 5), Some(MS * 20)), FLOOR);
+        assert_eq!(stall_threshold(FLOOR, est(150, 40), Some(MS * 150)), FLOOR);
+        assert_eq!(stall_threshold(FLOOR, None, Some(MS * 100)), FLOOR);
+    }
+
+    #[test]
+    fn stall_threshold_scales_with_latency() {
+        // The reported link: 420 ms average, spikes to 870 ms.
+        assert_eq!(
+            stall_threshold(FLOOR, est(420, 110), Some(MS * 420)),
+            MS * (2 * 420 + 4 * 110)
+        );
+        // QUIC's RTT alone (no ping answered yet): three round trips.
+        assert_eq!(stall_threshold(FLOOR, None, Some(MS * 500)), MS * 1500);
+        // The larger of the two estimates wins.
+        assert_eq!(
+            stall_threshold(FLOOR, est(100, 10), Some(MS * 600)),
+            MS * 1800
+        );
+        // Bounded above.
+        assert_eq!(
+            stall_threshold(FLOOR, est(9000, 100), None),
+            MAX_STALL_AFTER
+        );
+        // Nothing measured yet (a stream link before its first pong).
+        assert_eq!(stall_threshold(FLOOR, None, None), FLOOR * 3);
+    }
+
+    #[test]
+    fn rtt_estimate_follows_rfc_6298() {
+        let e = RttEstimate::update(None, MS * 400);
+        assert_eq!((e.srtt, e.rttvar), (MS * 400, MS * 200));
+        let e = RttEstimate::update(Some(e), MS * 800);
+        // rttvar = 3/4 * 200 + 1/4 * |400 - 800|, srtt = 7/8 * 400 + 1/8 * 800
+        assert_eq!((e.srtt, e.rttvar), (MS * 450, MS * 250));
+        // Steady samples: the variance decays, the mean converges.
+        let e = (0..40).fold(e, |e, _| RttEstimate::update(Some(e), MS * 400));
+        assert!(
+            e.srtt.abs_diff(MS * 400) < MS * 2 && e.rttvar < MS * 5,
+            "{e:?}"
+        );
     }
 }

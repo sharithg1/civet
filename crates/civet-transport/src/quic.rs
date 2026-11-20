@@ -40,6 +40,9 @@ pub const INITIAL_RTT: Duration = Duration::from_millis(100);
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the daemon waits for the client's hello.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Close reason of a client's reachability probe (handshake, then close
+/// with code 0 before any hello); see `QuicClient::probe`.
+pub const PROBE_CLOSE_REASON: &str = "probe";
 /// mosh-style default daemon UDP port range.
 pub const DEFAULT_PORT_RANGE: std::ops::RangeInclusive<u16> = 60001..=60999;
 
@@ -531,15 +534,11 @@ impl QuicClient {
         rebind_endpoint(&self.endpoint)
     }
 
-    /// Dial, pin the cert, open the control stream, send
-    /// `StreamOpen::Control` + `hello`, flush, then send each of `pipelined`
-    /// (e.g. SubscribePane requests) **before** awaiting the HelloReply.
-    pub async fn connect(
-        &self,
+    /// TLS config pinning `config.fingerprint`, and a closure that returns
+    /// the mismatch error if the pin did not match.
+    fn client_config(
         config: &QuicClientConfig,
-        hello: ClientHello,
-        pipelined: Vec<ClientMessage>,
-    ) -> Result<Connected, TransportError> {
+    ) -> Result<(quinn::ClientConfig, impl Fn() -> Option<TransportError>), TransportError> {
         let (verifier, mismatch) = PinnedVerifier::new(config.fingerprint, provider());
         let tls = |e: rustls::Error| TransportError::Tls(e.to_string());
         let mut crypto = rustls::ClientConfig::builder_with_provider(provider())
@@ -555,13 +554,53 @@ impl QuicClient {
         client_config.transport_config(Arc::new(transport_config(true)));
 
         let expected = config.fingerprint;
-        let mismatch_err = || {
+        let mismatch_err = move || {
             mismatch
                 .lock()
                 .ok()
                 .and_then(|s| *s)
                 .map(|actual| TransportError::FingerprintMismatch { expected, actual })
         };
+        Ok((client_config, mismatch_err))
+    }
+
+    /// Reachability check: the QUIC handshake (cert pinned) and nothing
+    /// else, then close with code 0 and reason [`PROBE_CLOSE_REASON`]. No
+    /// hello is sent, so the daemon's state for this client (its current
+    /// connection included) is untouched. Resolves to the handshake time
+    /// (about one round trip).
+    pub async fn probe(&self, config: &QuicClientConfig) -> Result<Duration, TransportError> {
+        let (client_config, mismatch_err) = Self::client_config(config)?;
+        let started = std::time::Instant::now();
+        let attempt = async {
+            let connecting = self
+                .endpoint
+                .connect_with(client_config, config.addr, SERVER_NAME)
+                .map_err(|e| TransportError::Quic(e.to_string()))?;
+            match connecting.await {
+                Ok(conn) => {
+                    conn.close(close_code::NORMAL.into(), PROBE_CLOSE_REASON.as_bytes());
+                    Ok(started.elapsed())
+                }
+                Err(e) => Err(mismatch_err().unwrap_or_else(|| from_conn_error(&e))),
+            }
+        };
+        match tokio::time::timeout(config.connect_timeout, attempt).await {
+            Ok(r) => r,
+            Err(_) => Err(mismatch_err().unwrap_or(TransportError::Timeout("quic probe"))),
+        }
+    }
+
+    /// Dial, pin the cert, open the control stream, send
+    /// `StreamOpen::Control` + `hello`, flush, then send each of `pipelined`
+    /// (e.g. SubscribePane requests) **before** awaiting the HelloReply.
+    pub async fn connect(
+        &self,
+        config: &QuicClientConfig,
+        hello: ClientHello,
+        pipelined: Vec<ClientMessage>,
+    ) -> Result<Connected, TransportError> {
+        let (client_config, mismatch_err) = Self::client_config(config)?;
 
         let attempt = async {
             let connecting = self

@@ -103,7 +103,10 @@ target/release/civetd bootstrap --state-dir /tmp/civet  # start detached or reat
 
 State lives in `~/.civet` (override with `--state-dir` or
 `CIVET_STATE_DIR`). UDP ports 60001–60999 (`CIVET_PORT_RANGE`), logs in
-`<state>/logs/civetd.log` when detached (`CIVET_LOG` filter).
+`<state>/logs/civetd.log` when detached (`CIVET_LOG` filter). The desktop
+app logs to stderr and to `<state>/logs/civet-desktop.log` (`~/.civet-dev`
+for debug builds; same filter): link stalls with the threshold in use,
+failovers, probes (debug) and reconnects are there.
 
 Static Linux binaries for remote hosts (`civetd-<triple>` files, the layout
 the bootstrap uploads from):

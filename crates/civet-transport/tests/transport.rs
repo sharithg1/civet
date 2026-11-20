@@ -481,3 +481,51 @@ async fn quic_server_close_ends_client() {
     );
     assert!(server.accept().await.is_none());
 }
+
+/// A probe is a handshake and nothing more: the server sees a connection
+/// that closes before any hello (recognizable, so it is not logged as a
+/// failure), and a wrong fingerprint fails the probe like a dial.
+#[tokio::test]
+async fn quic_probe_handshakes_without_a_hello() {
+    use civet_transport::{QuicServer, QuicServerConfig, ServerIdentity};
+
+    let (key, _cid) = hello_template();
+    let identity = ServerIdentity::generate().unwrap();
+    let fp = identity.fingerprint();
+    let server = QuicServer::bind(QuicServerConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        identity,
+        session_key: key,
+    })
+    .unwrap();
+    let addr: SocketAddr = format!("127.0.0.1:{}", server.local_addr().port())
+        .parse()
+        .unwrap();
+    let client = QuicClient::new(false).unwrap();
+
+    let good = QuicClientConfig::new(addr, fp);
+    let (probe, seen) = tokio::join!(client.probe(&good), async {
+        let incoming = tokio::time::timeout(T, server.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(T, incoming.handshake()).await.unwrap()
+    });
+    assert!(probe.unwrap() < T);
+    let err = seen.expect_err("no hello was sent");
+    assert!(err.is_probe_close(), "{err}");
+    assert!(!TransportError::Closed("closed by peer (code 2): x".into()).is_probe_close());
+
+    let wrong = QuicClientConfig::new(addr, CertFingerprint([7; 32]));
+    let (probe, _) = tokio::join!(client.probe(&wrong), async {
+        let incoming = tokio::time::timeout(T, server.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let _ = tokio::time::timeout(T, incoming.handshake()).await;
+    });
+    assert!(matches!(
+        probe,
+        Err(TransportError::FingerprintMismatch { .. })
+    ));
+}

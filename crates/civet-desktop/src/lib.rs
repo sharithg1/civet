@@ -7,6 +7,7 @@
 //!   records and 4 ms / 256 KiB batching.
 //! * [`predict`]: local-echo prediction.
 //! * [`linkstate`]: `LinkState` → host state ("reconnecting" after 1 s).
+//! * [`logfile`]: the app's size-capped log file under the state dir.
 //! * [`wake`]: sleep/wake and network-change detection.
 //! * [`connect`]: ssh bootstrap, QUIC with stdio-tunnel fallback, local mode.
 //! * [`forwards`]: listening-port watch and TCP port forwarding per host.
@@ -23,6 +24,7 @@ pub mod events;
 pub mod forwards;
 pub mod hosts;
 pub mod linkstate;
+pub mod logfile;
 pub mod pane;
 pub mod predict;
 pub mod records;
@@ -137,13 +139,44 @@ pub fn context<R: tauri::Runtime>() -> tauri::Context<R> {
     tauri::generate_context!()
 }
 
-fn init_logging() {
+/// Log to stderr and to `<state_dir>/logs/civet-desktop.log` (see
+/// [`logfile`]; an app launched from Finder has no stderr to read).
+/// `CIVET_LOG` filters both, default `info`.
+fn init_logging(state_dir: &std::path::Path) {
+    use tracing_subscriber::prelude::*;
+
     let filter = tracing_subscriber::EnvFilter::try_from_env("CIVET_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+    let file = logfile::CappedLog::open(state_dir, logfile::MAX_LOG_BYTES);
+    let (file, file_err) = match file {
+        Ok(f) => (Some(f), None),
+        Err(e) => (None, Some(e)),
+    };
+    let path = file.as_ref().map(|f| f.path().to_path_buf());
+    let file_layer = file.map(|f| {
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(std::sync::Mutex::new(f))
+    });
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_writer(std::io::stderr),
+        )
+        .with(file_layer)
         .try_init();
+    match (path, file_err) {
+        (Some(path), _) => tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            log = %path.display(),
+            "civet-desktop starting"
+        ),
+        (None, Some(e)) => tracing::warn!(error = %e, "no log file; logging to stderr only"),
+        (None, None) => {}
+    }
 }
 
 /// State dir of debug builds (`~/.civet-dev`, on this Mac and on remotes),
@@ -169,7 +202,8 @@ fn desktop_state_dir() -> PathBuf {
 /// # Panics
 /// If the tokio runtime cannot be created or Tauri fails to start.
 pub fn run() {
-    init_logging();
+    let state_dir = desktop_state_dir();
+    init_logging(&state_dir);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("civet-rt")
@@ -179,7 +213,6 @@ pub fn run() {
     // Commands and our background tasks share one runtime.
     tauri::async_runtime::set(handle.clone());
 
-    let state_dir = desktop_state_dir();
     // Its own id (not civet-cli's): two clients sharing an id kick each
     // other off the daemon (REPLACED) in a reconnect storm.
     let client_id = civetd::paths::load_or_create_client_id_file(

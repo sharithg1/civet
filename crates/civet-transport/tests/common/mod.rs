@@ -14,8 +14,8 @@ use civet_proto::{
     ScrollbackQuery, ServerHello, ServerMessage, SessionKey, SubscribeInfo, TermSize, UpdateKind,
 };
 use civet_transport::{
-    ClientSessionConfig, QuicServer, QuicServerConfig, ScreenStream, ServerConnection,
-    ServerIdentity, ServerIncoming, ServerSender, accept_stream,
+    ClientSessionConfig, QuicServer, QuicServerConfig, REPLACED_BY_RESUME, ScreenStream,
+    ServerConnection, ServerIdentity, ServerIncoming, ServerSender, accept_stream, close_code,
 };
 
 #[derive(Default)]
@@ -54,6 +54,18 @@ pub struct TestDaemon {
     /// Ignore (neither apply nor ack) this many next input frames, like a
     /// daemon refusing input under PTY backpressure.
     pub refuse_inputs: Mutex<u64>,
+    /// When a hello replaces a live connection: first send an event on the
+    /// old connection and wait this long, then close it. Models a stalled
+    /// link that comes back to life while the client's race dial is being
+    /// accepted.
+    pub wake_old_on_replace: Mutex<Option<Duration>>,
+    /// Close a replaced connection this long after the hello that replaced
+    /// it was answered (instead of before answering).
+    pub close_replaced_after: Mutex<Option<Duration>>,
+    /// Hellos seen (accepted or not).
+    pub hellos: AtomicU64,
+    /// Leave pings unanswered (everything else still works).
+    pub ignore_pings: AtomicBool,
 }
 
 pub fn hello_template() -> (SessionKey, ClientId) {
@@ -83,6 +95,10 @@ impl TestDaemon {
             connections: AtomicU64::new(0),
             closed_panes: Mutex::new(HashSet::new()),
             refuse_inputs: Mutex::new(0),
+            wake_old_on_replace: Mutex::new(None),
+            close_replaced_after: Mutex::new(None),
+            hellos: AtomicU64::new(0),
+            ignore_pings: AtomicBool::new(false),
         })
     }
 
@@ -159,7 +175,8 @@ impl TestDaemon {
         let hello = conn.hello().clone();
         let serial = self.serial.fetch_add(1, Ordering::SeqCst) + 1;
         self.connections.fetch_add(1, Ordering::SeqCst);
-        let (resumed, token, infos) = {
+        self.hellos.fetch_add(1, Ordering::SeqCst);
+        let (resumed, token, infos, old) = {
             let mut clients = self.clients.lock().unwrap();
             let entry = clients.entry(hello.client_id).or_default();
             let resumed = !self.reject_resume.load(Ordering::SeqCst)
@@ -168,12 +185,13 @@ impl TestDaemon {
                         || entry.prev.as_ref().is_some_and(|c| c.ct_eq(t))
                 });
             if !resumed {
+                // A fresh session: like civetd, forget the old one's tokens.
                 entry.applied.clear();
                 entry.subs.clear();
+                entry.token = None;
+                entry.prev = None;
             }
-            if let Some(old) = entry.conn.take() {
-                old.close(3, "replaced");
-            }
+            let old = entry.conn.take();
             let token = ResumeToken::generate().unwrap();
             entry.prev = entry.token.replace(token.clone());
             let states = self.pane_state.lock().unwrap();
@@ -194,8 +212,32 @@ impl TestDaemon {
             } else {
                 Vec::new()
             };
-            (resumed, token, infos)
+            (resumed, token, infos, old)
         };
+        if let Some(old) = old {
+            let wake = *self.wake_old_on_replace.lock().unwrap();
+            if let Some(wait) = wake {
+                let _ = old.send(ServerMessage::Event(Event::ReposChanged)).await;
+                tokio::time::sleep(wait).await;
+            }
+            // Like civetd: the reason says whether the newer connection
+            // resumed this client's session.
+            let reason = if resumed {
+                REPLACED_BY_RESUME
+            } else {
+                "replaced by a newer connection"
+            };
+            let later = *self.close_replaced_after.lock().unwrap();
+            match later {
+                Some(after) => {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(after).await;
+                        old.close(close_code::REPLACED, reason);
+                    });
+                }
+                None => old.close(close_code::REPLACED, reason),
+            }
+        }
         let accepted = conn
             .accept(ServerHello {
                 proto_version: civet_proto::PROTOCOL_VERSION,
@@ -224,6 +266,9 @@ impl TestDaemon {
             match item {
                 ServerIncoming::Message(ClientMessage::Request(ControlRequest { id, request })) => {
                     let result = match request {
+                        Request::Ping { .. } if self.ignore_pings.load(Ordering::SeqCst) => {
+                            continue;
+                        }
                         Request::Ping { nonce } => Ok(Response::Pong {
                             nonce,
                             server_time_ms: civet_proto::now_ms(),

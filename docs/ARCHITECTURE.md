@@ -206,7 +206,10 @@ Full. The client resends input with `seq > last_input_seq` from
 **Case 3: the link is silently dead** (no reset, no packets). The client
 heartbeat (Ping after 1 s of silence) goes unanswered → `Recovering`, rebind;
 after 3 s a second connection is dialed in parallel with the resume token,
-and whichever answers first wins.
+and whichever answers first wins. "Unanswered" is relative to the link: the
+threshold is 1 s or a few measured round trips, whichever is longer (and the
+3 s stretch with it), so a slow link (hundreds of ms of RTT with spikes) is
+not taken for a dead one.
 
 **Case 4: daemon restarted.** The hello is rejected with `BadKey` (new
 session key) → re-run bootstrap over SSH. The new `instance_id` tells the
@@ -217,7 +220,9 @@ tunnel over SSH, same protocol, same resume logic (each re-dial spawns a new
 `ssh … stdio-tunnel`, reusing the ControlMaster connection). If UDP gets
 blocked mid-session, the stalled session's re-dial fails over to the tunnel
 (resume, nothing lost); while on the tunnel it probes QUIC every 10 s and
-moves back when it works (`FailoverDialer`).
+moves back once three probes in a row were answered. If QUIC fails again
+within 5 min of a move back, the probe interval doubles (up to 2 min), so a
+link that keeps stalling is not swapped back and forth (`FailoverDialer`).
 
 ### Why the user sees nothing
 

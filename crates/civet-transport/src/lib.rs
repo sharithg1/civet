@@ -29,15 +29,17 @@ pub use conn::{
     ClientConnection, ClientReceiver, Connected, ScreenStream, ScrollbackResponder,
     ServerConnection, ServerIncoming, ServerReceiver, ServerSender, TransportKind,
 };
-pub use error::{TransportError, close_code};
+pub use error::{REPLACED_BY_RESUME, TransportError, close_code};
 pub use failover::{FailoverConfig, FailoverDialer};
 pub use quic::{
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_PORT_RANGE, HELLO_TIMEOUT, IDLE_TIMEOUT, INITIAL_RTT,
-    IncomingConnection, KEEP_ALIVE, QuicClient, QuicClientConfig, QuicServer, QuicServerConfig,
+    IncomingConnection, KEEP_ALIVE, PROBE_CLOSE_REASON, QuicClient, QuicClientConfig, QuicServer,
+    QuicServerConfig,
 };
 pub use session::{
-    ClientSession, ClientSessionConfig, Dialer, LinkState, QuicDialer, REPLACED_REASON,
-    REPLACED_RETRY_DELAY, REPLACED_WINDOW, RequestError, SessionEvent, StreamDialer,
+    ClientSession, ClientSessionConfig, Dialer, LinkState, MAX_STALL_AFTER, QuicDialer,
+    REPLACED_REASON, REPLACED_RETRY_DELAY, REPLACED_WINDOW, RequestError, SessionEvent,
+    StreamDialer,
 };
 pub use stream::{STREAM_CONNECT_TIMEOUT, accept_stream, connect_stream};
 pub use tunnel::{FORWARD_REPLY_TIMEOUT, ForwardRequest, PortsSink, PortsWatch, Tunnel};
