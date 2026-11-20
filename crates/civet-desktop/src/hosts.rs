@@ -911,17 +911,55 @@ impl HostManager {
     }
 
     /// `list_repos`: every project (`ListProjects`), or only repositories
-    /// on a daemon older than [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`].
+    /// on a daemon older than [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`],
+    /// followed by the floating workspaces (daemons of at least
+    /// [`civet_proto::WORKSPACES_MIN_DAEMON_VERSION`]).
     pub async fn list_repos(&self, host_id: &str) -> Result<Vec<RepoView>, CmdError> {
-        if self.daemon_at_least(host_id, civet_proto::PROJECTS_MIN_DAEMON_VERSION)? {
+        if !self.daemon_at_least(host_id, civet_proto::PROJECTS_MIN_DAEMON_VERSION)? {
             return expect_response!(
-                self.request(host_id, Request::ListProjects).await?,
-                Response::Projects(p) => p.into_iter().map(RepoView::from).collect()
+                self.request(host_id, Request::ListRepos).await?,
+                Response::Repos(r) => r.into_iter().map(RepoView::git).collect()
             );
         }
+        let mut repos: Vec<RepoView> = expect_response!(
+            self.request(host_id, Request::ListProjects).await?,
+            Response::Projects(p) => p.into_iter().map(RepoView::from).collect()
+        )?;
+        if self.daemon_at_least(host_id, civet_proto::WORKSPACES_MIN_DAEMON_VERSION)? {
+            let workspaces: Vec<civet_proto::WorkspaceInfo> = expect_response!(
+                self.request(host_id, Request::ListWorkspaces).await?,
+                Response::Workspaces(w) => w
+            )?;
+            repos.extend(workspaces.into_iter().map(RepoView::from));
+        }
+        Ok(repos)
+    }
+
+    /// `create_workspace`: a floating workspace with these roots.
+    pub async fn create_workspace(
+        &self,
+        host_id: &str,
+        name: String,
+        roots: Vec<String>,
+    ) -> Result<RepoView, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKSPACES_MIN_DAEMON_VERSION)?;
         expect_response!(
-            self.request(host_id, Request::ListRepos).await?,
-            Response::Repos(r) => r.into_iter().map(RepoView::git).collect()
+            self.request(host_id, Request::CreateWorkspace { name, roots }).await?,
+            Response::Workspace(w) => w.into()
+        )
+    }
+
+    /// `set_workspace_roots`: replace a workspace's roots.
+    pub async fn set_workspace_roots(
+        &self,
+        host_id: &str,
+        workspace: civet_proto::RepoId,
+        roots: Vec<String>,
+    ) -> Result<RepoView, CmdError> {
+        self.check_daemon_version(host_id, civet_proto::WORKSPACES_MIN_DAEMON_VERSION)?;
+        expect_response!(
+            self.request(host_id, Request::SetWorkspaceRoots { workspace, roots }).await?,
+            Response::Workspace(w) => w.into()
         )
     }
 

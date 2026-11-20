@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Folder, Keyboard, Search, Server, Settings } from 'lucide-react'
 import {
   disconnectHost,
+  isFolderRepo,
   reconnectHost,
   requestRemoveProject,
   requestRestartDaemon,
@@ -473,7 +474,7 @@ function ProjectsPage() {
           (repos[h] ?? []).map((r) => {
             const saved = steps[`${h}\u0000${r.id}`]
             const key = `${h}:${r.id}`
-            const templates = r.kind !== 'folder' && hasWorktreeTemplates(h)
+            const templates = !isFolderRepo(r) && hasWorktreeTemplates(h)
             return (
               <div key={key}>
                 <div className="flex items-center gap-3 px-1 py-3">
@@ -485,10 +486,12 @@ function ProjectsPage() {
                     </div>
                     <div className="truncate font-mono text-xs text-faint">
                       {r.path} ·{' '}
-                      {r.kind === 'folder' ? 'folder' : `default ${r.defaultBranch ?? 'HEAD'}`}
+                      {isFolderRepo(r)
+                        ? (r.kind ?? 'folder')
+                        : `default ${r.defaultBranch ?? 'HEAD'}`}
                     </div>
                   </div>
-                  {r.kind === 'folder' ? (
+                  {isFolderRepo(r) ? (
                     <div className="text-xs text-muted-foreground">no git</div>
                   ) : (
                     <div

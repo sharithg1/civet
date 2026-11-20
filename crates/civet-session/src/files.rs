@@ -6,6 +6,10 @@
 //! canonicalizes (resolving symlinks) and checks the result is still under
 //! the root. [`read_file`] checks again on the opened file, so a path swapped
 //! for a symlink after `resolve` cannot make it read outside the worktree.
+//!
+//! A floating workspace's directory holds links to its roots, which are
+//! elsewhere on the host by design: its [`Scope`] also admits paths that
+//! resolve inside one of those roots.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -23,11 +27,71 @@ use crate::git::Git;
 /// Binary detection looks for a NUL byte in this many leading bytes.
 const BINARY_SNIFF_BYTES: usize = 8192;
 
-/// `rel` (relative to `root`, which must be canonical) as a canonical path
-/// inside `root`. InvalidArgument for absolute paths, `..` components and
-/// anything whose canonical path (symlinks resolved) leaves `root`;
-/// NotFound if it does not exist.
-pub(crate) fn resolve(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
+/// Where a file request may reach: a worktree's directory and, for a
+/// floating workspace, the roots its links lead to. All paths canonical.
+#[derive(Debug, Clone)]
+pub(crate) struct Scope {
+    /// The directory request paths are relative to.
+    pub root: PathBuf,
+    /// A workspace's roots by link name (those that exist).
+    links: Vec<(String, PathBuf)>,
+    workspace: bool,
+}
+
+impl Scope {
+    /// A worktree (or folder project): nothing outside `root`.
+    pub(crate) fn worktree(root: &Path) -> Result<Self, SessionError> {
+        Ok(Self {
+            root: canonical_root(root)?,
+            links: Vec::new(),
+            workspace: false,
+        })
+    }
+
+    /// A floating workspace's directory with its roots (link name, path).
+    pub(crate) fn workspace(
+        root: &Path,
+        links: Vec<(String, PathBuf)>,
+    ) -> Result<Self, SessionError> {
+        Ok(Self {
+            root: canonical_root(root)?,
+            links: links
+                .into_iter()
+                .filter_map(|(name, path)| Some((name, std::fs::canonicalize(path).ok()?)))
+                .collect(),
+            workspace: true,
+        })
+    }
+
+    /// The root, or workspace root, that the canonical path `canon` is in.
+    fn base_of(&self, canon: &Path) -> Option<&Path> {
+        if canon.starts_with(&self.root) {
+            return Some(&self.root);
+        }
+        self.links
+            .iter()
+            .map(|(_, l)| l.as_path())
+            .find(|l| canon.starts_with(l))
+    }
+
+    pub(crate) fn holds(&self, canon: &Path) -> bool {
+        self.base_of(canon).is_some()
+    }
+
+    /// `canon` relative to the root it is in (empty if in none).
+    pub(crate) fn inside<'a>(&self, canon: &'a Path) -> &'a Path {
+        self.base_of(canon)
+            .and_then(|base| canon.strip_prefix(base).ok())
+            .unwrap_or(Path::new(""))
+    }
+}
+
+/// `rel` (relative to the scope's root) as a canonical path inside the
+/// scope. InvalidArgument for absolute paths, `..` components and anything
+/// whose canonical path (symlinks resolved) leaves the scope; NotFound if
+/// it does not exist.
+pub(crate) fn resolve(scope: &Scope, rel: &str) -> Result<PathBuf, SessionError> {
+    let root = &scope.root;
     let outside = || SessionError::InvalidArgument(format!("{rel:?} is outside the worktree"));
     if rel.contains('\0') {
         return Err(outside());
@@ -46,14 +110,14 @@ pub(crate) fn resolve(root: &Path, rel: &str) -> Result<PathBuf, SessionError> {
         std::io::ErrorKind::NotFound => SessionError::NotFound(format!("{rel:?}")),
         _ => SessionError::Io(e),
     })?;
-    if canon.starts_with(root) {
+    if scope.holds(&canon) {
         Ok(canon)
     } else {
         Err(outside())
     }
 }
 
-pub(crate) fn canonical_root(root: &Path) -> Result<PathBuf, SessionError> {
+fn canonical_root(root: &Path) -> Result<PathBuf, SessionError> {
     std::fs::canonicalize(root)
         .map_err(|_| SessionError::NotFound(format!("worktree directory {}", root.display())))
 }
@@ -70,15 +134,16 @@ pub(crate) async fn blocking<T: Send + 'static>(
 /// at most [`MAX_DIR_ENTRIES`]. Gitignored entries (one `git check-ignore
 /// --stdin` call; tracked files are never reported as ignored) are left
 /// out unless `include_ignored`. `.git` is never listed. Without `git` (a
-/// folder project) nothing is ignored.
+/// folder project) nothing is ignored. In a workspace, git is only asked
+/// inside a root, and a root that is no repository ignores nothing; links
+/// to directory roots are listed as directories.
 pub(crate) async fn list_dir(
     git: Option<&Git>,
-    root: &Path,
+    scope: &Scope,
     dir: &str,
     include_ignored: bool,
 ) -> Result<DirListing, SessionError> {
-    let root = canonical_root(root)?;
-    let target = resolve(&root, dir)?;
+    let target = resolve(scope, dir)?;
     if !target.is_dir() {
         return Err(SessionError::InvalidArgument(format!(
             "{dir:?} is not a directory"
@@ -86,6 +151,14 @@ pub(crate) async fn list_dir(
     }
     let dir_path = target.clone();
     let mut entries = blocking(move || read_entries(&dir_path)).await?;
+    if target == scope.root {
+        for e in &mut entries {
+            let root_dir = |(name, path): &(String, PathBuf)| *name == e.name && path.is_dir();
+            if e.kind == FileKind::Symlink && scope.links.iter().any(root_dir) {
+                (e.kind, e.size) = (FileKind::Dir, 0);
+            }
+        }
+    }
 
     // Bare names, checked from the directory itself: that is also right
     // inside a submodule or nested repository, which has its own rules.
@@ -95,6 +168,10 @@ pub(crate) async fn list_dir(
         stdin.push(0);
     }
     let ignored = match git {
+        Some(_) if scope.workspace && target.starts_with(&scope.root) => HashSet::new(),
+        Some(git) if scope.workspace => {
+            ignored_paths(git, &target, stdin).await.unwrap_or_default()
+        }
         Some(git) => ignored_paths(git, &target, stdin).await?,
         None => HashSet::new(),
     };
@@ -224,14 +301,13 @@ async fn ignored_paths(
 /// The first `max_bytes` (at most [`MAX_FILE_PREVIEW_BYTES`]) of a regular
 /// file. Binary if a NUL byte is in the first 8 KiB (no text then).
 pub(crate) async fn read_file(
-    root: &Path,
+    scope: Scope,
     path: &str,
     max_bytes: u64,
 ) -> Result<FilePreview, SessionError> {
-    let root = canonical_root(root)?;
     let path = path.to_owned();
     blocking(move || {
-        let (file, meta) = open_regular(&root, &path)?;
+        let (file, meta) = open_regular(&scope, &path)?;
         let cap = max_bytes.min(MAX_FILE_PREVIEW_BYTES);
         let mut buf = Vec::new();
         // One byte past the cap tells whether there is more.
@@ -253,14 +329,13 @@ pub(crate) async fn read_file(
     .await
 }
 
-/// A regular file inside `root` (canonical), opened for reading, with its
-/// metadata.
+/// A regular file inside the scope, opened for reading, with its metadata.
 fn open_regular(
-    root: &Path,
+    scope: &Scope,
     path: &str,
 ) -> Result<(std::fs::File, std::fs::Metadata), SessionError> {
     let outside = || SessionError::InvalidArgument(format!("{path:?} is outside the worktree"));
-    let resolved = resolve(root, path)?;
+    let resolved = resolve(scope, path)?;
     // Open once and check the handle from then on: O_NOFOLLOW refuses a
     // final symlink (the resolved path has none), O_NONBLOCK keeps a
     // fifo from blocking the open.
@@ -273,7 +348,7 @@ fn open_regular(
             _ => SessionError::Io(e),
         })?;
     // A directory on the way swapped for a symlink since `resolve`.
-    if !crate::sys::fd_path(&file)?.starts_with(root) {
+    if !scope.holds(&crate::sys::fd_path(&file)?) {
         return Err(outside());
     }
     let meta = file.metadata()?;
@@ -289,16 +364,15 @@ fn open_regular(
 /// Up to `len` bytes (at most [`MAX_FILE_CHUNK_BYTES`]) of a regular file
 /// from `offset`, for downloads. Same path rules as [`read_file`].
 pub(crate) async fn read_chunk(
-    root: &Path,
+    scope: Scope,
     path: &str,
     offset: u64,
     len: u64,
 ) -> Result<FileChunk, SessionError> {
     use std::io::{Seek, SeekFrom};
-    let root = canonical_root(root)?;
     let path = path.to_owned();
     blocking(move || {
-        let (mut file, meta) = open_regular(&root, &path)?;
+        let (mut file, meta) = open_regular(&scope, &path)?;
         file.seek(SeekFrom::Start(offset))?;
         let mut data = Vec::new();
         file.take(len.min(MAX_FILE_CHUNK_BYTES))
@@ -371,26 +445,57 @@ fn decode_text(buf: &[u8], truncated: bool) -> String {
 
 /// Tracked and untracked, not ignored files (`git ls-files -z -co
 /// --exclude-standard`), sorted, at most [`MAX_ALL_FILES`]. Without `git` (a
-/// folder project): every file under `root` ([`walk`]).
-pub(crate) async fn list_all(git: Option<&Git>, root: &Path) -> Result<FileList, SessionError> {
-    let root = canonical_root(root)?;
+/// folder project): every file under `root` ([`walk`]). A workspace: the
+/// files of its directory, then those of each directory root under its link
+/// name (git's list if the root is in a repository, else a walk).
+pub(crate) async fn list_all(git: Option<&Git>, scope: &Scope) -> Result<FileList, SessionError> {
+    let root = scope.root.clone();
+    let walk_all = |dir: PathBuf| blocking(move || walk(&dir, MAX_ALL_FILES + 1));
     let Some(git) = git else {
-        return blocking(move || walk(&root, MAX_ALL_FILES + 1)).await;
+        return walk_all(root).await;
     };
+    if !scope.workspace {
+        let paths = git_files(git, &root).await?;
+        return Ok(capped(paths));
+    }
+    let dir_roots: Vec<&(String, PathBuf)> =
+        scope.links.iter().filter(|(_, p)| p.is_dir()).collect();
+    // The walk lists a link as a file: right for a file root only.
+    let mut paths = walk_all(root).await?.paths;
+    paths.retain(|p| !dir_roots.iter().any(|(name, _)| name == p));
+    for (name, path) in dir_roots {
+        if paths.len() > MAX_ALL_FILES {
+            break;
+        }
+        let inner = match git_files(git, path).await {
+            Ok(files) => files,
+            Err(_) => walk_all(path.clone()).await?.paths,
+        };
+        paths.extend(inner.into_iter().map(|p| format!("{name}/{p}")));
+    }
+    Ok(capped(paths))
+}
+
+/// `git ls-files -z -co --exclude-standard` in `dir`.
+async fn git_files(git: &Git, dir: &Path) -> Result<Vec<String>, SessionError> {
     let out = git
-        .run(&root, &["ls-files", "-z", "-co", "--exclude-standard"])
+        .run(dir, &["ls-files", "-z", "-co", "--exclude-standard"])
         .await?;
-    let mut paths: Vec<String> = out
+    Ok(out
         .split('\0')
         .filter(|p| !p.is_empty())
         .map(str::to_owned)
-        .collect();
-    // Unmerged files are listed once per stage.
+        .collect())
+}
+
+/// Sorted, without repeats (unmerged files are listed once per stage), at
+/// most [`MAX_ALL_FILES`].
+fn capped(mut paths: Vec<String>) -> FileList {
     paths.sort_unstable();
     paths.dedup();
     let truncated = paths.len() > MAX_ALL_FILES;
     paths.truncate(MAX_ALL_FILES);
-    Ok(FileList { paths, truncated })
+    FileList { paths, truncated }
 }
 
 /// Files and symlinks under `root` (directories walked breadth first,
@@ -448,15 +553,20 @@ mod tests {
         std::os::unix::fs::symlink(base.join("secret"), root.join("out")).unwrap();
         std::os::unix::fs::symlink(&base, root.join("up")).unwrap();
         std::os::unix::fs::symlink("src/a.rs", root.join("in")).unwrap();
-
-        assert_eq!(resolve(&root, "").unwrap(), root);
-        assert_eq!(resolve(&root, ".").unwrap(), root);
-        assert_eq!(resolve(&root, "src/a.rs").unwrap(), root.join("src/a.rs"));
+        let root_path = root.clone();
+        let root = Scope::worktree(&root_path).unwrap();
+        let root = &root;
+        assert_eq!(resolve(root, "").unwrap(), root_path);
+        assert_eq!(resolve(root, ".").unwrap(), root_path);
         assert_eq!(
-            resolve(&root, "./src//a.rs").unwrap(),
-            root.join("src/a.rs")
+            resolve(root, "src/a.rs").unwrap(),
+            root_path.join("src/a.rs")
         );
-        assert_eq!(resolve(&root, "in").unwrap(), root.join("src/a.rs"));
+        assert_eq!(
+            resolve(root, "./src//a.rs").unwrap(),
+            root_path.join("src/a.rs")
+        );
+        assert_eq!(resolve(root, "in").unwrap(), root_path.join("src/a.rs"));
         for bad in [
             "..",
             "../secret",
@@ -470,14 +580,40 @@ mod tests {
             "src\0",
         ] {
             assert!(
-                matches!(resolve(&root, bad), Err(SessionError::InvalidArgument(_))),
+                matches!(resolve(root, bad), Err(SessionError::InvalidArgument(_))),
                 "{bad:?} must be rejected"
             );
         }
         assert!(matches!(
-            resolve(&root, "missing"),
+            resolve(root, "missing"),
             Err(SessionError::NotFound(_))
         ));
+
+        // A workspace reaches its roots through its links, and nothing else.
+        std::fs::create_dir(base.join("repo")).unwrap();
+        std::fs::write(base.join("repo/f"), "f").unwrap();
+        std::os::unix::fs::symlink(base.join("repo"), root_path.join("repo")).unwrap();
+        assert!(resolve(root, "repo/f").is_err());
+        let links = vec![
+            ("repo".to_owned(), base.join("repo")),
+            ("out".to_owned(), base.join("secret")),
+            ("gone".to_owned(), base.join("gone")),
+        ];
+        let ws = Scope::workspace(&root_path, links).unwrap();
+        assert_eq!(resolve(&ws, "repo/f").unwrap(), base.join("repo/f"));
+        assert_eq!(resolve(&ws, "out").unwrap(), base.join("secret"));
+        assert_eq!(
+            resolve(&ws, "src/a.rs").unwrap(),
+            root_path.join("src/a.rs")
+        );
+        assert_eq!(ws.inside(&base.join("repo/f")), Path::new("f"));
+        std::fs::write(base.join("other"), "o").unwrap();
+        for bad in ["up", "up/other", "..", "repo/../../secret"] {
+            assert!(
+                matches!(resolve(&ws, bad), Err(SessionError::InvalidArgument(_))),
+                "{bad:?} must be rejected"
+            );
+        }
     }
 
     #[test]

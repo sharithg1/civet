@@ -45,6 +45,7 @@ mod subscription;
 mod sys;
 mod templates;
 mod watch;
+mod workspaces;
 
 use std::path::PathBuf;
 use std::time::Duration;

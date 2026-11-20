@@ -565,7 +565,7 @@ async fn stream_link_repos_worktrees_and_agents() {
         .add_repo(h, repo_dir.path().display().to_string())
         .await
         .unwrap();
-    assert_eq!(repo.kind, civet_proto::ProjectKind::Git);
+    assert_eq!(repo.kind, civet_desktop::events::RepoKind::Git);
     let repo = repo.repo;
     assert_eq!(m.list_repos(h).await.unwrap().len(), 1);
     // Folder completion: subdirectories, nested repositories flagged.
@@ -656,7 +656,7 @@ async fn folder_projects_through_the_commands() {
         .add_repo(h, dir.path().display().to_string())
         .await
         .unwrap();
-    assert_eq!(folder.kind, civet_proto::ProjectKind::Folder);
+    assert_eq!(folder.kind, civet_desktop::events::RepoKind::Folder);
     let json = serde_json::to_value(&folder).unwrap();
     assert_eq!(json["kind"], "folder");
     assert_eq!(json["defaultBranch"], serde_json::Value::Null);
@@ -672,6 +672,68 @@ async fn folder_projects_through_the_commands() {
     assert_eq!(pane.worktree, Some(wts[0].id.clone()));
     m.remove_repo(h, folder.repo.id).await.unwrap();
     assert!(m.list_repos(h).await.unwrap().is_empty());
+    m.disconnect_host(h).await.unwrap();
+}
+
+/// A floating workspace through the commands: listed after the projects
+/// as `kind: "workspace"` with its roots, browsed through its links, its
+/// roots replaced, and removed like a project.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspaces_through_the_commands() {
+    let rig = Rig::new(fast()).await;
+    let m = &rig.mgr;
+    let h = "local";
+    m.connect_host(HostTarget::Local, TransportChoice::Ssh)
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(root.join("notes")).unwrap();
+    std::fs::write(root.join("notes/a.md"), "# hi\n").unwrap();
+    std::fs::write(root.join("todo.md"), "- x\n").unwrap();
+    let path = |p: &str| root.join(p).display().to_string();
+    let folder = m.add_repo(h, path("notes")).await.unwrap();
+    let ws = m
+        .create_workspace(h, "adhoc".into(), vec![path("notes")])
+        .await
+        .unwrap();
+    assert_eq!(ws.kind, civet_desktop::events::RepoKind::Workspace);
+    let json = serde_json::to_value(&ws).unwrap();
+    assert_eq!(json["kind"], "workspace");
+    assert_eq!(json["name"], "adhoc");
+    assert_eq!(json["roots"][0]["name"], "notes");
+    assert_eq!(json["roots"][0]["isDir"], true);
+    assert!(
+        serde_json::to_value(&folder)
+            .unwrap()
+            .get("roots")
+            .is_none()
+    );
+    assert_eq!(
+        m.list_repos(h).await.unwrap(),
+        vec![folder.clone(), ws.clone()]
+    );
+    let ws = m
+        .set_workspace_roots(h, ws.repo.id.clone(), vec![path("notes"), path("todo.md")])
+        .await
+        .unwrap();
+    assert_eq!(ws.roots.as_ref().unwrap().len(), 2);
+    let wts = m.list_worktrees(h, ws.repo.id.clone()).await.unwrap();
+    assert_eq!(wts.len(), 1);
+    assert_eq!(wts[0].path, ws.repo.path);
+    let files = m.list_all_files(h, wts[0].id.clone()).await.unwrap();
+    assert_eq!(files.paths, ["notes/a.md", "todo.md"]);
+    let mut req = shell_pane("true");
+    req.worktree = Some(wts[0].id.clone());
+    let pane = m.spawn_pane(h, req).await.unwrap();
+    assert_eq!(pane.worktree, Some(wts[0].id.clone()));
+    let err = m
+        .create_workspace(h, "adhoc".into(), vec![])
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "alreadyExists");
+    m.remove_repo(h, ws.repo.id).await.unwrap();
+    assert_eq!(m.list_repos(h).await.unwrap(), vec![folder]);
     m.disconnect_host(h).await.unwrap();
 }
 

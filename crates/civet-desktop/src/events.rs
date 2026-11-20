@@ -139,24 +139,61 @@ impl DaemonUpgrade {
     }
 }
 
+/// What a [`RepoView`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepoKind {
+    /// A git repository.
+    Git,
+    /// A plain folder project.
+    Folder,
+    /// A floating workspace ([`civet_proto::WorkspaceInfo`]).
+    Workspace,
+}
+
 /// `list_repos` / `add_repo` result: a project as the UI sees it, the proto
-/// `RepoInfo` plus its kind (`"git"` / `"folder"`). Daemons older than
-/// [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`] only have repositories.
+/// `RepoInfo` plus its kind (`"git"` / `"folder"` / `"workspace"`). Daemons
+/// older than [`civet_proto::PROJECTS_MIN_DAEMON_VERSION`] only have
+/// repositories, and those older than
+/// [`civet_proto::WORKSPACES_MIN_DAEMON_VERSION`] no workspaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoView {
-    /// Id, name, path, default branch.
+    /// Id, name, path, default branch. For a workspace: its id, name and
+    /// directory, no default branch.
     #[serde(flatten)]
     pub repo: civet_proto::RepoInfo,
-    /// Repository or plain folder.
-    pub kind: civet_proto::ProjectKind,
+    /// Repository, plain folder or workspace.
+    pub kind: RepoKind,
+    /// A workspace's roots; absent for the other kinds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<Vec<civet_proto::WorkspaceRoot>>,
 }
 
 impl From<civet_proto::ProjectInfo> for RepoView {
     fn from(p: civet_proto::ProjectInfo) -> Self {
         Self {
             repo: p.repo,
-            kind: p.kind,
+            kind: match p.kind {
+                civet_proto::ProjectKind::Git => RepoKind::Git,
+                civet_proto::ProjectKind::Folder => RepoKind::Folder,
+            },
+            roots: None,
+        }
+    }
+}
+
+impl From<civet_proto::WorkspaceInfo> for RepoView {
+    fn from(w: civet_proto::WorkspaceInfo) -> Self {
+        Self {
+            repo: civet_proto::RepoInfo {
+                id: w.id,
+                name: w.name,
+                path: w.path,
+                default_branch: None,
+            },
+            kind: RepoKind::Workspace,
+            roots: Some(w.roots),
         }
     }
 }
@@ -166,7 +203,8 @@ impl RepoView {
     pub fn git(repo: civet_proto::RepoInfo) -> Self {
         Self {
             repo,
-            kind: civet_proto::ProjectKind::Git,
+            kind: RepoKind::Git,
+            roots: None,
         }
     }
 }

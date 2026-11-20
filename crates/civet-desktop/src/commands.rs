@@ -112,6 +112,29 @@ pub async fn remove_repo(state: State<'_, AppState>, host_id: String, repo: Repo
 }
 
 #[tauri::command]
+pub async fn create_workspace(
+    state: State<'_, AppState>,
+    host_id: String,
+    name: String,
+    roots: Vec<String>,
+) -> Res<RepoView> {
+    state.hosts.create_workspace(&host_id, name, roots).await
+}
+
+#[tauri::command]
+pub async fn set_workspace_roots(
+    state: State<'_, AppState>,
+    host_id: String,
+    workspace: RepoId,
+    roots: Vec<String>,
+) -> Res<RepoView> {
+    state
+        .hosts
+        .set_workspace_roots(&host_id, workspace, roots)
+        .await
+}
+
+#[tauri::command]
 pub async fn prepare_file_drop(
     state: State<'_, AppState>,
     host_id: String,
@@ -862,6 +885,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         list_repos,
         add_repo,
         remove_repo,
+        create_workspace,
+        set_workspace_roots,
         list_dirs,
         host_stats,
         agent_usage,

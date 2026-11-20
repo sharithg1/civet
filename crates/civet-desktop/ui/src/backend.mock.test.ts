@@ -158,6 +158,104 @@ describe('MockBackend', () => {
     ])
   })
 
+  it('has floating workspaces: links to roots, sessions, no git, roots replaced', async () => {
+    const { b } = await connected()
+    const events: DaemonEvent[] = []
+    await b.onDaemonEvent((e: DaemonEventEnvelope) => events.push(e.event))
+    const before = (await b.listRepos('devbox')).length
+    const ws = await b.createWorkspace('devbox', ' Release notes ', [
+      '~/src/civet',
+      '/home/dev/src/orca/',
+      '~/notes/todo.md',
+      '~/src/civet'
+    ])
+    expect(ws).toMatchObject({
+      kind: 'workspace',
+      name: 'Release notes',
+      path: '/home/dev/.civet/workspaces/release-notes',
+      defaultBranch: null
+    })
+    expect(ws.roots).toEqual([
+      { path: '/home/dev/src/civet', name: 'civet', isDir: true, missing: false },
+      { path: '/home/dev/src/orca', name: 'orca', isDir: true, missing: false },
+      { path: '/home/dev/notes/todo.md', name: 'todo.md', isDir: false, missing: false }
+    ])
+    expect(events).toContain('reposChanged')
+    const repos = await b.listRepos('devbox')
+    expect(repos).toHaveLength(before + 1)
+    expect(repos.at(-1)).toEqual(ws)
+
+    // One worktree, its folder: the roots are entries of it.
+    const [root] = await b.listWorktrees('devbox', ws.id)
+    expect(root).toMatchObject({ isMain: true, branch: null, path: ws.path })
+    const top = await b.listFiles('devbox', root!.id, '', false)
+    expect(top.entries.map((e) => [e.name, e.kind])).toEqual([
+      ['civet', 'dir'],
+      ['orca', 'dir'],
+      ['todo.md', 'file']
+    ])
+    expect((await b.listAllFiles('devbox', root!.id)).paths).toContain('orca/README.md')
+    await expect(b.gitStatus('devbox', root!.id)).rejects.toMatchObject({
+      code: 'unsupported',
+      message: expect.stringContaining('is a workspace')
+    })
+    await expect(b.createWorktree('devbox', ws.id, 'x')).rejects.toMatchObject({
+      code: 'unsupported'
+    })
+    expect(
+      await b.spawnPane('devbox', {
+        worktree: root!.id,
+        cwd: null,
+        command: { program: 'claude', args: [] },
+        env: [],
+        size: termSize(80, 24),
+        title: null,
+        agent: 'claude'
+      })
+    ).toMatchObject({ worktree: root!.id, cwd: ws.path, agent: 'claude' })
+
+    // Bad input creates nothing.
+    await expect(b.createWorkspace('devbox', '  ', [])).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    await expect(b.createWorkspace('devbox', 'Release notes', [])).rejects.toMatchObject({
+      code: 'alreadyExists'
+    })
+    await expect(b.createWorkspace('devbox', 'x', ['src/civet'])).rejects.toMatchObject({
+      code: 'invalidArgument'
+    })
+    await expect(b.createWorkspace('devbox', 'x', ['~/missing/dir'])).rejects.toMatchObject({
+      code: 'invalidArgument',
+      message: expect.stringContaining('does not exist')
+    })
+    expect(await b.listRepos('devbox')).toHaveLength(before + 1)
+
+    // Replacing the roots keeps a kept root's name and numbers a clash.
+    const next = await b.setWorkspaceRoots('devbox', ws.id, ['~/src/orca', '/srv/orca'])
+    expect(next.roots!.map((r) => r.name)).toEqual(['orca', 'orca-2'])
+    const names = (await b.listFiles('devbox', root!.id, '', false)).entries.map((e) => e.name)
+    expect(names).toEqual(['orca', 'orca-2'])
+    await expect(b.setWorkspaceRoots('devbox', 'civet', [])).rejects.toMatchObject({
+      code: 'notFound'
+    })
+
+    await b.removeRepo('devbox', ws.id)
+    expect(await b.listRepos('devbox')).toHaveLength(before)
+    expect(await b.listWorktrees('devbox', ws.id)).toEqual([])
+  })
+
+  it('a daemon before workspaces has none and says what they need', async () => {
+    const b = new MockBackend()
+    const p = b.connectHost({ kind: 'ssh', destination: 'pre-git-box' })
+    await vi.runAllTimersAsync()
+    await p
+    await expect(b.createWorkspace('pre-git-box', 'x', [])).rejects.toMatchObject({
+      code: 'unsupported',
+      message: expect.stringMatching(/needs v0\.6\.3 or newer/)
+    })
+    expect((await b.listRepos('pre-git-box')).some((r) => r.kind === 'workspace')).toBe(false)
+  })
+
   it('an older daemon lists no folders and refuses to add one', async () => {
     const b = new MockBackend()
     const p = b.connectHost({ kind: 'ssh', destination: 'old-box' }, 'ssh')

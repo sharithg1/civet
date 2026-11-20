@@ -126,6 +126,15 @@ export interface CivetBackend {
   addRepo(hostId: string, path: string): Promise<RepoInfo>
   removeRepo(hostId: string, repo: RepoId): Promise<void>
   /**
+   * Create a floating workspace (civetd >= 0.6.3): a directory on the host
+   * with a link to each root (absolute or `~/…` paths of repos, folders or
+   * files). It is listed by `listRepos` with `kind: 'workspace'` and removed
+   * with `removeRepo`.
+   */
+  createWorkspace(hostId: string, name: string, roots: string[]): Promise<RepoInfo>
+  /** Replace a workspace's roots; panes already running keep theirs. */
+  setWorkspaceRoots(hostId: string, workspace: RepoId, roots: string[]): Promise<RepoInfo>
+  /**
    * Subdirectories of any host directory (absolute or `~/…`), git
    * repositories flagged, for completing a folder path (civetd >= 0.1.18).
    */
@@ -407,6 +416,12 @@ export class TauriBackend implements CivetBackend {
   }
   removeRepo(hostId: string, repo: RepoId) {
     return this.callVoid('remove_repo', { hostId, repo })
+  }
+  createWorkspace(hostId: string, name: string, roots: string[]) {
+    return this.call<RepoInfo>('create_workspace', { hostId, name, roots })
+  }
+  setWorkspaceRoots(hostId: string, workspace: RepoId, roots: string[]) {
+    return this.call<RepoInfo>('set_workspace_roots', { hostId, workspace, roots })
   }
   listDirs(hostId: string, path: string) {
     return this.call<HostDirListing>('list_dirs', { hostId, path })

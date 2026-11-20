@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Folder,
   GitBranch,
+  Layers,
   MoreHorizontal,
   PanelRight,
   Plus,
@@ -41,6 +42,7 @@ import {
   activateTab,
   closeTab,
   isFolderRepo,
+  isWorkspaceRepo,
   moveTab,
   newAgentTab,
   newTerminalTab,
@@ -131,21 +133,23 @@ function WorktreeTitle({ hostId, worktree }: { hostId: string; worktree: string 
   const task = info.isMain ? null : worktreeTask(info, panesOfWorktree(panes, worktree))
   const tooltip = [
     branch,
-    `${folder ? 'Folder' : repo.name} · ${hostLabel}`,
+    `${isWorkspaceRepo(repo) ? `Workspace ${repo.name}` : folder ? 'Folder' : repo.name} · ${hostLabel}`,
     task,
     'Switch worktree (⌘K)'
   ]
     .filter(Boolean)
     .join('\n')
-  const Icon = folder ? Folder : GitBranch
+  const Icon = isWorkspaceRepo(repo) ? Layers : folder ? Folder : GitBranch
   return (
     <button
       type="button"
       title={tooltip}
       aria-label={
-        folder
-          ? `Folder ${repo.name}. Switch worktree`
-          : `Worktree ${branch} in ${repo.name}. Switch worktree`
+        isWorkspaceRepo(repo)
+          ? `Workspace ${repo.name}. Switch worktree`
+          : folder
+            ? `Folder ${repo.name}. Switch worktree`
+            : `Worktree ${branch} in ${repo.name}. Switch worktree`
       }
       aria-haspopup="dialog"
       onClick={() => useStore.setState({ switcherOpen: true })}

@@ -3,6 +3,7 @@ import { getBackend } from './backend'
 import { ConnectScreen } from './components/ConnectScreen'
 import { AddProjectDialog, ConfirmDialog } from './components/Dialogs'
 import { NewWorktreeDialog } from './components/NewWorktreeDialog'
+import { WorkspaceDialog } from './components/WorkspaceDialog'
 import { PromptDialog } from './components/PromptDialog'
 import { RemoveWorktreeDialog } from './components/RemoveWorktreeDialog'
 import { CleanupWorktreesDialog } from './components/CleanupWorktreesDialog'
@@ -116,6 +117,7 @@ export function App() {
       <RemoveWorktreeDialog />
       <CleanupWorktreesDialog />
       <AddProjectDialog />
+      <WorkspaceDialog />
       <ConfirmDialog />
       <PromptDialog />
       <Toasts />
