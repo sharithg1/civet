@@ -1457,6 +1457,9 @@ export async function newAgentTab(
 /** Setup panes started from this window, by `wsKey(hostId, pane)`: a failure toasts. */
 const setupPanes = new Map<string, { worktree: string; branch: string }>()
 
+/** Suffixes tried for a branch named from the task (`civet handoff`'s MAX_SUFFIX). */
+const MAX_BRANCH_SUFFIX = 50
+
 /**
  * A setup pane exited. Why only failures toast: a shell pane exiting is not
  * news, but a setup script failing is easy to miss behind the agent's tab.
@@ -1492,6 +1495,8 @@ export async function createWorktreeWithSteps(p: {
    * copies, so it is create + setup + spawn rather than `launch_agent`.
    */
   setup?: boolean
+  /** `branch` was made from the task: a taken name becomes `branch-2`, `-3`… */
+  autoBranch?: boolean
 }): Promise<void> {
   checkGitRepo(p.hostId, p.repo)
   const steps = p.steps
@@ -1512,16 +1517,56 @@ export async function createWorktreeWithSteps(p: {
 
   let worktree: WorktreeInfo
   const opened: PaneId[] = []
-  const branch = p.branch.trim()
+  let branch = p.branch.trim()
   let launched = false
   let setup: WorktreeSetup | null = null
+  /** The worktree on `name`, with the first agent in it unless setup runs first. */
+  const create = async (name: string): Promise<WorktreeInfo> => {
+    if (p.setup || firstAgent < 0)
+      return backend().createWorktree(p.hostId, p.repo, name, p.base, null)
+    const { command, env } = specs[firstAgent]!
+    const res = await backend().launchAgent(p.hostId, {
+      repo: p.repo,
+      branch: name,
+      base: p.base,
+      worktreePath: null,
+      command,
+      env,
+      size: DEFAULT_SPAWN_SIZE,
+      title: prompt ? prompt.slice(0, 80) : name,
+      agent: agentOf(command, steps[firstAgent]!.agent!)
+    })
+    addPaneSnapshot(p.hostId, res.pane)
+    opened[firstAgent] = res.pane.id
+    launched = true
+    return res.worktree
+  }
   if (!branch) {
     // No branch name: no new worktree, the steps run in the main checkout.
     const main = worktreesOf(p.hostId).find((w) => w.repo === p.repo && w.isMain)
     if (!main) throw new Error("This project's main checkout was not found")
     worktree = main
-  } else if (p.setup) {
-    worktree = await backend().createWorktree(p.hostId, p.repo, branch, p.base, null)
+  } else {
+    // A name made from the task is a suggestion: when git already has it
+    // (a branch without a worktree here, or one made elsewhere meanwhile),
+    // take the next free `-2`, `-3`… like `civet handoff`.
+    const stem = branch
+    for (let n = 1; ; n++) {
+      try {
+        worktree = await create(branch)
+        break
+      } catch (err) {
+        if (
+          !p.autoBranch ||
+          n >= MAX_BRANCH_SUFFIX ||
+          CivetError.from(err).code !== 'alreadyExists'
+        )
+          throw err
+        branch = `${stem}-${n + 1}`
+      }
+    }
+  }
+  if (branch && p.setup) {
     setup = await backend()
       .setupWorktree(p.hostId, worktree.id, DEFAULT_SPAWN_SIZE)
       .catch((err) => {
@@ -1542,25 +1587,6 @@ export async function createWorktreeWithSteps(p: {
         { kind: 'error', title: `Worktree template: ${branch}`, body: setup.warnings.join('\n') },
         12_000
       )
-  } else if (firstAgent >= 0) {
-    const { command, env } = specs[firstAgent]!
-    const res = await backend().launchAgent(p.hostId, {
-      repo: p.repo,
-      branch,
-      base: p.base,
-      worktreePath: null,
-      command,
-      env,
-      size: DEFAULT_SPAWN_SIZE,
-      title: prompt ? prompt.slice(0, 80) : branch,
-      agent: agentOf(command, steps[firstAgent]!.agent!)
-    })
-    worktree = res.worktree
-    addPaneSnapshot(p.hostId, res.pane)
-    opened[firstAgent] = res.pane.id
-    launched = true
-  } else {
-    worktree = await backend().createWorktree(p.hostId, p.repo, branch, p.base, null)
   }
   if (branch) applyCreatedWorktree(p.hostId, worktree)
 

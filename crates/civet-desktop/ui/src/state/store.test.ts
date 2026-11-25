@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CivetBackend } from '../backend'
-import type { HostSummary, PaneInfo, RepoInfo, WorktreeInfo } from '../types'
+import { CivetError, type CivetBackend } from '../backend'
+import type { HostSummary, LaunchAgentRequest, PaneInfo, RepoInfo, WorktreeInfo } from '../types'
 import { termSize } from '../types'
 import { setPrefs } from './prefs'
 import type { Tab } from './store'
@@ -296,6 +296,47 @@ describe('store', () => {
         expect.objectContaining({ command: { program: 'claude', args: [] }, agent: 'claude' })
       ])
     })
+  })
+
+  it('a branch named from the task takes the next free suffix when git has it', async () => {
+    const main: WorktreeInfo = {
+      id: '/m',
+      repo: 'r',
+      path: '/m',
+      branch: 'main',
+      head: null,
+      isMain: true,
+      locked: false
+    }
+    const tried: string[] = []
+    const launchAgent = vi.fn(async (_h: string, req: LaunchAgentRequest) => {
+      tried.push(req.branch)
+      if (req.branch !== 'fix-bug-3') throw new CivetError('alreadyExists', `branch ${req.branch}`)
+      const wt: WorktreeInfo = { ...main, id: '/w', path: '/w', branch: req.branch, isMain: false }
+      return { worktree: wt, pane: pane(7) }
+    })
+    useStore.setState({
+      backend: fakeBackend({ launchAgent } as Partial<CivetBackend>),
+      repos: { h: [{ id: 'r', name: 'r', path: '/m', defaultBranch: 'main' }] },
+      worktrees: { [store.wtKey('h', 'r')]: [main] },
+      workspaces: {},
+      removing: {}
+    })
+    const run = (autoBranch: boolean) =>
+      store.createWorktreeWithSteps({
+        hostId: 'h',
+        repo: 'r',
+        branch: 'fix-bug',
+        base: null,
+        steps: [{ kind: 'agent', cmd: 'claude' }],
+        prompt: 'fix bug',
+        autoBranch
+      })
+    await expect(run(false)).rejects.toMatchObject({ code: 'alreadyExists' })
+    expect(tried).toEqual(['fix-bug'])
+    tried.length = 0
+    await run(true)
+    expect(tried).toEqual(['fix-bug', 'fix-bug-2', 'fix-bug-3'])
   })
 
   describe('createWorktreeWithSteps with a worktree template', () => {

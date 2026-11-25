@@ -1,9 +1,10 @@
-// "New worktree" (Civet v3): project chips, branch name (optional: empty runs
-// the steps in the project's main checkout, which the line under it says), a preview line with
-// the (editable) base, ordered on-create steps (Claude / Codex / Terminal,
-// each opens in its own tab), "Save as default for <project>" (off: one
-// worktree's steps don't change the next one's unless asked), and an
-// optional first task for the first agent. The first agent step goes through `launch_agent`, so the
+// "New worktree" (Civet v3): project chips, then the task for the first agent,
+// which names the branch (a slug like `civet handoff`'s, suffixed past the
+// project's taken names), a preview line where the branch and base can be
+// edited (no task and no branch: the steps run in the project's main
+// checkout, which the line under it says), ordered on-create steps (Claude / Codex / Terminal,
+// each opens in its own tab) and "Save as default for <project>" (off: one
+// worktree's steps don't change the next one's unless asked). Enter starts it. The first agent step goes through `launch_agent`, so the
 // single-call "worktree + agent" path is unchanged; see
 // store.createWorktreeWithSteps. With a worktree template (Settings →
 // Projects or `.civet/worktree.toml`) a Setup row runs it first, and its
@@ -22,6 +23,7 @@ import {
 import { splitShellWords } from '@/lib/shell-words'
 import { restoreTerminalFocus } from '@/lib/terminal-focus'
 import { cn } from '@/lib/utils'
+import { branchSlug, freeBranch } from '@/lib/branch-name'
 import { worktreeBranch } from '@/lib/worktree-view'
 import {
   agentStepKind,
@@ -89,7 +91,8 @@ export function NewWorktreeDialog() {
     (repos?.some((r) => r.id === req?.repo) ? req?.repo : undefined) ?? repos?.[0]?.id ?? ''
   )
   const repo = repos?.find((r) => r.id === repoId)
-  const [name, setName] = useState('')
+  // null: the branch follows the task; a string: the one typed in the preview line.
+  const [branchEdit, setBranchEdit] = useState<string | null>(null)
   const [base, setBase] = useState<string | null>(null)
   const [steps, setSteps] = useState<CreateStep[]>(() =>
     req ? defaultSteps(req.hostId, repoId) : []
@@ -113,12 +116,21 @@ export function NewWorktreeDialog() {
   }, [template])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const mainWt = useStore((s) =>
-    req ? s.worktrees[wtKey(req.hostId, repoId)]?.find((w) => w.isMain) : undefined
-  )
+  const worktrees = useStore((s) => (req ? s.worktrees[wtKey(req.hostId, repoId)] : undefined))
+  const mainWt = worktrees?.find((w) => w.isMain)
 
   if (!req) return null
   const close = () => useStore.setState({ newWorktree: null })
+  // A template's prompt prefills the task; only what is typed after it names the branch.
+  const templatePrompt = template?.prompt?.trim() ?? ''
+  const brief =
+    templatePrompt && prompt.trimStart().startsWith(templatePrompt)
+      ? prompt.trimStart().slice(templatePrompt.length)
+      : prompt
+  const stem = branchSlug(brief)
+  const taken = new Set((worktrees ?? []).flatMap((w) => (w.branch ? [w.branch] : [])))
+  const auto = branchEdit === null
+  const name = auto ? (stem ? freeBranch(stem, taken) : '') : branchEdit
   const nameError = name ? branchNameError(name) : null
   const useMain = !name.trim()
   const baseValue = base ?? repo?.defaultBranch ?? ''
@@ -137,7 +149,6 @@ export function NewWorktreeDialog() {
   const firstAgent = steps.map((s) => stepAgent(s.kind)).find((a) => a !== null)
   const hasAgent = !!firstAgent
   const agentLabel = firstAgent === 'codex' ? 'Codex' : 'Claude'
-  const slug = name.trim() || '<branch>'
   const editSteps = (f: (list: CreateStep[]) => CreateStep[]) => {
     setTouched((t) => ({ ...t, steps: true }))
     setSteps(f)
@@ -167,7 +178,8 @@ export function NewWorktreeDialog() {
         base: baseValue.trim() || null,
         steps,
         prompt,
-        setup: willSetup
+        setup: willSetup,
+        autoBranch: auto
       })
       close()
     } catch (err) {
@@ -205,6 +217,7 @@ export function NewWorktreeDialog() {
                 onClick={() => {
                   setRepoId(r.id)
                   setBase(null)
+                  setBranchEdit(null)
                   const t = useTemplates.getState()[wtKey(req.hostId, r.id)]?.info?.effective
                   setSteps(defaultSteps(req.hostId, r.id, t))
                   setPrompt(t?.prompt ?? '')
@@ -222,45 +235,89 @@ export function NewWorktreeDialog() {
               </button>
             ))}
           </div>
+          <Textarea
+            aria-label={hasAgent ? `Task for ${agentLabel}` : 'Task'}
+            autoFocus
+            value={prompt}
+            rows={3}
+            placeholder={
+              hasAgent
+                ? `What should ${agentLabel} do? Names the branch, too`
+                : 'What is it for? Names the branch'
+            }
+            onChange={(e) => {
+              setTouched((t) => ({ ...t, prompt: true }))
+              setPrompt(e.target.value)
+            }}
+            onFocus={(e) => {
+              // A template's prefilled prompt: type after it, not before.
+              const end = e.currentTarget.value.length
+              e.currentTarget.setSelectionRange(end, end)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                void submit()
+              }
+            }}
+            className={cn(
+              'field-sizing-fixed min-h-0 resize-none rounded-[5px] px-2.5 py-2 font-sans text-sm leading-normal',
+              FIELD,
+              'font-sans'
+            )}
+          />
           <div className="flex flex-col gap-1">
-            <label htmlFor="nw-name" className="text-xs font-medium text-body">
-              Branch
-            </label>
-            <Input
-              id="nw-name"
-              autoFocus
-              placeholder="e.g. NO-TICKET/short-task"
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={nameError ? true : undefined}
-              onChange={(e) => setName(e.target.value)}
-              className={cn('h-8 rounded-[5px] px-2.5 text-sm', FIELD)}
-            />
-            {nameError && <span className="text-2xs text-status-err-text">{nameError}</span>}
-          </div>
-          {useMain ? (
-            <div className="truncate text-2xs text-status-wait">
-              No branch: runs in {hostLabel}:{repo?.name ?? '…'}'s main checkout
-              {mainWt ? ` (${worktreeBranch(mainWt)})` : ''}, no new worktree
-            </div>
-          ) : (
-            <div className="flex items-center font-mono text-2xs text-faint">
-              <span className="truncate">
-                {hostLabel}:{repo?.name ?? '…'}/{slug} · from&nbsp;
+            <div className="flex min-w-0 items-center font-mono text-2xs text-faint">
+              <span className="shrink-0">
+                {hostLabel}:{repo?.name ?? '…'}/
               </span>
               <input
-                aria-label="Base branch"
-                title="Base branch"
-                value={baseValue}
-                placeholder="HEAD"
+                aria-label="Branch"
+                title={auto ? 'Branch, named from the task; type to change it' : 'Branch'}
+                value={name}
+                placeholder="branch"
+                autoComplete="off"
                 spellCheck={false}
-                onChange={(e) => setBase(e.target.value)}
-                style={{ width: `${Math.max(4, baseValue.length + 1)}ch` }}
-                className="rounded-sm border-none bg-transparent p-0 font-mono text-2xs text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none hover:text-foreground focus:text-foreground"
+                aria-invalid={nameError ? true : undefined}
+                onChange={(e) => setBranchEdit(e.target.value)}
+                style={{ width: `${Math.max(6, name.length + 1)}ch` }}
+                className="min-w-0 shrink rounded-sm border-none bg-transparent p-0 font-mono text-2xs text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none placeholder:text-dim hover:text-foreground focus:text-foreground"
               />
+              {!auto && stem && (
+                <button
+                  type="button"
+                  title="Name the branch from the task again"
+                  aria-label="Name the branch from the task"
+                  onClick={() => setBranchEdit(null)}
+                  className="ml-1 shrink-0 cursor-pointer rounded-sm px-0.5 text-dim hover:text-foreground"
+                >
+                  ↺
+                </button>
+              )}
+              {!useMain && (
+                <>
+                  <span className="shrink-0">&nbsp;· from&nbsp;</span>
+                  <input
+                    aria-label="Base branch"
+                    title="Base branch"
+                    value={baseValue}
+                    placeholder="HEAD"
+                    spellCheck={false}
+                    onChange={(e) => setBase(e.target.value)}
+                    style={{ width: `${Math.max(4, baseValue.length + 1)}ch` }}
+                    className="shrink-0 rounded-sm border-none bg-transparent p-0 font-mono text-2xs text-muted-foreground underline decoration-dim decoration-dotted underline-offset-2 outline-none hover:text-foreground focus:text-foreground"
+                  />
+                </>
+              )}
             </div>
-          )}
+            {nameError && <span className="text-2xs text-status-err-text">{nameError}</span>}
+            {useMain && (
+              <div className="truncate text-2xs text-status-wait">
+                No branch: runs in {repo?.name ?? '…'}'s main checkout
+                {mainWt ? ` (${worktreeBranch(mainWt)})` : ''}, no new worktree
+              </div>
+            )}
+          </div>
           <div className="flex flex-col gap-1.5">
             <div className="flex items-baseline justify-between text-xs">
               <span className="font-medium text-body">On create</span>
@@ -364,32 +421,6 @@ export function NewWorktreeDialog() {
             </div>
             {stepError && <span className="text-2xs text-status-err-text">{stepError}</span>}
           </div>
-          <Textarea
-            aria-label={`First task for ${agentLabel}`}
-            value={prompt}
-            rows={3}
-            disabled={!hasAgent}
-            placeholder={
-              hasAgent
-                ? `First task for ${agentLabel} (optional)`
-                : 'Add a Claude or Codex step to give it a first task'
-            }
-            onChange={(e) => {
-              setTouched((t) => ({ ...t, prompt: true }))
-              setPrompt(e.target.value)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault()
-                void submit()
-              }
-            }}
-            className={cn(
-              'field-sizing-fixed min-h-0 resize-none rounded-[5px] px-2.5 py-2 font-sans text-sm leading-normal',
-              FIELD,
-              'font-sans'
-            )}
-          />
           {error && <p className="text-xs text-status-err-text">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" size="md" onClick={close} disabled={busy}>
